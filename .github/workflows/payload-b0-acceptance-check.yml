@@ -1,0 +1,60 @@
+name: Payload B0 acceptance checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/payload-b0-acceptance-check.yml'
+      - '.github/workflows/payload-install-production.yml'
+      - 'ops/**'
+      - 'docker-compose.payload.yml'
+      - 'scripts/create-payload-install-dispatch.mjs'
+      - 'scripts/register-payload-candidate-admission.mjs'
+      - 'scripts/package-payload-candidate.mjs'
+      - 'scripts/lib/payload-candidate-qualification.mjs'
+      - 'tests/fixtures/payload-b0-native.py'
+      - 'tests/unit/payload-install-*.test.mjs'
+      - 'tests/unit/payload-preparation-authentication.test.mjs'
+      - 'tests/unit/payload-production-install-*.test.mjs'
+      - 'tests/unit/payload-production-b0-verification.test.mjs'
+      - 'tests/unit/payload-receiver-admission.test.mjs'
+      - 'tests/unit/payload-receiver-root.test.mjs'
+      - 'tests/unit/payload-candidate-trust-provisioning.test.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: payload-b0-acceptance-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-b0-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up test Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Qualify B0 administrative gates in disposable root fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_BIN="$(readlink -f -- "$(command -v node)")"
+          test -f "$NODE_BIN" && test -x "$NODE_BIN"
+          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \
+            tests/unit/payload-preparation-authentication.test.mjs \
+            tests/unit/payload-install-transition.test.mjs \
+            tests/unit/payload-install-initializer.test.mjs \
+            tests/unit/payload-candidate-trust-provisioning.test.mjs \
+            tests/unit/payload-production-b0-verification.test.mjs \
+            tests/unit/payload-receiver-admission.test.mjs \
+            tests/unit/payload-receiver-root.test.mjs \
+            tests/unit/payload-production-install-plan.test.mjs \
+            tests/unit/payload-production-install-workflow.test.mjs

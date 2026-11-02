@@ -51,8 +51,12 @@ function evaluateDeployCondition(expression, context) {
     ["github.event_name == 'push'", String(Number(context.eventName === 'push'))],
     ["github.event_name == 'workflow_dispatch'", String(Number(context.eventName === 'workflow_dispatch'))],
     ["github.ref == 'refs/heads/main'", String(Number(context.ref === 'refs/heads/main'))],
+    ["startsWith(github.ref, 'refs/heads/')", String(Number(context.ref?.startsWith('refs/heads/') ?? false))],
+    ['inputs.cms_image_only == true', String(Number(context.cmsImageOnly === true))],
+    ['inputs.publish_candidate_only == true', String(Number(context.publishCandidateOnly === true))],
     ['inputs.cms_image_only != true', String(Number(context.cmsImageOnly !== true))],
     ['inputs.publish_candidate_only != true', String(Number(context.publishCandidateOnly !== true))],
+    ['inputs.manual_runtime_only != true', String(Number(context.manualRuntimeOnly !== true))],
   ]);
   let resolved = expression;
   for (const [token, value] of replacements) resolved = resolved.replaceAll(token, value);
@@ -142,6 +146,11 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
   assert.match(publisherCondition, /needs\.validate\.result == 'success'/u);
   assert.match(publisherCondition, /github\.ref == 'refs\/heads\/main'[\s\S]*inputs\.publish_candidate_only == true/u,
     'publisher job must be limited to successful authorized publication modes');
+  for (const eventName of ['push', 'workflow_dispatch']) {
+    assert.equal(evaluateDeployCondition(publisherCondition, {
+      eventName, ref: 'refs/heads/main', validateResult: 'success',
+    }), true, `${eventName} on main still publishes validated images`);
+  }
   assert.match(publishCms, /docker tag ownerinc-portal-cms:\$\{GITHUB_SHA\} \$\{REGISTRY\}\/ownerinc-portal-cms:\$\{GITHUB_SHA\}/);
   assert.match(publishCms, /docker push \$\{REGISTRY\}\/ownerinc-portal-cms:\$\{GITHUB_SHA\}/);
   assert.match(publishCms, /cms_image=\$\(docker inspect --format='\{\{index \.RepoDigests 0\}\}' \$\{REGISTRY\}\/ownerinc-portal-cms:\$\{GITHUB_SHA\}\)/);
@@ -164,18 +173,23 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
     'CMS metadata must not alter the existing API/cron digest artifact');
 
   const productionDeploy = workflow.slice(workflow.indexOf('  deploy-production:'));
-  const productionDeployCondition = "!cancelled() && needs.validate.result == 'success' && needs.publish-images.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true";
+  const productionDeployCondition = "!cancelled() && needs.validate.result == 'success' && needs.publish-images.result == 'success' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true && inputs.manual_runtime_only != true";
   assert.equal(condition(productionDeploy, 4), productionDeployCondition,
-    'production deployment must override skipped-ancestor propagation and require successful normal-main validation');
+    'production deployment requires an explicit normal-main dispatch and successful validation/publication');
+  const successfulDispatch = { validateResult: 'success', publishResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main' };
   for (const [name, context, expected] of [
-    ['main push', { validateResult: 'success', publishResult: 'success', eventName: 'push', ref: 'refs/heads/main' }, true],
-    ['normal main dispatch', { validateResult: 'success', publishResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main' }, true],
-    ['pull request', { validateResult: 'success', eventName: 'pull_request', ref: 'refs/pull/64/merge' }, false],
-    ['non-main dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/fix/deploy' }, false],
-    ['CMS-only dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main', cmsImageOnly: true }, false],
-    ['candidate-only dispatch', { validateResult: 'success', eventName: 'workflow_dispatch', ref: 'refs/heads/main', publishCandidateOnly: true }, false],
-    ['failed validation', { validateResult: 'failure', eventName: 'push', ref: 'refs/heads/main' }, false],
-    ['cancelled workflow', { cancelled: true, validateResult: 'success', eventName: 'push', ref: 'refs/heads/main' }, false],
+    ['main push', { ...successfulDispatch, eventName: 'push' }, false],
+    ['normal main dispatch', successfulDispatch, true],
+    ['pull request', { ...successfulDispatch, eventName: 'pull_request', ref: 'refs/pull/64/merge' }, false],
+    ['non-main dispatch', { ...successfulDispatch, ref: 'refs/heads/fix/deploy' }, false],
+    ['CMS-only dispatch', { ...successfulDispatch, cmsImageOnly: true }, false],
+    ['candidate-only dispatch', { ...successfulDispatch, publishCandidateOnly: true }, false],
+    ['manual-runtime dispatch', { ...successfulDispatch, manualRuntimeOnly: true }, false],
+    ...['failure', 'cancelled', 'skipped'].flatMap(result => [
+      [`${result} validation`, { ...successfulDispatch, validateResult: result }, false],
+      [`${result} publication`, { ...successfulDispatch, publishResult: result }, false],
+    ]),
+    ['cancelled workflow', { ...successfulDispatch, cancelled: true }, false],
   ]) {
     assert.equal(evaluateDeployCondition(condition(productionDeploy, 4), context), expected, name);
   }
@@ -231,12 +245,12 @@ test('CI keeps CMS-only, normal main, and API-v2 release-candidate publication m
       cms: mainRelease || cmsOnly || candidate,
       legacyArtifact: mainRelease,
       candidateArtifact: candidate,
-      deploy: mainRelease,
+      deploy: mainRelease && event === 'workflow_dispatch',
     };
   };
   const scenarios = [
     [{ event: 'pull_request', ref: 'refs/pull/42/merge' }, { validationFails: false, apiCron: false, cms: false, legacyArtifact: false, candidateArtifact: false, deploy: false }],
-    [{ event: 'push', ref: 'refs/heads/main' }, { validationFails: false, apiCron: true, cms: true, legacyArtifact: true, candidateArtifact: false, deploy: true }],
+    [{ event: 'push', ref: 'refs/heads/main' }, { validationFails: false, apiCron: true, cms: true, legacyArtifact: true, candidateArtifact: false, deploy: false }],
     [{ event: 'workflow_dispatch', ref: 'refs/heads/main' }, { validationFails: false, apiCron: true, cms: true, legacyArtifact: true, candidateArtifact: false, deploy: true }],
     [{ event: 'workflow_dispatch', ref: 'refs/heads/main', cmsImageOnly: true }, { validationFails: false, apiCron: false, cms: true, legacyArtifact: false, candidateArtifact: false, deploy: false }],
     [{ event: 'workflow_dispatch', ref: 'refs/heads/feat/payload-cms-final', cmsImageOnly: true }, { validationFails: false, apiCron: false, cms: true, legacyArtifact: false, candidateArtifact: false, deploy: false }],

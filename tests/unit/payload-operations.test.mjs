@@ -146,7 +146,9 @@ export FIXTURE=$PWD PATH="$PWD/bin:/usr/bin:/bin"
 [[ $(command -v docker) == "$PWD/bin/docker" ]] || exit 94
 export PORTAL_OPERATION_LOCK="$PWD/operation.lock" PAYLOAD_OPERATIONS_GUARD="$PWD/guard" BACKUP_DIR="$PWD/backups"
 ${body}`, 'fixture', root.replaceAll('\\', '/')], {
-      encoding: 'utf8', timeout: 15000,
+      // Git Bash process startup is slower under the parallel root suite.
+      // This outer fixture budget is separate from operational timeouts.
+      encoding: 'utf8', timeout: process.platform === 'win32' ? 45000 : 15000,
       env: { PATH: process.env.PATH, ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}), ...extra },
     });
     assert.ifError(result.error);

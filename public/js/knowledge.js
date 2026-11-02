@@ -422,8 +422,8 @@ async function uploadPdf(file) {
     invalidatePdfUpload('Selecione um arquivo PDF válido.', request);
     return;
   }
-  if (file.size > 100 * 1024 * 1024) {
-    invalidatePdfUpload('O PDF deve ter no máximo 100 MB.', request);
+  if (file.size > 50 * 1024 * 1024) {
+    invalidatePdfUpload('O PDF deve ter no máximo 50 MB.', request);
     return;
   }
   const previousPdfId = selectedPdf?.id;
@@ -770,8 +770,8 @@ pdfInput.addEventListener('change', () => {
     invalidatePdfUpload('Selecione um arquivo PDF válido.');
     return;
   }
-  if (file.size > 100 * 1024 * 1024) {
-    invalidatePdfUpload('O PDF deve ter no máximo 100 MB.');
+  if (file.size > 50 * 1024 * 1024) {
+    invalidatePdfUpload('O PDF deve ter no máximo 50 MB.');
     return;
   }
   const promise = uploadPdf(file);

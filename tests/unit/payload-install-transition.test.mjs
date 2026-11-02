@@ -71,9 +71,111 @@ def fresh(label):
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
-test('production v3 receipts persist through signed transitions and reject replay without changing historical formats', async t => {
+const productionGateFixture = String.raw`
+candidate['authorization']={'environment':'production','approvalSha256':'a'*64,
+ 'inventoryIdentity':binding['inventoryIdentity'],'expiresAt':'1999999999','nonce':'b'*64}
+binding.update(bindingVersion=4,b0GateVersion=1,receiptId='payload-abcdefgh',sourceCommit='b'*40,project='ownerinc-portal-prod',
+ authority={name:'a'*64 for name in ('sourceApprovalSha256','policySha256','recordSha256')},
+ sharedCluster={'service':'postgres','volume':'portalPostgres','databases':{
+ 'portal':{'name':'portal','owner':'portal_admin'},'cms':{'name':'ownerinc_cms','owner':'cms_admin'}}})
+creation=S.production_install_creation(binding,'b'*64)
+root=fresh('b0-gate')
+S.reserve_install(root,binding,proof,'5'*64,creation,'1999999999',lambda:1999999998)
+def decision_for(root):
+ return {'schemaVersion':1,'kind':'production-exact-b0-acceptance-v1',
+ 'installBindingSha256':hashlib.sha256(S.canonical(binding)).hexdigest(),'originStateSha256':S.read_state(root)[3],
+ 'receiptId':binding['receiptId'],'manifestSha256':'a'*64,'qualificationEvidenceSha256':'b'*64,
+ 'procedureRevision':'c'*64,'acceptedAt':2000000000,'expiresAt':2000003600,
+ 'authenticatedChannel':'independently-authenticated-admin-vps'}
+def accept(d): return S.accept_b0(root,binding,d,hashlib.sha256(S.canonical(d)+b'\n').hexdigest())
+`;
+
+test('exact B0 acceptance binds held origin, is immutable, and gates the first durable migration checkpoint', async t => {
+  await fixture(t, productionGateFixture + String.raw`
+before=S.read_state(root)
+expect('b0_acceptance_required',lambda:S.advance_install(root,binding,'portal_grants_pending'))
+decision=decision_for(root)
+for name,value in [('receiptId','payload-ijklmnop'),('installBindingSha256','0'*64),
+ ('authenticatedChannel','root-name-only'),('expiresAt',2000003601),('acceptedAt',True)]:
+ wrong=dict(decision,**{name:value})
+ expect('invalid_b0_acceptance',lambda:accept(wrong))
+assert S.read_state(root)==before
+with patch.object(S.time,'time',return_value=2000000001):
+ wrong=dict(decision,originStateSha256='0'*64)
+ expect('b0_acceptance_origin_mismatch',lambda:accept(wrong))
+ accept(decision)
+accepted=S.read_state(root)
+accept(decision);assert S.read_state(root)==accepted
+wrong=dict(decision,qualificationEvidenceSha256='0'*64)
+expect('b0_acceptance_conflict',lambda:accept(wrong))
+with patch.object(S.time,'time',return_value=2000003600):
+ expect('b0_acceptance_expired',lambda:S.advance_install(root,binding,'portal_grants_pending'))
+assert S.read_state(root)==accepted
+# Advance crosses expiry after signing: the check must still run before journal IO.
+original=S.sign_envelope
+with patch.object(S.time,'time',return_value=2000003600), patch.object(S,'sign_envelope',side_effect=original):
+ expect('b0_acceptance_expired',lambda:S.advance_install(root,binding,'portal_grants_pending'))
+with patch.object(S.time,'time',return_value=2000003599), patch.object(S,'_atomic_replace',side_effect=S.StateError('private_state_write_failed')):
+ expect('private_state_write_failed',lambda:S.advance_install(root,binding,'portal_grants_pending'))
+expect('state_head_mismatch',lambda:S.read_state(root))
+def wrong_receipt(_): S.fail('planned_release_mismatch')
+expect('planned_release_mismatch',lambda:S.read_state(root,repair_head=True,before_repair=wrong_receipt))
+expect('state_head_mismatch',lambda:S.read_state(root))
+restarted=load('b0_gate_restart','payload-control-state.py')
+with patch.object(restarted.time,'time',return_value=2000007200):
+ restarted.read_state(root,repair_head=True)
+ pending=restarted.read_state(root)
+ restarted.advance_install(root,binding,'portal_grants_pending')
+ assert restarted.read_state(root)==pending
+ restarted.advance_install(root,binding,'portal_grants_verified')
+expect('b0_acceptance_required',lambda:S.transition(root,lambda b:b['installIntent'].pop('b0Acceptance')))
+`);
+});
+
+test('historical production remains readable but cannot reserve, mutate, or gain implicit acceptance', async t => {
+  await fixture(t, productionGateFixture + String.raw`
+historical=copy.deepcopy(binding);historical.pop('b0GateVersion');historical.pop('receiptId')
+other=fresh('historical')
+expect('historical_production_install_blocked',lambda:S.reserve_install(other,historical,proof,'5'*64,creation,'1999999999',lambda:1999999998))
+# Construct authentic historical bytes using the old write policy, never a production bypass.
+with patch.object(S,'production_binding',return_value=False):
+ S.reserve_install(other,historical,proof,'5'*64,creation,'1999999999',lambda:1999999998)
+observed=S.read_state(other)
+expect('historical_production_install_blocked',lambda:S.advance_install(other,historical,'portal_grants_pending'))
+assert S.read_state(other)==observed
+expect('planned_release_mismatch',lambda:S.reserve_install(other,binding,proof,'5'*64,creation,'1999999999',lambda:1999999998))
+`);
+});
+
+test('production capture returns reserved with no migration, provisioning or floor effects; apply never captures cold state', async t => {
+  await fixture(t, productionGateFixture + String.raw`
+cold=fresh('capture-runtime');runtime=object.__new__(R.Runtime)
+runtime.runtime_dir=cold;runtime.state=R.STATE.read_state(cold)[2];runtime.key=b'k'*32
+runtime.production_authorization_expires_at='1999999999'
+runtime._initializer_request=lambda:copy.deepcopy(binding)
+runtime._initializer_phase=lambda _:None
+runtime._admission_closed=lambda:None
+observations=[]
+runtime.install_retry_check=lambda:observations.append('physical-revalidation')
+def forbidden(*args,**kwargs):raise AssertionError('migration/provision/floor effect before acceptance')
+runtime._initializer_compose=forbidden;runtime.install_floor_commit=forbidden
+expect('planned_release_mismatch',lambda:runtime.initialize_isolated())
+assert R.STATE.read_state(cold)[2]['installIntent'] is None
+with patch.object(R,'_parse_proof',return_value=(proof,'5'*64)),patch.object(R.time,'time',return_value=1999999998):
+ runtime.initialize_isolated(capture_only=True)
+reserved=R.STATE.read_state(cold)
+assert reserved[2]['installIntent']['stage']=='reserved' and reserved[2]['cmsStatus']=='cold'
+runtime.initialize_isolated(capture_only=True)
+assert R.STATE.read_state(cold)==reserved and observations==['physical-revalidation']*2
+with patch.object(R,'_read_bytes',return_value=S.canonical(decision_for(root))+b'\n'):
+ expect('b0_acceptance_required',lambda:runtime.initialize_isolated())
+assert R.STATE.read_state(cold)==reserved
+`);
+});
+
+test('isolated v3 receipts persist through signed transitions and reject replay without changing historical formats', async t => {
   await fixture(t, String.raw`
-binding.update(bindingVersion=3,sourceCommit='b'*40,project='ownerinc-portal-prod',
+binding.update(bindingVersion=3,sourceCommit='b'*40,project='payload-preauth-123-1-aaaaaaaaaa-target',
  authority={name:'a'*64 for name in ('sourceApprovalSha256','policySha256','recordSha256')})
 creation={'receiptVersion':1,'fingerprintAlgorithm':'production-container-mounts-v1','nonce':'b'*64,'volumes':{},'containers':{}}
 root=fresh('production-v3')
@@ -136,6 +238,7 @@ test('production v4 private readiness and B1 checkpoints resume in fresh process
 candidate['authorization']={'environment':'production','approvalSha256':'a'*64,
  'inventoryIdentity':binding['inventoryIdentity'],'expiresAt':'1999999999','nonce':'b'*64}
 binding.update(bindingVersion=4,sourceCommit='b'*40,project='ownerinc-portal-prod',
+ b0GateVersion=1,receiptId='payload-abcdefgh',
  authority={name:'a'*64 for name in ('sourceApprovalSha256','policySha256','recordSha256')},
  sharedCluster={'service':'postgres','volume':'portalPostgres','databases':{
   'portal':{'name':'portal','owner':'portal_admin'},'cms':{'name':'ownerinc_cms','owner':'cms_admin'}}})
@@ -166,7 +269,16 @@ assert S.read_state(root)[2]['installIntent']['authorizationFreshAtReservation']
 before=S.read_state(root)[2]
 S.reserve_install(root,binding,proof,'5'*64,creation,'1999999999',lambda:1999999999)
 assert S.read_state(root)[2]==before
-for stage in ('portal_grants_pending','portal_grants_verified','cms_resources_pending'):
+held=S.read_state(root)[3]
+decision={'schemaVersion':1,'kind':'production-exact-b0-acceptance-v1',
+ 'installBindingSha256':hashlib.sha256(S.canonical(binding)).hexdigest(),'originStateSha256':held,
+ 'receiptId':binding['receiptId'],'manifestSha256':'a'*64,'qualificationEvidenceSha256':'b'*64,
+ 'procedureRevision':'c'*64,'acceptedAt':1999999990,'expiresAt':2000003590,
+ 'authenticatedChannel':'independently-authenticated-admin-vps'}
+with patch.object(S.time,'time',return_value=1999999999):
+ S.accept_b0(root,binding,decision,hashlib.sha256(S.canonical(decision)+b'\n').hexdigest())
+ S.advance_install(root,binding,'portal_grants_pending')
+for stage in ('portal_grants_verified','cms_resources_pending'):
  S.advance_install(root,binding,stage)
 S.record_install_creation(root,binding,'volumes','cmsUploads',cms_target['volumes']['cmsUploads'])
 for i,service in enumerate(('cms','api','cron')):
@@ -188,7 +300,7 @@ for stage in ('cms_provision_pending','provisioned','private_started','private_r
  changed=copy.deepcopy(candidate);changed['authorization']['nonce']='c'*64
  assert not R.production_authorization_allows_resume(changed,recovered['installIntent'],2000000000)
  changed_binding=copy.deepcopy(binding);changed_binding['inventoryIdentity']='0'*64
- expect('planned_release_mismatch',lambda:S.assert_install_matches(recovered,changed_binding))
+ expect('invalid_cold_state',lambda:S.assert_install_matches(recovered,changed_binding))
  changed_binding=copy.deepcopy(binding);changed_binding['sourceCommit']='c'*40
  changed_binding['sourceRelease']=os.path.join(directory,'releases','c'*40)
  expect('planned_release_mismatch',lambda:S.assert_install_matches(recovered,changed_binding))

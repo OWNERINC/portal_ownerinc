@@ -114,6 +114,57 @@ test('initializer reason and phase require the exact action/substep, exit 2 and 
   assert.equal(signaled.diagnostic.controlErrorIdentifier, null);
 });
 
+test('fixed B0 reasons retain strict initializer action, substep, exit and frame boundaries', () => {
+  const reasons = [
+    'b0_acceptance_conflict', 'b0_acceptance_expired', 'b0_acceptance_origin_mismatch', 'b0_acceptance_required',
+    'b0_capture_not_reserved', 'b0_capture_required', 'historical_production_install_blocked', 'invalid_b0_acceptance',
+  ];
+  // Synthetic transport frames exercise classification, not a production B0 acceptance.
+  for (const action of ['initialize-isolated', 'install-floor-commit']) {
+    const context = controlCommandOptions(action, '/synthetic/release');
+    const phase = action === 'initialize-isolated' ? 'request_validation' : 'floor_boundary';
+    const parse = (stderr, extra = {}) => createCommandDiagnostic({ ...context, status: 2, stderr, ...extra });
+    for (const reason of reasons) {
+      const stderr = `${reason}\nPREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=${phase} installStage=reserved commandExit=none commandSignal=none privateStderr=none\n`;
+      const diagnostic = parse(stderr);
+      assert.equal(diagnostic.controlErrorIdentifier, reason);
+      assert.deepEqual(diagnostic.initializer, { phase, installStage: 'reserved', commandExitCode: null,
+        commandSignal: null, privateStderrRetained: false });
+      assert.deepEqual(sanitizeCommandDiagnostic(diagnostic), diagnostic);
+      assert.deepEqual(parse(Buffer.from(stderr.replaceAll('\n', '\r\n'))), diagnostic);
+      assert.equal(parse(`${reason}\n`).controlErrorIdentifier, reason, 'fixed single-line control reasons remain supported');
+      for (const extra of [
+        { controlCommandContext: undefined }, { controlCommandContext: 'docker-compose' },
+        { controlCommandContext: 'payload-control:capture-production-b0' },
+        { controlCommandContext: 'payload-control:accept-production-b0' },
+        { controlCommandContext: `payload-control:${action === 'initialize-isolated' ? 'install-floor-commit' : 'initialize-isolated'}` },
+        { substep: undefined }, { substep: 'payload_control_verify_release' },
+        ...[0, 1, 3, 255, null, '2'].map(status => ({ status })),
+        { signal: 'SIGTERM' }, { errorCode: 'ETIMEDOUT' },
+      ]) {
+        assert.equal(parse(stderr, extra).controlErrorIdentifier, null, `${reason}: mismatched initializer scope`);
+        assert.equal(parse(stderr, extra).initializer, undefined);
+        assert.equal(parse(`${reason}\n`, extra).controlErrorIdentifier, null);
+      }
+      for (const invalid of [
+        stderr.trimEnd(), stderr + stderr, `private-detail\n${stderr}`, `${stderr}private-detail\n`,
+        stderr.replace(reason, `${reason}_unregistered`), stderr.replace(reason, 'b0_acceptance_attacker_value'),
+        stderr.replace(`phase=${phase}`, 'phase=private_phase'),
+        stderr.replace('installStage=reserved', 'installStage=private_stage'),
+        stderr.replace('commandExit=none', 'commandExit=999'),
+        stderr.replace('commandSignal=none', 'commandSignal=65'),
+        stderr.replace('commandExit=none commandSignal=none', 'commandExit=1 commandSignal=9'),
+        stderr.replace('privateStderr=none', 'privateStderr=private-detail'),
+      ]) {
+        const rejected = parse(invalid);
+        assert.equal(rejected.controlErrorIdentifier, null, reason);
+        assert.equal(rejected.initializer, undefined);
+        assert.doesNotMatch(JSON.stringify(rejected), /private-detail|private_phase|private_stage|unregistered|attacker_value/u);
+      }
+    }
+  }
+});
+
 test('create-only initializer argv is accepted by the real Compose parser without contacting services', async t => {
   const version = spawnSync('docker', ['compose', 'version', '--short'], { encoding: 'utf8', timeout: 30000 });
   if (version.error || version.status !== 0) return t.skip('Docker Compose CLI unavailable; no service or daemon is required for this parser test');

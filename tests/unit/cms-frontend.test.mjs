@@ -356,9 +356,9 @@ test('knowledge articles support compact search and private PDF attachments', ()
   assert.match(renderer, /URL\.revokeObjectURL/);
 });
 
-test('Knowledge accepts PDF attachments up to 100 MB', () => {
-  assert.equal((knowledge.match(/file\.size > 100 \* 1024 \* 1024/g) || []).length, 2);
-  assert.equal((knowledge.match(/O PDF deve ter no máximo 100 MB\./g) || []).length, 2);
+test('Knowledge accepts PDF attachments up to 50 MiB inclusive', () => {
+  assert.equal((knowledge.match(/file\.size > 50 \* 1024 \* 1024/g) || []).length, 2);
+  assert.equal((knowledge.match(/O PDF deve ter no máximo 50 MB\./g) || []).length, 2);
 });
 
 test('CMS actions use the existing API contracts and keep generic failure states visible', () => {

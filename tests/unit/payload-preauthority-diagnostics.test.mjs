@@ -243,6 +243,40 @@ test('control errors require a known adapter context, one exact line and an emit
   }
 });
 
+test('B0 diagnostics allow only source-grounded fixed reasons and never authorize a prefix or private detail', () => {
+  const reasons = [
+    'b0_acceptance_conflict', 'b0_acceptance_expired', 'b0_acceptance_origin_mismatch', 'b0_acceptance_required',
+    'b0_capture_not_reserved', 'b0_capture_required', 'historical_production_install_blocked', 'invalid_b0_acceptance',
+  ];
+  const emitted = new Set([controlRuntime, controlState].flatMap(source =>
+    [...source.matchAll(/fail\('([a-z][a-z0-9_]+)'\)/gu)].map(match => match[1])));
+  for (const reason of reasons) {
+    assert.ok(emitted.has(reason), `${reason} must be emitted by the current runtime/state code`);
+    for (const context of ['payload-control:release-preflight', 'payload-control:verify-release', 'payload-operations-guard']) {
+      const options = { controlCommandContext: context };
+      const parse = stderr => createCommandDiagnostic({ substep: 'b0_diagnostic_probe', status: 2, stderr, ...options });
+      assert.equal(extractControlErrorIdentifier(`${reason}\n`, options), reason);
+      assert.equal(parse(Buffer.from(`${reason}\r\n`)).controlErrorIdentifier, reason);
+      assert.deepEqual(sanitizeCommandDiagnostic(parse(`${reason}\n`)), parse(`${reason}\n`));
+      for (const stderr of [reason, `${reason} private-detail\n`, `${reason}\nprivate-detail\n`,
+        `private-detail\n${reason}\n`, `${reason}\n${reason}\n`, `${reason}_unregistered\n`]) {
+        assert.equal(parse(stderr).controlErrorIdentifier, null);
+        assert.doesNotMatch(JSON.stringify(parse(stderr)), /private-detail|unregistered/u);
+      }
+    }
+    for (const controlCommandContext of [undefined, 'docker-compose', 'payload-control:backup-metadata',
+      'payload-control:capture-production-b0', 'payload-control:accept-production-b0']) {
+      assert.equal(extractControlErrorIdentifier(`${reason}\n`, { controlCommandContext }), null);
+    }
+  }
+  for (const reason of ['b0_acceptance_attacker_value', 'b0_capture_attacker_value', 'invalid_b0_attacker_value',
+    'historical_production_attacker_value']) {
+    assert.equal(emitted.has(reason), false);
+    assert.equal(extractControlErrorIdentifier(`${reason}\n`, { controlCommandContext: 'payload-operations-guard' }), null);
+    assert.equal(sanitizeCommandDiagnostic({ controlErrorIdentifier: reason }).controlErrorIdentifier, null);
+  }
+});
+
 test('ownership diagnostics are source-grounded finite codes with exact context and no private detail', () => {
   const identifiers = [
     'invalid_environment_file_owner', 'environment_unavailable',

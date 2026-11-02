@@ -459,7 +459,7 @@ function loadKnowledgeHarness({ canManage = false } = {}) {
     .replace(/^import[^\n]+\n/gm, '')
     .replace(/const user = await requireAuth\(\);\nif \(!user\) throw new Error\('Authentication required'\);\n/, '')
     .replace(/\nloadArticles\(\);\n}\s*$/, '\n}');
-  vm.runInNewContext(mountSource(source, 'globalThis.loadArticles = loadArticles; globalThis.openArticle = openArticle; globalThis.editArticle = editArticle; globalThis.newArticle = newArticle; globalThis.deleteArticle = deleteArticle;'), context, { filename: 'knowledge.js' });
+  vm.runInNewContext(mountSource(source, 'globalThis.loadArticles = loadArticles; globalThis.openArticle = openArticle; globalThis.editArticle = editArticle; globalThis.newArticle = newArticle; globalThis.deleteArticle = deleteArticle; globalThis.uploadPdf = uploadPdf;'), context, { filename: 'knowledge.js' });
   return { context, document, nodes, location, listRequests, detail, detailRequests, uploadRequests, deleteRequests, articleDeleteRequests, saveRequests, window, pageHeading };
 }
 
@@ -1099,6 +1099,34 @@ test('Knowledge back navigation exposes a visible list retry state when loading 
   assert.notEqual(harness.document.activeElement, detailTitle);
   assert.equal(harness.document.activeElement.closest('#article-view'), null);
 });
+
+for (const entry of ['selection', 'upload helper']) {
+test(`Knowledge ${entry} accepts exactly 50 MiB PDF and rejects one byte over before upload`, async () => {
+  const harness = loadKnowledgeHarness({ canManage: true });
+  const input = harness.nodes.get('f-pdf');
+  const select = file => {
+    if (entry === 'upload helper') return harness.context.uploadPdf(file);
+    input.files = [file];
+    input.dispatch('change');
+  };
+  const pending = select({ type: 'application/pdf', size: 50 * 1024 * 1024 });
+  assert.equal(harness.uploadRequests.length, 1);
+  harness.uploadRequests[0].resolve({ id: 'boundary-pdf', original_name: 'boundary.pdf' });
+  await pending;
+  await drain();
+  assert.match(harness.nodes.get('f-pdf-status').textContent, /Selecionado: boundary\.pdf/);
+  input.value = 'oversized.pdf';
+  await select({ type: 'application/pdf', size: 50 * 1024 * 1024 + 1 });
+  assert.equal(harness.uploadRequests.length, 1, 'oversized selection makes no upload request');
+  assert.equal(input.value, '');
+  assert.equal(harness.nodes.get('f-pdf-status').textContent, 'O PDF deve ter no máximo 50 MB.');
+  assert.equal(JSON.parse(harness.nodes.get('f-pdf-state').value).selected, 'boundary-pdf');
+  assert.equal(harness.deleteRequests.length, 0, 'invalid replacement preserves the selected PDF');
+  await select({ type: 'image/png', size: 10 });
+  assert.equal(harness.uploadRequests.length, 1);
+  assert.equal(harness.nodes.get('f-pdf-status').textContent, 'Selecione um arquivo PDF válido.');
+});
+}
 
 test('Knowledge blocks PDF close while pending and deletes a newly uploaded asset before closing', async () => {
   const harness = loadKnowledgeHarness();

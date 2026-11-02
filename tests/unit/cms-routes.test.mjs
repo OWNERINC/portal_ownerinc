@@ -379,12 +379,10 @@ test('CMS revision history binds limit before offset', () => {
 test('protected assets validate signatures, use UUID storage keys, audit uploads, and hide filesystem paths', () => {
   assert.match(assets, /multer\.memoryStorage\(\)/);
   assert.match(assets, /MAX_ASSET_SIZE = 50 \* 1024 \* 1024/);
-  assert.match(assets, /MAX_PDF_SIZE = 100 \* 1024 \* 1024/);
-  assert.match(assets, /fileSize: MAX_PDF_SIZE/);
+  assert.match(assets, /fileSize: MAX_ASSET_SIZE \+ 1/);
   assert.match(assets, /detectedMime\(req\.file\.buffer\)/);
   assert.match(assets, /mimeType !== req\.file\.mimetype/);
-  assert.match(assets, /mimeType === 'application\/pdf' \? MAX_PDF_SIZE : MAX_ASSET_SIZE/);
-  assert.match(assets, /req\.file\.size > maxSize[\s\S]*status\(413\)/);
+  assert.match(assets, /req\.file\.size > MAX_ASSET_SIZE[\s\S]*status\(413\)/);
   assert.match(assets, /crypto\.randomUUID\(\)/);
   assert.match(assets, /withAudit\(pool, req, 'cms\.asset\.upload'/);
   assert.match(assets, /canReadAsset\(db, req\.user, asset\)/);

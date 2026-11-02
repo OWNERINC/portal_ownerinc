@@ -11,6 +11,7 @@ import re
 import stat
 import sys
 import time
+import types
 import uuid
 
 TOOL_ROOT = '/opt/ownerinc/lib/payload-candidate'
@@ -23,6 +24,7 @@ MAX_BINARY = 200 * MAX_JSON
 PREPARATION_ROOT = '/opt/ownerinc/lib/payload-preparation'
 PREPARATION_LAUNCHER = '/usr/local/libexec/ownerinc-payload-prepare.py'
 PREPARATION_APPROVAL = '/etc/ownerinc/payload-preparation/production-approval.json'
+B0_ACCEPTANCE_PATH = '/etc/ownerinc/payload-preparation/production-b0-acceptance.json'
 PREPARATION_FILES = (
     'ops/prepare-cms-infrastructure.sh', 'ops/prepare-cms-infrastructure-private.py',
     'ops/payload-control-inventory.py', 'ops/payload-control-state.py',
@@ -805,6 +807,62 @@ def provision_policy_rotation(mode, approval_path, expected_hash, bundle):
         raise RotationError(code, phase, cause) from None
 
 
+def provision_b0_acceptance(mode, decision_path, expected_digest, bundle):
+    # This program and expected_digest must be independently authenticated over
+    # the administrative VPS channel, exactly as for initial trust provisioning.
+    # Root ownership and a name in JSON are not an identity/authentication claim.
+    require(mode in ('check', 'apply') and hash64(expected_digest), 'invalid_b0_acceptance')
+    raw = read_protected(decision_path, 0o600, MAX_JSON)
+    require(sha(raw) == expected_digest, 'approval_digest_mismatch')
+    approval_raw = read_protected(PREPARATION_APPROVAL, 0o600, MAX_JSON)
+    approval = validate_preparation_approval(strict_json(approval_raw))
+    launcher_raw = read_protected(PREPARATION_LAUNCHER, 0o755, 2 * MAX_JSON)
+    require(sha(launcher_raw) == approval['source']['files']['ops/prepare-cms-authenticated.py'],
+            'preparation_source_mismatch')
+    launcher = types.ModuleType('authenticated_b0_provisioning')
+    launcher.__file__ = PREPARATION_LAUNCHER
+    exec(compile(launcher_raw, PREPARATION_LAUNCHER, 'exec'), launcher.__dict__)
+    with launcher.deployment_lease() as reaffirm:
+        authenticated, captured, _, _, _, record, _ = launcher._authenticated_material()
+        require(authenticated == approval, 'inputs_changed')
+        runtime, inventory, body, _ = launcher.inspect_install_host(approval, captured)
+        state = runtime.STATE
+        decision = state.parse_canonical(raw, 'invalid_b0_acceptance')
+        intent = body.get('installIntent')
+        require(intent is not None and state.gated_production_binding(intent['binding']), 'b0_capture_required')
+        binding = intent['binding']
+        state.validate_b0_acceptance(decision, binding)
+        state.validate_production_correspondence(binding, approval, record, inventory, {
+            'sourceApprovalSha256': launcher.approval_binding_digest(approval),
+            'policySha256': approval['admission']['policySha256'], 'recordSha256': approval['admission']['recordSha256']})
+        bundle_layout(bundle, ('qualification-evidence.json', 'procedure.md'))
+        evidence = read_protected(bundle + '/qualification-evidence.json', 0o600, MAX_JSON)
+        procedure = read_protected(bundle + '/procedure.md', 0o600, MAX_JSON)
+        require(sha(evidence) == decision['qualificationEvidenceSha256'] and
+                sha(procedure) == decision['procedureRevision'], 'b0_qualification_mismatch')
+        key, _, current, head = state.read_state(launcher.RUNTIME, repair_head=False)
+        require(current == body, 'inputs_changed')
+        if 'b0Acceptance' in intent:
+            require(intent['b0Acceptance'] == {'decision': decision, 'decisionSha256': expected_digest},
+                    'destination_conflict')
+        else:
+            require(intent['stage'] == 'reserved' and head == decision['originStateSha256'] and
+                    decision['acceptedAt'] <= time.time() < decision['expiresAt'], 'b0_acceptance_not_current')
+        with runtime.verify_production_b0_artifacts(binding, inventory, key):
+            require(sha(launcher.host_read(binding['b0']['directory'] + '/manifest.sha256',
+                        (0, 0), (0o600,))) == decision['manifestSha256'], 'b0_manifest_mismatch')
+            expected = (raw, 0o600, MAX_JSON)
+            existing_target(B0_ACCEPTANCE_PATH, expected)
+            require(read_protected(decision_path, 0o600, MAX_JSON) == raw and
+                    read_protected(PREPARATION_APPROVAL, 0o600, MAX_JSON) == approval_raw and
+                    state.read_state(launcher.RUNTIME, repair_head=False)[2:] == (body, head), 'inputs_changed')
+            reaffirm()
+            if mode == 'apply':
+                publish(B0_ACCEPTANCE_PATH, expected)
+            reaffirm()
+    return 'B0 decision ' + ('provisioned' if mode == 'apply' else 'checked') + '; signed acceptance and migration remain separate.'
+
+
 def main(args=None):
     class Parser(argparse.ArgumentParser):
         def error(self, _message):
@@ -815,7 +873,7 @@ def main(args=None):
     actions.add_argument('--apply', action='store_true')
     for flag in ('approval', 'approval-sha256', 'bundle'):
         parser.add_argument('--' + flag, required=True)
-    parser.add_argument('--profile', choices=('preparation', 'policy-rotation'))
+    parser.add_argument('--profile', choices=('preparation', 'policy-rotation', 'b0-acceptance'))
     raw_args = sys.argv[1:] if args is None else args
     require(len(raw_args) == (9 if '--profile' in raw_args else 7), 'invalid_arguments')
     require(all(raw_args.count(flag) <= 1 for flag in
@@ -827,6 +885,17 @@ def main(args=None):
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'}
             and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C', 'clean_environment_required')
+    if selected.profile == 'b0-acceptance':
+        require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'), 'python_interpreter_mismatch')
+        try:
+            result = provision_b0_acceptance('check' if selected.check else 'apply', selected.approval,
+                                            selected.approval_sha256, selected.bundle)
+        except ProvisionError:
+            raise
+        except Exception:
+            raise ProvisionError('b0_acceptance_denied') from None
+        print(result)
+        return
     if selected.profile == 'policy-rotation':
         report = provision_policy_rotation('check' if selected.check else 'apply', selected.approval,
                                            selected.approval_sha256, selected.bundle)

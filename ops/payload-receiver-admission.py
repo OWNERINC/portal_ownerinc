@@ -74,6 +74,13 @@ def parse_request(raw):
     return selected
 
 
+def parse_resume_request(raw):
+    parts = raw.split(' ')
+    require(len(parts) == len(FIELDS) + 2 and parts[0] == 'production:payload-resume-v3' and
+            re.fullmatch(r'payload-[a-z0-9_]{8}', parts[1]) is not None, 'invalid_request')
+    return parts[1], parse_request('production:payload-v2 ' + ' '.join(parts[2:]))
+
+
 def bounded_subprocess(command, output_limit=MAX_SUBPROCESS_OUTPUT, timeout=SUBPROCESS_TIMEOUT):
     require(type(output_limit) is int and 0 < output_limit <= MAX_SUBPROCESS_OUTPUT, 'subprocess_contract_invalid')
     require(type(timeout) is int and 0 < timeout <= 7200, 'subprocess_contract_invalid')
@@ -500,9 +507,20 @@ def apply_request(request):
     require(len(parts) == 3 and parts[0] == 'production:payload-apply-v2' and
             re.fullmatch(r'payload-[a-z0-9_]{8}', parts[1]) is not None and
             re.fullmatch(r'[0-9a-f]{64}', parts[2]) is not None, 'invalid_request')
-    receipt = INCOMING + '/' + parts[1]
+    continue_receipt(parts[1], parts[2], '--apply-install', parts[1])
+
+
+def resume_request(request):
+    receipt_id, selected = parse_resume_request(request)
+    # The authenticated preparer compares all fields to its pinned host record
+    # before any repair/publication. This transport neither admits nor renews.
+    continue_receipt(receipt_id, selected['nonce'], '--resume-install', request)
+
+
+def continue_receipt(receipt_id, nonce, operation, argument):
+    receipt = INCOMING + '/' + receipt_id
     protected_directory(receipt, private=True)
-    marker = NONCES + '/' + parts[2]
+    marker = NONCES + '/' + nonce
     protected_directory(NONCES, private=True)
     evidence = read_private_file(os.path.join(receipt, 'admission.json'), MAX_SUBPROCESS_OUTPUT)
     try:
@@ -513,7 +531,7 @@ def apply_request(request):
     fresh = isinstance(authorization.get('expiresAt'), str) and re.fullmatch(r'[1-9][0-9]{9}', authorization['expiresAt']) and \
         int(time.time()) < int(authorization['expiresAt'])
     marker_raw = read_private_file(marker, 32) if fresh or os.path.lexists(marker) else None
-    require(len(evidence) <= MAX_SUBPROCESS_OUTPUT and authorization.get('nonce') == parts[2] and
+    require(len(evidence) <= MAX_SUBPROCESS_OUTPUT and authorization.get('nonce') == nonce and
             isinstance(authorization.get('expiresAt'), str) and re.fullmatch(r'[1-9][0-9]{9}', authorization['expiresAt']) and
             (marker_raw is None or marker_raw == (authorization['expiresAt'] + '\n').encode('ascii')),
             'candidate_admission_denied')
@@ -524,7 +542,7 @@ def apply_request(request):
         raise ReceiverError('release_not_preflighted') from None
     require(isinstance(preflight, dict) and preflight.get('installationExecuted') is False and
             preflight.get('deploymentAuthorized') is False, 'release_not_preflighted')
-    result = bounded_subprocess([PYTHON, '-I', '-S', '-B', PREFLIGHT, '--apply-install', parts[1]],
+    result = bounded_subprocess([PYTHON, '-I', '-S', '-B', PREFLIGHT, operation, argument],
                                 4096, APPLY_SUBPROCESS_TIMEOUT)
     require(result.returncode == 0, 'candidate_install_denied')
     print(result.stdout.decode('utf-8'), end='')
@@ -548,7 +566,9 @@ def main(args):
     os.umask(0o077)
     require(sys.flags.isolated and sys.flags.no_site, 'isolated_receiver_required')
     if len(args) == 2 and args[0] == 'payload':
-        if args[1].startswith('production:payload-apply-v2 '):
+        if args[1].startswith('production:payload-resume-v3 '):
+            resume_request(args[1])
+        elif args[1].startswith('production:payload-apply-v2 '):
             apply_request(args[1])
         else:
             payload_request(args[1], sys.stdin.buffer)

@@ -28,6 +28,7 @@ SPEC.loader.exec_module(STATE)
 INVENTORY = STATE.INVENTORY
 
 INVENTORY_FILENAME = 'payload-control-inventory.json'
+B0_ACCEPTANCE_PATH = '/etc/ownerinc/payload-preparation/production-b0-acceptance.json'
 _INVENTORY_CACHE = None
 RUNTIME_CHILD_WAIT_SECONDS = 600
 RUNTIME_CHILD_CLEANUP_SECONDS = 3
@@ -64,6 +65,7 @@ ACTION_SET = {
     'initialize-isolated', 'install-floor-commit',
     'observe-writers', 'resume-writers', 'resume-readiness-writers',
     'portal-database-target',
+    'capture-production-b0', 'accept-production-b0',
 }
 INITIALIZER_DIAGNOSTIC_PHASES = set('''
 runtime_validation request_validation source_preflight close_admission stop_writers quiescence
@@ -3155,7 +3157,7 @@ class Runtime:
         request = STATE.parse_canonical(raw, 'invalid_cold_state')
         if production:
             STATE._exact_keys(request, {'schemaVersion', 'kind', 'candidate', 'authority', 'inventoryIdentity',
-                                       'sourceCommit', 'expiresAt', 'nonce'}, 'invalid_cold_state')
+                                       'sourceCommit', 'expiresAt', 'nonce', 'receiptId'}, 'invalid_cold_state')
             existing = self.state.get('installIntent')
             request_now = int(time.time())
             current_release = self._current_release()
@@ -3173,6 +3175,9 @@ class Runtime:
             if any(not isinstance(value, str) or not STATE.HEX_64.fullmatch(value) for value in request['authority'].values()):
                 fail('invalid_cold_state')
             candidate = STATE.validate_install_candidate(request['candidate'])
+            if request['expiresAt'] != candidate.get('authorization', {}).get('expiresAt') or \
+               request['nonce'] != candidate.get('authorization', {}).get('nonce'):
+                fail('invalid_cold_state')
             images, payload = _release(self.release_path, payload=True, owner_root=True)
             if not payload or images != candidate['images'] or os.path.basename(self.release_path) != candidate['commit']:
                 fail('planned_release_mismatch')
@@ -3185,6 +3190,7 @@ class Runtime:
                 fail('preauthority_source_recovery_proof_mismatch')
             lease = os.stat(config['paths']['lock'])
             return {'bindingVersion': 4, 'candidate': candidate, 'candidateRelease': self.release_path,
+                    'b0GateVersion': 1, 'receiptId': request['receiptId'],
                     'sourceRelease': source, 'previousImages': source_images,
                     'b0': {'directory': os.path.join(config['paths']['backupRoots'][0], '000-initial-install-b0'),
                            'proofSha256': self.state['legacySourceProofSha256']},
@@ -3619,6 +3625,8 @@ class Runtime:
         if intent is None or intent['stage'] not in ('provisioned', 'b1_committed', 'floor_commit_pending', 'floor_committed'):
             fail('invalid_cold_state')
         binding = intent['binding']
+        if STATE.production_binding(binding):
+            self._production_acceptance()
         production = binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod'
         self.evidence = binding['b0']['directory']
         if intent['stage'] == 'floor_committed':
@@ -3633,7 +3641,7 @@ class Runtime:
             print('exact signed committed floor reverified; admission remains closed and worker held')
             return
         fingerprint = self._initial_floor_observations()
-        if intent['stage'] == 'provisioned':
+        if intent['stage'] in ('provisioned', 'b1_committed'):
             self._initializer_phase('floor_pending')
             self.state = STATE.begin_install_floor(self.runtime_dir, binding, fingerprint)
         elif fingerprint != intent['floor']['nativeCatalogFingerprint']:
@@ -3665,9 +3673,42 @@ class Runtime:
             self.runtime_dir, template, proof, digest, creation=creation,
             authorization_expires_at=expires_at)
 
-    def initialize_isolated(self):
+    def _production_acceptance(self, persist=False):
+        intent = self.state.get('installIntent')
+        if intent is None or not STATE.gated_production_binding(intent['binding']):
+            fail('b0_capture_required')
+        raw = _read_bytes(B0_ACCEPTANCE_PATH, mode=0o600, owner_root=True)
+        decision = STATE.parse_canonical(raw, 'invalid_b0_acceptance')
+        STATE.validate_b0_acceptance(decision, intent['binding'])
+        digest = hashlib.sha256(raw).hexdigest()
+        if persist:
+            if 'b0Acceptance' in intent:
+                if intent['b0Acceptance'] != {'decision': decision, 'decisionSha256': digest}:
+                    fail('b0_acceptance_conflict')
+                # Exact duplicate decision never appends or renews; origin was
+                # validated during signed journal replay, even after progression.
+                return
+            self.evidence = intent['binding']['b0']['directory']
+            self.install_retry_check()
+            manifest = _read_bytes(os.path.join(self.evidence, 'manifest.sha256'), owner_root=True)
+            if hashlib.sha256(manifest).hexdigest() != decision['manifestSha256']:
+                fail('invalid_b0_acceptance')
+            self.state = STATE.accept_b0(self.runtime_dir, intent['binding'], decision, digest)
+        elif intent.get('b0Acceptance') != {'decision': decision, 'decisionSha256': digest}:
+            fail('b0_acceptance_required')
+
+    def initialize_isolated(self, capture_only=False, accept_only=False):
         self._initializer_phase('request_validation')
         template = self._initializer_request()
+        production_request = template.get('project') == 'ownerinc-portal-prod'
+        if (capture_only or accept_only) and not production_request:
+            fail('unsupported_compose_project')
+        if production_request and not capture_only:
+            # Never capture implicitly in apply, even with a fresh candidate.
+            STATE.assert_install_matches(self.state, template)
+            self._production_acceptance(persist=accept_only)
+            if accept_only:
+                return
         if self.state['schemaVersion'] != 2 or self.state.get('restoreIntent') is not None:
             fail('invalid_cold_state')
         existing = self.state.get('installIntent')
@@ -3707,6 +3748,12 @@ class Runtime:
             self._initializer_phase('install_advance')
             self.state = STATE.advance_install(self.runtime_dir, binding, stage)
         stage = self.state['installIntent']['stage']
+        if capture_only:
+            if stage != 'reserved':
+                fail('b0_capture_not_reserved')
+            self.install_retry_check()
+            print('B0 captured and reserved; admission closed, writers stopped, CMS cold; acceptance required')
+            return
         if stage == 'reserved':
             self._initializer_phase('retry_boundary')
             self.install_retry_check()
@@ -3769,6 +3816,8 @@ class Runtime:
         self.install_floor_commit()
 
     def run(self):
+        if self.action == 'capture-production-b0': return self.initialize_isolated(capture_only=True)
+        if self.action == 'accept-production-b0': return self.initialize_isolated(accept_only=True)
         if self.action == 'portal-database-target': return self.portal_database_target()
         if self.action == 'observe-writers': return self.observe_writers()
         if self.action == 'resume-writers': return self.resume_writers()

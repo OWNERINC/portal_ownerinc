@@ -82,7 +82,8 @@ async function main() {
   await appendFile(process.env.GITHUB_STEP_SUMMARY,
     `## Qualified private-install handoff\n\nVerify the downloaded \`install-dispatch.json\` byte-for-byte; never infer a value.\n\n` +
     `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n\n` +
-    `\`\`\`sh\ngh workflow run payload-install-production.yml --ref main \\\n${flags.slice(0, -2)}\n\`\`\`\n`);
+    `This dispatch admits only. Retain the returned receipt for administrative B0 capture and acceptance; resume with that receipt and the unchanged original inputs.\n\n` +
+    `\`\`\`sh\ngh workflow run payload-install-production.yml --ref main -f operation=admit \\\n${flags.slice(0, -2)}\n\`\`\`\n`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

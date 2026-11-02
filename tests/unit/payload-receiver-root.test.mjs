@@ -9,6 +9,7 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 const python = process.platform === 'win32' ? 'python' : 'python3';
 const bashPath = value => value.replaceAll('\\', '/').replace(/^([A-Za-z]):/u, (_, drive) => `/${drive.toLowerCase()}`);
 const request = `production:payload-v2 ${'a'.repeat(40)} 1 1 ${['api', 'cron', 'cms'].map(s => `ghcr.io/ownerinc/ownerinc-portal-${s}@sha256:${'b'.repeat(64)}`).join(' ')} 11 12 13 ${[4, 5, 6].map(n => `sha256:${String(n).repeat(64)}`).join(' ')} ${[7, 8, 9].map(n => String(n).repeat(64)).join(' ')} ${'a'.repeat(64)} ${'b'.repeat(64)} 1999999999 ${'c'.repeat(64)}`;
+const resume = request.replace('production:payload-v2', 'production:payload-resume-v3 payload-abcdefgh');
 
 test('actual production wrapper uses only fixed sudo for Payload; legacy SHA delegation remains unprivileged (transport doubles)', async t => {
   const root = await mkdtemp(path.join(process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp', 'opencode') : os.tmpdir(), 'receiver-wrapper-'));
@@ -22,9 +23,16 @@ test('actual production wrapper uses only fixed sudo for Payload; legacy SHA del
   const script = path.join(root, 'wrapper');
   await writeFile(script, source.replace('/usr/bin/sudo', `'${bashPath(sudo)}'`).replace('exec /usr/local/libexec/ownerinc-portal-deploy ', `exec '${bashPath(legacy)}' `));
   const run = (command, args = []) => spawnSync(bash, [bashPath(script), ...args], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: command }, timeout: 10000 });
-  const payload = run(request);
-  assert.equal(payload.status, 0, payload.stderr);
-  assert.equal(payload.stdout, `sudo\n<-n>\n<-->\n</usr/local/libexec/ownerinc-payload-receive>\n<${request}>\n`);
+  for (const command of [request, resume, `production:payload-apply-v2 payload-abcdefgh ${'c'.repeat(64)}`]) {
+    const payload = run(command);
+    assert.equal(payload.status, 0, payload.stderr);
+    assert.equal(payload.stdout, `sudo\n<-n>\n<-->\n</usr/local/libexec/ownerinc-payload-receive>\n<${command}>\n`);
+    assert.equal(run(command, ['extra']).status, 2);
+  }
+  for (const command of [resume.replace('resume-v3', 'resume-v2'), resume.replace('resume-v3', 'resume-v4')]) {
+    assert.equal(run(command).status, 2);
+    assert.equal(run(command).stdout, '');
+  }
   const injection = `${request}; echo NEVER_EXECUTE`;
   assert.ok(run(injection).stdout.endsWith(`<${injection}>\n`), 'one opaque argument, never shell expansion');
   assert.equal(run(request, ['extra']).status, 2);
@@ -51,9 +59,12 @@ test('root launcher rejects extra args and clears environment before fixed isola
   const run = args => spawnSync(bash, ['-p', bashPath(script), ...args], { encoding: 'utf8', timeout: 10000, env: { ...process.env, PRIVATE_SECRET: 'not-forwarded', PYTHONPATH: 'not-forwarded' } });
   assert.equal(run([]).status, 2);
   assert.equal(run([request, 'extra']).status, 2);
-  const result = run([request]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `secret=<> pythonpath=<>\n<-I>\n<-S>\n</usr/local/libexec/payload-receiver-admission.py>\n<payload>\n<${request}>\n`);
+  for (const command of [request, resume]) {
+    const result = run([command]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `secret=<> pythonpath=<>\n<-I>\n<-S>\n</usr/local/libexec/payload-receiver-admission.py>\n<payload>\n<${command}>\n`);
+    assert.equal(run([command, 'extra']).status, 2);
+  }
 });
 
 test('actual helper rejects malformed privileged requests before filesystem/stream effects', () => {
@@ -70,6 +81,11 @@ for raw in [request+';id',request+' extra',request.replace('production:','stagin
     try:m.payload_request(raw,object())
     except m.ReceiverError as error:assert str(error)=='invalid_request'
     else:raise AssertionError('accepted malformed request')
+resume=${JSON.stringify(resume)}
+for raw in [resume+';id',resume+' extra',resume+'\\n',resume.replace('payload-abcdefgh','../escape'),resume.replace('resume-v3','resume-v2'),resume.replace(' 12 ',' 11 ')]:
+    try:m.main(['payload',raw])
+    except m.ReceiverError as error:assert str(error)=='invalid_request'
+    else:raise AssertionError('accepted malformed resume')
 `], { encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
 });

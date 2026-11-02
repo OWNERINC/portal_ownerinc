@@ -126,6 +126,54 @@ def _valid_images(images, payload=True):
             fail('invalid_release_images')
 
 
+def production_binding(binding):
+    return binding.get('project') == 'ownerinc-portal-prod'
+
+
+def gated_production_binding(binding):
+    return production_binding(binding) and binding.get('bindingVersion') == 4 and binding.get('b0GateVersion') == 1
+
+
+def validate_b0_acceptance(value, binding):
+    _exact_keys(value, {'schemaVersion', 'kind', 'installBindingSha256', 'originStateSha256',
+                       'receiptId', 'manifestSha256', 'qualificationEvidenceSha256', 'procedureRevision',
+                       'acceptedAt', 'expiresAt', 'authenticatedChannel'}, 'invalid_b0_acceptance')
+    if not gated_production_binding(binding) or type(value['schemaVersion']) is not int or \
+       value['schemaVersion'] != 1 or value['kind'] != 'production-exact-b0-acceptance-v1' or \
+       value['authenticatedChannel'] != 'independently-authenticated-admin-vps' or \
+       value['receiptId'] != binding['receiptId'] or \
+       value['installBindingSha256'] != hashlib.sha256(canonical(binding)).hexdigest():
+        fail('invalid_b0_acceptance')
+    for name in ('installBindingSha256', 'originStateSha256', 'manifestSha256',
+                 'qualificationEvidenceSha256', 'procedureRevision'):
+        if not isinstance(value[name], str) or not HEX_64.fullmatch(value[name]):
+            fail('invalid_b0_acceptance')
+    if type(value['acceptedAt']) is not int or type(value['expiresAt']) is not int or \
+       not 0 < value['acceptedAt'] < value['expiresAt'] or value['expiresAt'] - value['acceptedAt'] > 3600:
+        fail('invalid_b0_acceptance')
+    return value
+
+
+def accept_b0(directory, binding, decision, expected_digest):
+    """Caller authenticates administrative decision bytes and holds exclusive FD9."""
+    validate_b0_acceptance(decision, binding)
+    if hashlib.sha256(canonical(decision) + b'\n').hexdigest() != expected_digest:
+        fail('invalid_b0_acceptance')
+    accepted = {'decision': decision, 'decisionSha256': expected_digest}
+    old = read_state(directory)[2]
+    intent = assert_install_matches(old, binding)
+    if 'b0Acceptance' in intent:
+        if intent['b0Acceptance'] != accepted:
+            fail('b0_acceptance_conflict')
+        return old
+    def accept(body):
+        current = assert_install_matches(body, binding)
+        if current['stage'] != 'reserved' or 'b0Acceptance' in current:
+            fail('invalid_b0_acceptance')
+        current['b0Acceptance'] = json.loads(json.dumps(accepted))
+    return transition(directory, accept)
+
+
 def validate_state_body(body):
     version = body.get('schemaVersion') if isinstance(body, dict) else None
     names = {
@@ -194,6 +242,8 @@ def validate_state_body(body):
         if isinstance(install, dict) and install.get('binding', {}).get('bindingVersion') == 4 and \
            install.get('binding', {}).get('project') == 'ownerinc-portal-prod':
             names.add('authorizationFreshAtReservation')
+            if gated_production_binding(install['binding']) and 'b0Acceptance' in install:
+                names.add('b0Acceptance')
         _exact_keys(install, names, 'invalid_cold_state')
         validate_install_binding(install['binding'])
         transition_stages = PRODUCTION_TRANSITION_STAGES if install['binding'].get('bindingVersion') == 4 and \
@@ -207,6 +257,15 @@ def validate_state_body(body):
            body['rollbackTargetImages'] is not None:
             fail('invalid_cold_state')
         binding = install['binding']
+        if gated_production_binding(binding):
+            if 'b0Acceptance' in install:
+                accepted = install['b0Acceptance']
+                _exact_keys(accepted, {'decision', 'decisionSha256'}, 'invalid_b0_acceptance')
+                validate_b0_acceptance(accepted['decision'], binding)
+                if hashlib.sha256(canonical(accepted['decision']) + b'\n').hexdigest() != accepted['decisionSha256']:
+                    fail('invalid_b0_acceptance')
+            elif stage != 'reserved':
+                fail('b0_acceptance_required')
         if binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod' and \
            install.get('authorizationFreshAtReservation') is not True:
             fail('invalid_cold_state')
@@ -314,7 +373,13 @@ def validate_install_binding(binding):
         names |= {'authority', 'sourceCommit', 'project'}
     if version == 4:
         names.add('sharedCluster')
+        if 'b0GateVersion' in binding:
+            names |= {'b0GateVersion', 'receiptId'}
     _exact_keys(binding, names, 'invalid_cold_state')
+    if 'b0GateVersion' in binding and (not production_binding(binding) or
+            type(binding['b0GateVersion']) is not int or binding['b0GateVersion'] != 1 or
+            not isinstance(binding['receiptId'], str) or not re.fullmatch(r'payload-[a-z0-9_]{8}', binding['receiptId'])):
+        fail('invalid_cold_state')
     candidate = binding['candidate']
     if versioned and (type(version) is not int or version not in (2, 3, 4)):
         fail('invalid_cold_state')
@@ -340,6 +405,10 @@ def validate_install_binding(binding):
            shared['databases']['cms'] != {'name': 'ownerinc_cms', 'owner': 'cms_admin'}:
             fail('invalid_cold_state')
     validate_install_candidate(candidate, producer)
+    if gated_production_binding(binding) and ('authorization' not in candidate or
+            candidate['authorization']['approvalSha256'] != binding['authority']['sourceApprovalSha256'] or
+            candidate['authorization']['inventoryIdentity'] != binding['inventoryIdentity']):
+        fail('invalid_cold_state')
     _valid_images(binding['previousImages'], payload=False)
     for name in ('candidateRelease', 'sourceRelease'):
         value = binding[name]
@@ -466,6 +535,8 @@ def reserve_install(directory, binding, proof, proof_sha256, creation=None,
         fail('invalid_cold_state')
     production = binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod'
     if production:
+        if gated_production_binding(binding) and authorization_expires_at != binding['candidate'].get('authorization', {}).get('expiresAt'):
+            fail('invalid_cold_state')
         if not isinstance(authorization_expires_at, str) or \
            not re.fullmatch(r'[1-9][0-9]{9}', authorization_expires_at) or \
            (clock is not None and not callable(clock)) or \
@@ -925,6 +996,16 @@ def validate_state_transition(old, new):
     if old_install is not None:
         if new_install is None or canonical(old_install['binding']) != canonical(new_install['binding']):
             fail('planned_release_mismatch')
+        if gated_production_binding(old_install['binding']):
+            if 'b0Acceptance' in old_install:
+                if old_install['b0Acceptance'] != new_install.get('b0Acceptance'):
+                    fail('b0_acceptance_conflict')
+            elif 'b0Acceptance' in new_install:
+                if old_install['stage'] != 'reserved' or new_install['stage'] != 'reserved' or \
+                   new_install['b0Acceptance']['decision']['originStateSha256'] != new['previousStateSha256'] or \
+                   old_install != {k: v for k, v in new_install.items() if k != 'b0Acceptance'} or \
+                   any(old[k] != new[k] for k in old if k not in ('sequence', 'previousStateSha256', 'installIntent')):
+                    fail('b0_acceptance_origin_mismatch')
         stages = (PRODUCTION_INSTALL_STAGES + ('floor_commit_pending', 'floor_committed')) \
             if old_install['binding'].get('bindingVersion') == 4 and old_install['binding'].get('project') == 'ownerinc-portal-prod' \
             else (INSTALL_STAGES + ('floor_commit_pending', 'floor_committed'))
@@ -957,10 +1038,12 @@ def validate_state_transition(old, new):
         if old['schemaVersion'] != 2 or old['cmsStatus'] != 'cold' or old['admission'] != 'closed' or \
            old['restoreIntent'] is not None or new_install['stage'] != 'reserved':
             fail('invalid_cold_state')
+        if 'b0Acceptance' in new_install:
+            fail('b0_acceptance_origin_mismatch')
     return new
 
 
-def read_state(directory, repair_head=False, inventory_identity=None):
+def read_state(directory, repair_head=False, inventory_identity=None, before_repair=None):
     _safe_runtime_directory(directory)
     key = _key_for(directory)
     state_dir, head_path = _state_paths(directory)
@@ -998,6 +1081,8 @@ def read_state(directory, repair_head=False, inventory_identity=None):
         # corrupt/partial record, reset history, or skip multiple journal entries.
         if not repair_head or len(envelopes) < 2 or canonical(head) != canonical(envelopes[-2]):
             fail('state_head_mismatch')
+        if before_repair is not None:
+            before_repair(body)
         _atomic_replace(head_path, canonical(envelopes[-1]) + b'\n', 0o600)
     return key, state_dir, body, previous_digest
 
@@ -1125,6 +1210,19 @@ def transition(directory, mutate, authorization_expires_at=None, clock=None, bef
     new['sequence'] = old['sequence'] + 1
     new['previousStateSha256'] = parent_hash
     validate_state_transition(old, new)
+    intent = new.get('installIntent')
+    old_intent = old.get('installIntent')
+    if intent is not None and production_binding(intent['binding']):
+        if not gated_production_binding(intent['binding']):
+            fail('historical_production_install_blocked')
+        # Replay validates immutable origin; the clock gates writes only. Once
+        # pending is durable an exact retry survives expiry/ambiguous command start.
+        first_start = old_intent is not None and old_intent['stage'] == 'reserved' and intent['stage'] != 'reserved'
+        accepting = 'b0Acceptance' in intent and (old_intent is None or 'b0Acceptance' not in old_intent)
+        if first_start or accepting:
+            decision = intent.get('b0Acceptance', {}).get('decision')
+            if decision is None:
+                fail('b0_acceptance_required')
     envelope = sign_envelope(new, key)
     raw = canonical(envelope) + b'\n'
     journal_path = os.path.join(state_dir, _journal_name(new['sequence']))
@@ -1142,6 +1240,10 @@ def transition(directory, mutate, authorization_expires_at=None, clock=None, bef
         if isinstance(now, bool) or not isinstance(now, (int, float)) or \
            int(now) >= int(authorization_expires_at):
             fail('invalid_cold_state')
+    if intent is not None and gated_production_binding(intent['binding']) and (first_start or accepting):
+        now = time.time()
+        if not decision['acceptedAt'] <= now < decision['expiresAt']:
+            fail('b0_acceptance_expired')
     _write_exclusive(journal_path, raw, 0o600)
     if os.name != 'nt':
         directory_fd = os.open(state_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))

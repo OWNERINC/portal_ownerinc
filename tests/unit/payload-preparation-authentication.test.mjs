@@ -1,12 +1,77 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 const repo = path.resolve('.');
 const python = process.platform === 'win32' ? 'python' : 'python3';
+
+test('head reconciliation rejects a replacement lease before its repair write (portable syscall observations)', () => {
+  const result = spawnSync(python, ['-I', '-S', '-B', '-c', String.raw`
+import importlib.util,sys,types
+from contextlib import contextmanager
+from unittest.mock import patch
+spec=importlib.util.spec_from_file_location('launcher',sys.argv[1]);l=importlib.util.module_from_spec(spec);spec.loader.exec_module(l)
+@contextmanager
+def lease(): yield lambda:None
+l.deployment_lease=lease
+approval={'admission':{'policySha256':'a'*64,'recordSha256':'b'*64}}
+l._authenticated_material=lambda:(approval,{},None,None,None,{},None)
+binding={'receiptId':'payload-abcdefgh','lease':{'device':42,'inode':7}}
+writes=[]
+def read_state(*args,**kwargs):
+ kwargs['before_repair']({'installIntent':{'binding':binding}})
+ writes.append('head replacement')
+state=types.SimpleNamespace(gated_production_binding=lambda _:True,
+ validate_production_correspondence=lambda *args:None,read_state=read_state)
+l.load_runtime_captured=lambda _:types.SimpleNamespace(STATE=state,
+ _inventory=lambda **kwargs:{'document':{}},INVENTORY=types.SimpleNamespace(identity=lambda _:'c'*64))
+for fd,path in (((42,8),(42,8)),((43,7),(43,7)),((42,7),(42,8)),((42,8),(42,7))):
+ with patch.object(l.os,'fstat',return_value=types.SimpleNamespace(st_dev=fd[0],st_ino=fd[1])), \
+      patch.object(l.os,'lstat',return_value=types.SimpleNamespace(st_dev=path[0],st_ino=path[1])):
+  try:l.reconcile_install_head('payload-abcdefgh')
+  except l.VerificationError:pass
+  else:raise AssertionError('replacement lease authorized signed head repair')
+assert writes==[]
+with patch.object(l.os,'fstat',return_value=types.SimpleNamespace(st_dev=42,st_ino=7)), \
+     patch.object(l.os,'lstat',return_value=types.SimpleNamespace(st_dev=42,st_ino=7)):
+ l.reconcile_install_head('payload-abcdefgh')
+assert writes==['head replacement']
+`, path.join(repo, 'ops/prepare-cms-authenticated.py')], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('native root B0 administrative capture, provisioning, acceptance and expired exact resume through real CLI children', {
+  skip: process.env.PAYLOAD_REQUIRE_NATIVE_PREPARATION !== '1' &&
+    !(process.platform === 'linux' && process.getuid?.() === 0 && process.geteuid?.() === 0),
+}, () => {
+  assert.equal(process.platform, 'linux');
+  assert.equal(process.getuid(), 0);
+  const root = mkdtempSync('/root/payload-b0-native-');
+  try {
+    const initializer = readFileSync(path.join(repo, 'tests/unit/payload-install-initializer.test.mjs'), 'utf8');
+    const model = /const observationModel = String.raw`([\s\S]*?)`;/u.exec(initializer)?.[1];
+    assert.ok(model, 'explicit existing Docker observation model must be available');
+    const modelFile = path.join(root, 'docker-model.py');
+    writeFileSync(modelFile, model, { mode: 0o600, flag: 'wx' });
+    const result = spawnSync('/usr/bin/python3', ['-I', '-S', '-B',
+      path.join(repo, 'tests/fixtures/payload-b0-native.py'), repo, root, modelFile], {
+      encoding: 'utf8', timeout: 360000, env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      nativeGatePositive: true, actualCli: true, actualLease: true, actualJournal: true,
+      resumeFieldsRejected: 19, sameNonceCandidateRejected: true, replacementLeaseRepairRejected: true,
+      dockerPostgresSimulated: true, downstreamReadinessSimulated: true,
+      privateInstallationQualified: false, restoreQualified: false,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 const setup = String.raw`
 import pathlib,sys,types,json,copy,hashlib,posixpath
 repo=pathlib.Path(sys.argv[1])
@@ -88,6 +153,84 @@ function probe(code) {
   const result = spawnSync(python, ['-I', '-S', '-B', '-c', setup + code, repo], { encoding: 'utf8', timeout: 30000 });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
+
+test('all 19 resume fields bind authenticated admission before dispatch, head repair and publication (filesystem doubles)', () => {
+  probe(String.raw`
+from contextlib import contextmanager
+from unittest.mock import patch
+import io,gzip,tarfile
+receiver=module('ops/payload-receiver-admission.py')
+receipt='payload-abcdefgh';directory=receiver.INCOMING+'/'+receipt
+entries={'.ci-commit':(record['commit']+'\n').encode(),'.ci-images':('\n'.join(images.values())+'\n').encode(),
+ 'docker-compose.yml':b'services: {}\n','docker-compose.payload.yml':b'services: {}\n'}
+buffer=io.BytesIO()
+with tarfile.open(fileobj=buffer,mode='w') as archive:
+ for name,data in entries.items():
+  entry=tarfile.TarInfo(name);entry.size=len(data);archive.addfile(entry,io.BytesIO(data))
+archive_raw=gzip.compress(buffer.getvalue(),mtime=0)
+put(directory+'/candidate.tar.gz',archive_raw,0o600)
+record.update(schemaVersion=2,kind='payload-candidate-admission-record-v2',qualificationContract=v.PRODUCTION_CONTRACT,
+ archiveSha256=p.sha(archive_raw),archiveBytes=len(archive_raw),authorization={'environment':'production',
+ 'approvalSha256':l.approval_binding_digest(approval),'inventoryIdentity':approval['hostBaseline']['inventoryIdentity'],
+ 'expiresAt':'1999999999','nonce':'9'*64})
+bind()
+bound={key:record[key] for key in ('commit','runId','runAttempt','images','authorization')}
+bound.update(artifactIds={r:e['id'] for r,e in record['artifacts'].items()},
+ artifactDigests={r:e['digest'] for r,e in record['artifacts'].items()},
+ contentDigests={'candidate':record['candidateSha256'],'qualified':record['qualifiedManifestSha256'],'report':record['recoveryReportSha256']})
+evidence=v.verify_record_binding(raw(policy),record,bound,record['archiveSha256'],record['archiveBytes'])
+evidence['admissionRecordSha256']=approval['admission']['recordSha256']
+put(directory+'/admission.json',raw(evidence),0o600)
+def receipt_load(data,filename):
+ m=load(data,filename)
+ if filename.endswith('payload-receiver-admission.py'):
+  m.protected_directory=lambda *a,**k:None
+  m.read_private_file=lambda name,limit:read(name,0o600,limit)
+ return m
+l.load_authenticated=receipt_load
+values=[record['commit'],record['runId'],record['runAttempt'],*images.values(),
+ *[record['artifacts'][r]['id'] for r in v.ROLES],*[record['artifacts'][r]['digest'] for r in v.ROLES],
+ record['candidateSha256'],record['qualifiedManifestSha256'],record['recoveryReportSha256'],
+ *[record['authorization'][k] for k in ('approvalSha256','inventoryIdentity','expiresAt','nonce')]]
+def request(fields):return 'production:payload-resume-v3 '+receipt+' '+' '.join(fields)
+assert len(values)==len(receiver.FIELDS)==19
+original=request(values)
+@contextmanager
+def lease():yield lambda:None
+l.deployment_lease=lease
+class ReachedBoundary(Exception):pass
+def boundary(*args,**kwargs):
+ events.append('mutation boundary');raise ReachedBoundary()
+real_reconcile=l.reconcile_install_head;real_apply=l.apply_install
+with patch.multiple(l.os,name='posix',getuid=lambda:0,geteuid=lambda:0,create=True):
+ for phase in ('dispatch','repair','publication'):
+  l.apply_install=boundary if phase=='dispatch' else real_apply
+  l.load_runtime_captured=boundary
+  l.reconcile_install_head=lambda *a,**k:None
+  l.check_install_plan=lambda *a,**k:{'classification':'pre_floor_install_pending'}
+  l._publish_candidate_release=boundary
+  def run(raw):
+   if phase=='dispatch':return l.resume_install(raw)
+   if phase=='repair':return real_reconcile(receipt,resume_request=raw)
+   return real_apply(receipt,resume_request=raw)
+  for index,field in enumerate(receiver.FIELDS):
+   changed=list(values)
+   if field in ('run-id','run-attempt','expires-at') or field.endswith('-artifact-id'):
+    changed[index]=str(int(changed[index])+100)
+   else:changed[index]=changed[index][:-1]+('0' if changed[index][-1]!='0' else '1')
+   receiver.parse_resume_request(request(changed)) # All substitutions remain grammatically valid.
+   events.clear()
+   try:run(request(changed))
+   except l.VerificationError:pass
+   else:raise AssertionError((phase,field,'substitution accepted'))
+   assert events==[],(phase,field,'effect before correspondence')
+  events.clear()
+  try:run(original)
+  except ReachedBoundary:pass
+  else:raise AssertionError((phase,'positive control did not reach boundary'))
+  assert events==['mutation boundary']
+`);
+});
 
 const hostModel = String.raw`
 import stat
@@ -536,6 +679,23 @@ try:
   'admission':{'policySha256':sha(policy_raw),'archiveSha256':record['archiveSha256'],'recordSha256':sha(record_raw)}}
  write(m.APPROVAL,canonical(approval)+b'\n',0o600)
 
+ # Real root CLI processes, authenticated fixture closure and actual journal.
+ # The v1 admission has no production candidate authorization: all new public
+ # B0 entrypoints must deny before any Docker/database command or state write.
+ # This is native negative evidence, not successful capture/restore evidence.
+ before_journal={p.name:p.read_bytes() for p in pathlib.Path(state_dir).iterdir()}
+ for flag in ('--capture-b0','--accept-b0','--apply-install','--execute-capture','--execute-accept','--execute-apply'):
+  denied=m.subprocess.run(['/usr/bin/python3','-I','-S','-B',launcher,flag,'payload-abcdefgh'],
+   env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'},capture_output=True,timeout=30)
+  assert denied.returncode==2 and denied.stdout==b'' and denied.stderr==b'Preparation verification denied.\n',(flag,denied)
+  assert {p.name:p.read_bytes() for p in pathlib.Path(state_dir).iterdir()}==before_journal
+ assert not os.path.exists(m.B0_ACCEPTANCE)
+ bad_decision=root+'/unapproved-b0.json';write(bad_decision,b'{}\n')
+ denied=m.subprocess.run(['/usr/bin/python3','-I','-S','-B',prep+'/ops/provision-payload-candidate-trust.py',
+  '--profile','b0-acceptance','--apply','--approval',bad_decision,'--approval-sha256','0'*64,'--bundle',root],
+  env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'},capture_output=True,timeout=30)
+ assert denied.returncode==2 and b'approval_digest_mismatch' in denied.stderr and not os.path.exists(m.B0_ACCEPTANCE)
+
  # Transparently retain real Popen while independently observing the live child PID
  # and Linux start ticks before request delivery lets the observer exit.
  real_popen=m.subprocess.Popen;children=[]
@@ -946,17 +1106,18 @@ test('candidate-only CI gate retains exact native preparation discovery without 
   assert.deepEqual(deployStart.length, 1, 'deploy job boundary must remain unique');
   const deployEnd = jobStarts.find(index => index > deployStart[0]) ?? lines.length;
   const deploy = lines.slice(deployStart[0], deployEnd);
-  assert.deepEqual(deploy.slice(0, 10), [
+  assert.deepEqual(deploy.slice(0, 11), [
     '  deploy-production:',
     '    name: Deploy production',
     '    needs: [validate, publish-images]',
     '    if: >-',
     '      !cancelled() &&',
     "      needs.validate.result == 'success' && needs.publish-images.result == 'success' &&",
-    "      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&",
+    "      github.event_name == 'workflow_dispatch' &&",
     "      github.ref == 'refs/heads/main' &&",
     '      inputs.cms_image_only != true &&',
-    '      inputs.publish_candidate_only != true',
+    '      inputs.publish_candidate_only != true &&',
+    '      inputs.manual_runtime_only != true',
   ]);
 });
 
@@ -1012,7 +1173,7 @@ test('apply runtime inherits the receiver group, has cleanup reserve, and no sup
   assert.doesNotMatch(preparation, /process\.wait\(\)/u);
   assert.doesNotMatch(receiver, /process\.wait\(\)/u);
   assert.doesNotMatch(runtime, /process\.wait\(\)/u);
-  assert.match(preparation, /initialize-isolated[\s\S]*timeout=APPLY_RUNTIME_TIMEOUT_SECONDS,[\s\S]*group_mode='inherit'/u);
+  assert.match(preparation, /'--execute-' \+ operation[\s\S]*timeout=APPLY_RUNTIME_TIMEOUT_SECONDS,[\s\S]*group_mode='inherit' if operation == 'apply' else 'new'/u);
   assert.match(preparation, /authenticated-' \+ mode[\s\S]*group_mode='new'/u);
   const inner = Number(/APPLY_RUNTIME_TIMEOUT_SECONDS = (\d+)/u.exec(preparation)?.[1]);
   const outer = Number(/APPLY_SUBPROCESS_TIMEOUT = (\d+)/u.exec(receiver)?.[1]);

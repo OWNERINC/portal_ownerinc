@@ -1,5 +1,20 @@
 # Deployment
 
+## Gate de instalação Payload: B0 antes de migrations
+
+O workflow privado `payload-install-production.yml` separa `operation=admit`
+(retorna receipt, sem instalação) de `operation=resume` (usa `receipt_id` existente,
+sem readmissão do nonce). Entre ambos, o administrador executa `--capture-b0`,
+qualifica a restauração do B0 exato em clone isolado, obtém o aceite real do usuário
+pelo canal administrativo autenticado, provisiona a decisão imutável e executa
+`--accept-b0`. A janela autorizada para **iniciar** migrations é de no máximo 60
+minutos; não renova a autorização original do candidato. Consulte o
+[contrato e procedimento B0](payload-runtime-recovery.md#produção--pausa-obrigatória-e-aceite-do-b0-exato).
+
+Captura termina held/reserved, CMS cold, admission fechada e writers parados.
+Apply frio ou sem aceite é recusado. Alterações nos bytes pinned de ops exigem
+nova closure autenticada e novo candidato final qualificado antes de operação.
+
 ## Pré-requisitos
 
 - VPS Linux com Docker, plugin Docker Compose, `curl`, `gzip`, `git`, SSH e espaço persistente para backups.
@@ -170,10 +185,17 @@ record, archive/tree, expiry, inventário, source, state e lease. Não faz pull,
 migration, create/start, pointer, route ou authority transition. PASS retorna
 `preflighted-private`; falha preserva receipt/evidência sem instalação parcial.
 
-A instalação é uma segunda chamada fixa sem stdin:
-`production:payload-apply-v2 RECEIPT_ID NONCE`. Ela exige receipt preflighted e
-chama `--apply-install`. Retomadas reautenticam tudo e o journal: admission fecha,
-B0 é capturado, binding/receipts são reservados, roles e `ownerinc_cms` usam o
+A retomada do workflow é uma chamada fixa sem stdin:
+`production:payload-resume-v3 RECEIPT_ID <19 campos originais>`. Ela exige receipt
+preflighted e encaminha uma única string para `--resume-install`. Os campos seguem
+a ordem exata de `production:payload-v2`, incluindo as três imagens; todos são
+comparados ao record protegido autenticado pela aprovação, junto ao archive e
+admission do receipt, antes de reparar head e novamente antes de publicar release.
+O apply direto `production:payload-apply-v2 RECEIPT_ID NONCE` continua suportado,
+mas não substitui essa correspondência dos inputs do workflow. Não há readmissão
+ou renovação de nonce. Após captura administrativa e aceite exato do B0, retomadas
+reautenticam tudo e o journal: com admission fechada e binding/receipts reservados,
+roles e `ownerinc_cms` usam o
 PostgreSQL compartilhado, `cmsUploads` é criado, migrations/catálogo/grants são
 verificados, CMS sobe sozinho para readiness privada, B1 é capturado e floor e
 pointer são commitados. API/cron/nginx candidatos não iniciam; worker, rota e
@@ -340,7 +362,7 @@ navegador.
 O modo candidato nunca empacota `.ci-images`, não altera o artefato legacy
 `image-digests` de duas linhas e exclui `deploy-production`, inclusive em um
 dispatch na `main`. O modo `cms_image_only` preserva seu contrato anterior
-(somente CMS); o caminho normal da `main` mantém seu autodeploy de API/cron.
+(somente CMS); o deploy legacy de API/cron exige dispatch normal explícito na `main`.
 Antes de tratar um candidato como qualificado, confira no Actions o SHA do run,
 sucesso da integração e dos três scans, as três referências do artefato e o job
 `deploy-production` ignorado. Publicação candidata não significa instalação,
@@ -668,18 +690,28 @@ Compose compartilhados, incluindo `up`, migrations one-shot e rollback, para
 que o cron de notificações permaneça habilitado. As mutações de cards AutoCard
 e a limpeza de órfãos compartilham o advisory lock `7193003`.
 
-## Deploy automático da `main`
+## Deploy legacy manual da `main`
 
-Depois que o job `validate` termina verde em um push para `main`, o job
-`deploy-production` empacota exatamente o commit validado e o envia ao receptor
-SSH de produção. O mesmo fluxo pode ser iniciado por `workflow_dispatch` na
-`main`. O ambiente GitHub `production` mantém suas regras de aprovação e o
-receptor executa backup, migration, readiness, smoke e rollback.
+Push para `main` executa validação e publicação de imagens, sem iniciar o deploy
+legacy. Para iniciá-lo explicitamente, execute `workflow_dispatch` de `ci.yml` na
+`main`, com `cms_image_only`, `publish_candidate_only` e `manual_runtime_only`
+omitidos ou desativados. Somente com `validate` e `publish-images` concluídos com
+sucesso e sem cancelamento, `deploy-production` empacota o commit validado e o
+envia ao receptor SSH de produção. O job mantém o Environment `production` e o
+receptor executa backup, migration, readiness, smoke e rollback. Os três modos
+especiais nunca iniciam esse deploy. Instalação privada Payload e cutover seguem
+seus workflows próprios.
+
+Esta alteração modifica o hash de `ci.yml`: é obrigatório qualificar um novo
+candidato final do commit atual da `main` antes da próxima admissão Payload.
+A evidência histórica de preparação permanece preservada; não substitui a
+qualificação do novo candidato nem altera os bytes aprovados das ferramentas
+de admissão.
 
 O fluxo autorizado em 23 de setembro de 2026 é **Validação → Produção**. Ele usa
 os secrets `PORTAL_VPS_HOST`, `PORTAL_VPS_PORT`, `PORTAL_VPS_USER`,
 `PORTAL_VPS_SSH_KEY` e `PORTAL_VPS_KNOWN_HOSTS`, já configurados para produção.
-Staging não é uma dependência do autodeploy; os testes, scans e a publicação de
+Staging não é uma dependência do deploy manual; os testes, scans e a publicação de
 imagens imutáveis continuam obrigatórios antes de liberar produção.
 
 ## Receptor separado de staging

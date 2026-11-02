@@ -396,8 +396,10 @@ test('reviewed predecessor helper upgrades with a retained private copy, without
   const f = await fixture(t);
   if (f.skip) return t.skip(f.skip);
   const source = await readFile('ops/payload-receiver-admission.py', 'utf8');
-  const previous = source.replace("INCOMING = '/var/lib/ownerinc/payload-candidate/incoming'",
-    "INCOMING = '/opt/ownerinc/apps/portal-ownerinc-real/incoming'");
+  // Immutable reviewed predecessor, separate from the current approved source:
+  // a6d863e74908e7888d9fc99ee9cb82bb3d7edca5:ops/payload-receiver-admission.py
+  // with only INCOMING changed to /opt/ownerinc/apps/portal-ownerinc-real/incoming.
+  const previous = await readFile('tests/fixtures/payload-receiver-admission-predecessor.py', 'utf8');
   assert.equal(createHash('sha256').update(previous).digest('hex'), '7a5da50bbb36a6d0f95c66898e0c4e12bc0ba319fd7dd8d4ccbd4aac8c3ea2db');
   const helper = path.join(f.paths.libexec, 'payload-receiver-admission.py');
   await writeFile(helper, previous);
@@ -408,6 +410,25 @@ test('reviewed predecessor helper upgrades with a retained private copy, without
   assert.ok(snapshot);
   assert.equal(await readFile(path.join(f.paths.backups, snapshot, 'payload-receiver-admission.py'), 'utf8'), previous);
   assert.equal(await readFile(path.join(f.paths.backups, snapshot, 'ownerinc-portal-deploy-production'), 'utf8'), previousProductionReceiver);
+});
+
+test('current receiver helper with the old incoming path is not an approved predecessor (fake host)', async t => {
+  const f = await fixture(t);
+  if (f.skip) return t.skip(f.skip);
+  const source = await readFile('ops/payload-receiver-admission.py', 'utf8');
+  const stale = source.replace("INCOMING = '/var/lib/ownerinc/payload-candidate/incoming'",
+    "INCOMING = '/opt/ownerinc/apps/portal-ownerinc-real/incoming'");
+  assert.notEqual(stale, source, 'the unreviewed variant must use the old incoming path');
+  const helper = path.join(f.paths.libexec, 'payload-receiver-admission.py');
+  await writeFile(helper, stale, { mode: 0o755 });
+  const result = f.run(['--apply']);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /installed receiver helper differs from the reviewed bundle/u);
+  assert.equal(await readFile(helper, 'utf8'), stale);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy'), 'utf8'), previousReceiver);
+  assert.equal(await readFile(path.join(f.paths.libexec, 'ownerinc-portal-deploy-production'), 'utf8'), previousProductionReceiver);
+  assert.deepEqual(await readdir(f.paths.backups), [], 'unreviewed helper must be refused before backups');
+  assert.equal(existsSync(f.installLog), false, 'unreviewed helper must be refused before publication');
 });
 
 test('failed receiver-helper publication leaves the working receiver untouched (fake host)', async t => {

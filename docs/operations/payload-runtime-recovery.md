@@ -1,5 +1,162 @@
 # Runtime Payload e recuperação coordenada
 
+## Produção — pausa obrigatória e aceite do B0 exato
+
+O contrato atual acrescenta `b0GateVersion: 1` e `receiptId` à binding
+shared-cluster v4. É uma discriminação explícita, não uma atualização silenciosa
+de journals: produção histórica sem esse gate continua legível, mas suas novas
+transições são bloqueadas. Contratos isolados permanecem independentes.
+
+O fluxo é **admitir → capturar → qualificar o clone → decisão administrativa →
+persistir aceite → continuar pelo mesmo receipt**. Aprovar o desenho não aceita
+um backup futuro. A captura termina em `reserved`, CMS `cold`, admission fechada,
+writers parados/cercados, autoridade legacy e worker hold. A lease FD9 é liberada
+enquanto se aguarda a decisão; cada chamada a readquire e revalida.
+
+### Interface administrativa
+
+Após instalar uma closure e candidato novos, autenticados e qualificados, use o
+receipt retornado por `operation=admit` do workflow. Pelo canal administrativo
+VPS autenticado independentemente (não pela chave restrita do receiver):
+
+```sh
+sudo env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /usr/bin/python3 -I -S -B \
+  /usr/local/libexec/ownerinc-payload-prepare.py --capture-b0 "$RECEIPT"
+```
+
+`RECEIPT` é o identificador real `payload-xxxxxxxx`, não um nome novo. O resultado
+`held-reserved` informa binding completa, `installBindingSha256`,
+`originStateSha256`, `manifestSha256`, receipt e condição de aceite. Preserve os
+bytes retornados e os registros administrativos. Uma repetição exata revalida o
+B0 e o alvo sem recapturar. Captura parcial, drift ou outro candidato exigem
+investigação; não remova diretório, journal, nonce ou ticket para tentar novamente.
+`--apply-install` nunca captura implicitamente.
+
+### Qualificação isolada operada por administrador
+
+Esta é uma restauração real, com evidência revisada, não o relatório sintético de
+CI nem um backup legacy genérico. Use ferramentas operacionais existentes:
+`sha256sum`, `pg_restore`, `pg_dump`, `psql`, `tar`, Docker/Compose e `curl`.
+Não use os executores/fixtures de recovery dos testes como ferramentas produtivas.
+
+1. Reexecute a captura exata para autenticar o journal/HMAC e os hashes reais
+   dos artifacts na VPS. Registre head, binding, proof e manifest recebidos pelo
+   canal administrativo. Nunca copie `payload-control.key` ao clone.
+2. Transfira somente `postgres.dump`, `uploads.tar.gz`, `manifest.sha256` e
+   `preauthority-proof.json` da **directory da binding** para storage privado do
+   clone. Confira `sha256sum manifest.sha256 preauthority-proof.json` contra os
+   digests autenticados e execute `sha256sum -c manifest.sha256` antes e depois
+   da transferência. A autenticidade da cópia vem dessa cadeia administrativa;
+   um hash calculado apenas no clone não autentica a origem. Revalide a origem
+   na VPS após a transferência.
+3. Use uma VPS/VM descartável separada, projeto e volumes novos, PostgreSQL 16
+   compatível e nenhum mount, endpoint ou credencial produtiva. Bloqueie egress
+   (SMTP, Firebase, filas e integrações), desabilite cron/worker e exponha somente
+   ingress privado. Retenha a prova de isolamento e inventário anterior vazio.
+4. Inspecione `pg_restore --list postgres.dump`. Prepare no clone as roles e o
+   database com os nomes/owners reais da binding e o perfil de segurança revisado,
+   usando credenciais exclusivas do clone. Restaure com
+   `pg_restore --exit-on-error --dbname="$CLONE_DATABASE_URL" postgres.dump`.
+   Não use `--no-owner`, `--no-acl`, `--clean` nem um alvo existente. Extraia o tar
+   somente para volume novo, após inspeção dos caminhos/links; preserve modos,
+   ownership e metadados exigidos pela aplicação.
+5. Compare schema, ledger de migrations, dados e sequences; owners/ACLs/default
+   ACLs, memberships, atributos e privilégios efetivos das roles; fingerprint da
+   árvore de uploads e dos dados contra o proof/origem congelada. Use inspeções
+   read-only `psql`/`pg_dump` aprovadas e registre consultas, versões, resultados
+   completos e diferenças. `pg_restore` retornar zero não satisfaz esses checks.
+6. Use os digests **previousImages** da binding, nunca as imagens candidatas, para
+   iniciar a aplicação anterior no clone. Mantenha cron sem execução de jobs;
+   verifique sua imagem/configuração. Teste readiness e autenticação privada real
+   com identidade de teste isolada, autorização, leitura de conteúdo e uploads.
+   Não libere rota produtiva nem habilite efeitos externos para obter um PASS.
+7. Preserve a evidência revisada em `qualification-evidence.json` e o procedimento
+   exato em `procedure.md` (cada arquivo até 1 MiB, modo 0600, ancestry protegida).
+   Inclua origem autenticada, digests, identidade dos alvos, logs/checks, resultado
+   de cada comparação, imagens e identidade/referência da revisão independente.
+   Um campo com nome de aprovador não substitui a autenticação administrativa.
+
+### Documento imutável de aceite
+
+Somente após o usuário aceitar essa evidência real pelo canal administrativo,
+prepare JSON canônico UTF-8 (keys ordenadas, sem espaços, LF final) com **somente**:
+
+| Campo | Contrato |
+| --- | --- |
+| `schemaVersion` / `kind` | `1` / `production-exact-b0-acceptance-v1` |
+| `installBindingSha256` | SHA-256 de JSON canônico da binding, sem LF; liga candidato, authority, inventory, B0/proof, imagens anteriores e lease |
+| `originStateSha256` | head assinado `reserved` retornado pela captura, antes do aceite |
+| `receiptId` | mesmo receipt reservado |
+| `manifestSha256` | SHA-256 dos bytes reais do manifest B0 |
+| `qualificationEvidenceSha256` | SHA-256 dos bytes da evidência revisada |
+| `procedureRevision` | SHA-256 dos bytes do procedimento executado |
+| `acceptedAt` / `expiresAt` | inteiros UTC epoch; `acceptedAt <= now < expiresAt`; duração positiva de no máximo 3600 segundos |
+| `authenticatedChannel` | `independently-authenticated-admin-vps` |
+
+O administrador deve autenticar **independentemente** o programa provisionador e
+o digest esperado da decisão por esse mesmo canal. Não derive o digest esperado
+somente do arquivo recebido e não considere root ownership uma aprovação.
+Coloque evidência/procedimento em um bundle protegido com exatamente esses dois
+arquivos. Use o provisionador previamente autenticado:
+
+```sh
+sudo env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /usr/bin/python3 -I -S -B \
+  /opt/ownerinc/lib/payload-preparation/ops/provision-payload-candidate-trust.py \
+  --profile b0-acceptance --check --approval "$DECISION" \
+  --approval-sha256 "$INDEPENDENTLY_APPROVED_DIGEST" --bundle "$EVIDENCE_BUNDLE"
+# Após check, repita os mesmos argumentos com --apply em lugar de --check.
+sudo env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /usr/bin/python3 -I -S -B \
+  /usr/local/libexec/ownerinc-payload-prepare.py --accept-b0 "$RECEIPT"
+```
+
+Destino fixo: `/etc/ownerinc/payload-preparation/production-b0-acceptance.json`.
+Publicação não substitui arquivo existente; só bytes idênticos são idempotentes.
+`--accept-b0` revalida artifacts, origem física e fences; compara atomicamente o
+held head e grava documento/digest em `installIntent.b0Acceptance` no journal
+assinado. Depois disso valida-se a origem histórica, não a igualdade do head atual
+ao head anterior. A primeira transição durável para `portal_grants_pending` verifica
+novamente a janela imediatamente antes do append. Expirou antes? Migração bloqueada,
+sem renovar/reemitir decisão, candidato ou nonce. Expirou após pending durável?
+Somente continuação exata é permitida, inclusive após início de comando ambíguo.
+
+No workflow `payload-install-production.yml`, selecione `operation=resume`, informe
+o receipt real em `receipt_id` e todos os inputs originais, sem modificar expiração
+ou nonce. Resume reconstrói/verifica a mesma proveniência, mas **não readmite** o
+nonce e não cria outro receipt. O receiver pode continuar após reaping do marker
+expirado somente porque a binding assinada mantém a autorização original.
+
+O transporte de resume é fechado: `production:payload-resume-v3 RECEIPT` seguido
+dos 19 campos originais, na mesma ordem de `production:payload-v2`. O preparador
+autenticado compara todos os campos, inclusive as três imagens, com o record
+protegido fixado pela aprovação e verifica archive/admission do receipt **antes**
+de reconciliar head; repete a verificação sob a lease de publicação. Não se aceita
+um hash calculado apenas pelo cliente como autoridade. A reparação de append/head
+exige também que `binding.lease.device/inode` corresponda tanto a FD9 quanto ao
+pathname protegido sob reafirmação, antes da substituição do head. Um lock novo,
+mesmo root-owned e com modo correto, não substitui a lease assinada.
+
+Esta pausa e seu aceite **não encerram** os subgates separados do programa B0 de
+recovery produtivo. Checks locais portáveis e native negativos não demonstram
+restore real nem instalação produtiva bem-sucedida. A qualificação Linux/root e
+o ensaio real continuam obrigatórios antes de uso operacional.
+
+O workflow dedicado `payload-b0-acceptance-check.yml` executa os testes em runner
+Ubuntu descartável, como root e sem secrets de produção. A flag obrigatória
+`PAYLOAD_REQUIRE_NATIVE_PREPARATION=1` impede que a suíte marque a qualificação
+native como skip. A fixture positiva executa os entrypoints administrativos e
+seus filhos reais com filesystem, ownership, lease FD9 e journal reais, incluindo
+interrupção append/head e continuação exata após expiração. A fixture exige também
+19 substituições negativas pelo root receiver real, candidato alternativo com o
+mesmo nonce e head atrasado com lock substituto enquanto a lease antiga permanece
+exclusiva; journal/head e releases devem permanecer inalterados. As observações de
+Docker/PostgreSQL são doubles explícitos; não há daemon nem restore real nessa
+fixture. Health/readiness dos containers também são simulados: o resultado
+`installed-private` sintético não qualifica a instalação privada real nem resolve
+a relação entre protocolo e readiness. A fixture declara
+`privateInstallationQualified: false` e `restoreQualified: false`. Seu PASS não
+substitui a qualificação operacional do clone, recovery produtivo ativo ou recovery
+B0 pré-floor; esses caminhos permanecem work packages separados.
+
 ## Gate B — PostgreSQL compartilhado
 
 O contrato produtivo atual usa exclusivamente o serviço `postgres` e o volume
@@ -166,8 +323,11 @@ O summary e os outputs repetem esses valores não secretos; nenhum campo pode se
 inferido ou misturado entre runs.
 
 Admission `production:payload-v2` persiste receipt e nonce privados e executa
-somente preflight autenticado. Apply usa `production:payload-apply-v2 RECEIPT NONCE`
-e o mesmo FD9 herdado. Um lock root privado cobre atomicamente reap de nonces
+somente preflight autenticado. O workflow usa `production:payload-resume-v3 RECEIPT`
+com os 19 campos originais. O apply direto legado
+`production:payload-apply-v2 RECEIPT NONCE` permanece suportado com sua semântica
+anterior; ele não atesta correspondência com os 19 inputs de um workflow. Ambos
+retêm FD9 herdado durante apply. Um lock root privado cobre atomicamente reap de nonces
 expirados, quota agregada, reserva `O_EXCL` e receipt; subprocessos usam streaming
 bounded, process group e reap, sem shell ou stderr público. O journal mantém
 checkpoints para reservation/receipts,

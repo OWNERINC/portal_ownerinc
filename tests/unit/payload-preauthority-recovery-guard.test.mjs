@@ -163,10 +163,15 @@ test('Task 3 provisions the documented CMS control-role baseline before native m
   const setup = runner.slice(provisionStart, provisionEnd);
   const coordinator = await readFile('scripts/integration/payload-preauthority-initialize.mjs', 'utf8');
   const controller = await readFile('ops/payload-control-runtime.py', 'utf8');
-  const initializeStart = controller.indexOf('    def initialize_isolated(self):');
-  const initializeEnd = controller.indexOf('\n    def run(self):', initializeStart);
-  assert.ok(initializeStart >= 0 && initializeEnd > initializeStart);
-  const initialize = controller.slice(initializeStart, initializeEnd);
+  // Match the exact method independently of optional parameters, and stop at
+  // the next class method so adjacent helpers cannot satisfy ordering checks.
+  const initializeDefinitions = [...controller.matchAll(/^    def initialize_isolated\(self(?:,[^\r\n]*)?\):\r?$/gmu)];
+  assert.equal(initializeDefinitions.length, 1, 'exactly one initializer definition must be present');
+  const initializeBodyStart = initializeDefinitions[0].index + initializeDefinitions[0][0].length;
+  const initializeRemainder = controller.slice(initializeBodyStart);
+  const initializeEnd = initializeRemainder.search(/^    def [a-z_][a-z0-9_]*\(/mu);
+  assert.ok(initializeEnd > 0, 'initializer body must end before the next class method');
+  const initialize = initializeRemainder.slice(0, initializeEnd);
   assert.match(setup, /await initializePreauthority\(\{ runtime, runIdentity, images, run, withLease \}\)/u);
   assert.match(coordinator, /path\.join\(runtime\.directory, 'payload-operations-guard'\)/u);
   assert.match(coordinator, /\['initialize-isolated', runtime\.payloadRelease, request\]/u);

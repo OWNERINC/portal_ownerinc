@@ -4,6 +4,7 @@ set -Eeuo pipefail
 # Only Payload admission crosses the fixed privilege boundary. No shell text,
 # environment assignments or extra SSH arguments are passed through sudo.
 if [[ ${SSH_ORIGINAL_COMMAND:-} == 'production:payload-v2 '* ||
+      ${SSH_ORIGINAL_COMMAND:-} == 'production:payload-resume-v3 '* ||
       ${SSH_ORIGINAL_COMMAND:-} == 'production:payload-apply-v2 '* ]]; then
   if (($# != 0)); then
     echo 'Refusing deployment: Payload receiver accepts one SSH command only.' >&2

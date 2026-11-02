@@ -16,7 +16,6 @@ const router = express.Router();
 const uploadDirectory = process.env.UPLOAD_DIR || '/app/uploads';
 const privateDirectory = path.join(uploadDirectory, 'cms-private');
 const MAX_ASSET_SIZE = 50 * 1024 * 1024;
-const MAX_PDF_SIZE = 100 * 1024 * 1024;
 const CONTENT_TYPES = ['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder'];
 const ASSET_MIMES = {
   profile: new Set(['image/jpeg', 'image/png', 'image/webp']),
@@ -30,7 +29,8 @@ const upload = multer({
     fieldNameSize: 100,
     fieldSize: 1024,
     fields: 0,
-    fileSize: MAX_PDF_SIZE,
+    // Busboy emits LIMIT_FILE_SIZE at equality; allow the inclusive asset bound.
+    fileSize: MAX_ASSET_SIZE + 1,
     files: 1,
     parts: 2,
   },
@@ -359,8 +359,7 @@ async function handleAssetUpload(req, res, next) {
   if (!req.file || !req.file.buffer?.length) return invalid(req, res);
   const mimeType = detectedMime(req.file.buffer);
   if (!mimeType || mimeType !== req.file.mimetype || req.file.size < 1) return invalid(req, res);
-  const maxSize = mimeType === 'application/pdf' ? MAX_PDF_SIZE : MAX_ASSET_SIZE;
-  if (req.file.size > maxSize) return res.status(413).json({ error: 'Asset too large.', requestId: req.id });
+  if (req.file.size > MAX_ASSET_SIZE) return res.status(413).json({ error: 'Asset too large.', requestId: req.id });
   const originalName = path.basename(String(req.file.originalname || 'asset').replace(/\\/g, '/')).trim();
   if (!originalName || originalName.length > 255) return invalid(req, res);
 

@@ -472,7 +472,9 @@ denied(lambda:p.main(['--profile','policy-rotation','--check','--approval','/roo
 `);
   assert.equal(result.status, 0, result.stderr);
   const source = await readFile(modulePath, 'utf8');
-  assert.doesNotMatch(source, /subprocess|os\.system|importlib|exec\(/u);
+  assert.doesNotMatch(source, /subprocess|os\.system|importlib/u);
+  assert.doesNotMatch(source.slice(0, source.indexOf('def provision_b0_acceptance')), /exec\(/u);
+  assert.match(source, /sha\(launcher_raw\) == approval\['source'\]\['files'\]\['ops\/prepare-cms-authenticated.py'\][\s\S]*exec\(compile\(launcher_raw/u);
   assert.match(source, /renameat2/u);
   assert.match(source, /sys\.dont_write_bytecode/u);
 });

@@ -3,6 +3,16 @@ name: Payload private production install
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Admit once, or continue an accepted B0 using its existing receipt
+        required: true
+        type: choice
+        default: admit
+        options: [admit, resume]
+      receipt_id:
+        description: Existing payload receipt for resume; empty for admission
+        required: false
+        type: string
       commit: { description: Exact candidate commit, required: true, type: string }
       run_id: { description: Exact qualifying workflow run ID, required: true, type: string }
       run_attempt: { description: Exact qualifying workflow run attempt, required: true, type: string }
@@ -59,6 +69,8 @@ jobs:
           INVENTORY_IDENTITY: ${{ inputs.inventory_identity }}
           EXPIRES_AT: ${{ inputs.expires_at }}
           NONCE: ${{ inputs.nonce }}
+          OPERATION: ${{ inputs.operation }}
+          RECEIPT_ID: ${{ inputs.receipt_id }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
@@ -72,7 +84,11 @@ jobs:
           for value in "$CANDIDATE_ARTIFACT_DIGEST" "$QUALIFIED_ARTIFACT_DIGEST" "$REPORT_ARTIFACT_DIGEST"; do [[ "$value" =~ ^sha256:[0-9a-f]{64}$ ]]; done
           for value in "$CANDIDATE_SHA256" "$QUALIFIED_SHA256" "$REPORT_SHA256" "$APPROVAL_SHA256" "$INVENTORY_IDENTITY" "$NONCE"; do [[ "$value" =~ ^[0-9a-f]{64}$ ]]; done
           [[ "$EXPIRES_AT" =~ ^[1-9][0-9]{9}$ ]]
-          now=$(date +%s); (( EXPIRES_AT > now && EXPIRES_AT <= now + 86400 ))
+          case "$OPERATION" in
+            admit) test -z "$RECEIPT_ID"; now=$(date +%s); (( EXPIRES_AT > now && EXPIRES_AT <= now + 86400 )) ;;
+            resume) [[ "$RECEIPT_ID" =~ ^payload-[a-z0-9_]{8}$ ]] ;;
+            *) exit 2 ;;
+          esac
       - name: Checkout exact authenticated candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -107,22 +123,31 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/portal_ownerinc_ci"
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/portal_ownerinc_ci" "$HOME/.ssh/known_hosts"
-      - name: Admit, preflight, then resume private installation
+      - name: Admit once or continue the exact accepted receipt
         id: install
         env:
           VPS_HOST: ${{ secrets.PORTAL_VPS_HOST }}
           VPS_PORT: ${{ secrets.PORTAL_VPS_PORT }}
           VPS_USER: ${{ secrets.PORTAL_VPS_USER }}
+          OPERATION: ${{ inputs.operation }}
+          RECEIPT_ID: ${{ inputs.receipt_id }}
         run: |
           set -euo pipefail
           [[ "$VPS_HOST" =~ ^[A-Za-z0-9.-]+$ && "$VPS_PORT" =~ ^[0-9]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
           test "$VPS_USER" != root
           request="production:payload-v2 ${{ inputs.commit }} ${{ inputs.run_id }} ${{ inputs.run_attempt }} ${{ inputs.api_image }} ${{ inputs.cron_image }} ${{ inputs.cms_image }} ${{ inputs.candidate_artifact_id }} ${{ inputs.qualified_artifact_id }} ${{ inputs.report_artifact_id }} ${{ inputs.candidate_artifact_digest }} ${{ inputs.qualified_artifact_digest }} ${{ inputs.report_artifact_digest }} ${{ inputs.candidate_sha256 }} ${{ inputs.qualified_sha256 }} ${{ inputs.report_sha256 }} ${{ inputs.approval_sha256 }} ${{ inputs.inventory_identity }} ${{ inputs.expires_at }} ${{ inputs.nonce }}"
           ssh_args=(-i "$HOME/.ssh/portal_ownerinc_ci" -p "$VPS_PORT" -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
-          preflight=$(ssh "${ssh_args[@]}" "$VPS_USER@$VPS_HOST" "$request" < "$RUNNER_TEMP/payload-package-parent/package/payload-candidate.tar.gz")
-          receipt=$(PREFLIGHT="$preflight" node -e 'const v=JSON.parse(process.env.PREFLIGHT);if(v.status!=="preflighted-private"||!/^payload-[a-z0-9_]{8}$/.test(v.receiptId)||v.installationExecuted!==false||v.routeReleased!==false)process.exit(2);process.stdout.write(v.receiptId)')
-          result=$(ssh "${ssh_args[@]}" "$VPS_USER@$VPS_HOST" "production:payload-apply-v2 $receipt ${{ inputs.nonce }}" </dev/null)
+          if test "$OPERATION" = admit; then
+            preflight=$(ssh "${ssh_args[@]}" "$VPS_USER@$VPS_HOST" "$request" < "$RUNNER_TEMP/payload-package-parent/package/payload-candidate.tar.gz")
+            receipt=$(PREFLIGHT="$preflight" node -e 'const v=JSON.parse(process.env.PREFLIGHT);if(v.status!=="preflighted-private"||!/^payload-[a-z0-9_]{8}$/.test(v.receiptId)||v.installationExecuted!==false||v.routeReleased!==false)process.exit(2);process.stdout.write(v.receiptId)')
+            echo 'status=preflighted-private' >> "$GITHUB_OUTPUT"
+            printf 'Admitted receipt: `%s`. Administrative capture, exact-B0 qualification and acceptance are required before resume.\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          receipt="$RECEIPT_ID"
+          result=$(ssh "${ssh_args[@]}" "$VPS_USER@$VPS_HOST" "production:payload-resume-v3 $receipt ${request#production:payload-v2 }" </dev/null)
           RESULT="$result" node -e 'const v=JSON.parse(process.env.RESULT);if(v.status!=="installed-private"||v.authority!=="legacy"||v.routeReleased!==false||v.workerStarted!==false)process.exit(2)'
           echo 'status=installed-private' >> "$GITHUB_OUTPUT"
       - name: Report fail-closed private result
+        if: steps.install.outputs.status == 'installed-private'
         run: echo 'Payload result is installed-private; authority remains legacy and no route was released.'

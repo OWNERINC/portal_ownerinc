@@ -794,10 +794,11 @@ jobs:
     if: >-
       !cancelled() &&
       needs.validate.result == 'success' && needs.publish-images.result == 'success' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/main' &&
       inputs.cms_image_only != true &&
-      inputs.publish_candidate_only != true
+      inputs.publish_candidate_only != true &&
+      inputs.manual_runtime_only != true
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 25

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import { apiRequire, createDependencyHarness } from '../helpers/api-dependency-harness.mjs';
 
@@ -28,6 +29,34 @@ function uploadPhoto(h, buffer = PNG, field = 'photo') {
 function uploadAsset(h, buffer = PNG, { field = 'asset', contentType = 'image/png', filename = 'asset.png' } = {}) {
   return h.request.post('/api/cms/assets').set('Authorization', MANAGER).attach(field, buffer, { filename, contentType });
 }
+
+test('CMS real multipart accepts exactly 50 MiB PDF and rejects one byte over before storage', async t => {
+  const h = await createDependencyHarness(t);
+  const limit = 50 * 1024 * 1024;
+  function pdfStream(size) {
+    return Readable.from((function* () {
+      const signature = Buffer.from('%PDF-1.7\n');
+      yield signature;
+      const chunk = Buffer.alloc(64 * 1024, 32);
+      for (let remaining = size - signature.length; remaining > 0; remaining -= chunk.length) {
+        yield chunk.subarray(0, Math.min(remaining, chunk.length));
+      }
+    })());
+  }
+  const send = size => h.request.post('/api/cms/assets').set('Authorization', MANAGER)
+    .attach('asset', pdfStream(size), { filename: 'boundary.pdf', contentType: 'application/pdf', knownLength: size });
+  const accepted = await send(limit);
+  assert.equal(accepted.status, 201, accepted.text);
+  assert.equal(accepted.body.byte_size, limit);
+  assert.equal(accepted.body.mime_type, 'application/pdf');
+  assert.equal(h.state.writes.length, 1);
+  assert.equal(h.state.files.values().next().value.length, limit);
+  h.state.files.clear();
+  h.state.sql.length = 0;
+  boundedError(await send(limit + 1), 413, 'Asset too large.');
+  assert.equal(h.state.writes.length, 1, 'oversized PDF never reaches storage');
+  assert.equal(businessQueries(h).length, 0, 'oversized PDF never reaches persistence/audit');
+});
 
 test('real index starts without optional CMS env and confines bridge unavailability to editorial routes', async t => {
   const h = await createDependencyHarness(t);

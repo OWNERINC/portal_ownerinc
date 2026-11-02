@@ -1,6 +1,47 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
+
+test('native B0 fixture and generated authenticated observation closure compile portably without execution', () => {
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-S', '-B', '-c', String.raw`
+import ast,pathlib,re,types
+source=pathlib.Path('tests/fixtures/payload-b0-native.py').read_text()
+tree=ast.parse(source)
+model=re.search(r'const observationModel = String.raw\x60([\s\S]*?)\x60;',pathlib.Path('tests/unit/payload-install-initializer.test.mjs').read_text()).group(1)
+expression=next(node.value for node in tree.body if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='adapter' for t in node.targets))
+scope={name:'/fixture/'+name for name in ('model_path','fault_path','clock_path')}
+scope['model_file']=types.SimpleNamespace(read_text=lambda:model)
+adapter=eval(compile(ast.Expression(expression),'fixture-generator','eval'),scope)
+compile(pathlib.Path('ops/payload-control-runtime.py').read_text()+adapter,'authenticated-native-fixture','exec')
+`], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('B0 native CI requires root positive CLI coverage and receipt resume cannot readmit', async () => {
+  const [native, preparation, installer] = await Promise.all([
+    readFile('.github/workflows/payload-b0-acceptance-check.yml', 'utf8'),
+    readFile('tests/unit/payload-preparation-authentication.test.mjs', 'utf8'),
+    readFile('.github/workflows/payload-install-production.yml', 'utf8'),
+  ]);
+  assert.match(native, /pull_request:[\s\S]*workflow_dispatch:/u);
+  assert.match(native, /permissions:\n  contents: read/u);
+  assert.match(native, /sudo -n \/usr\/bin\/env -i PATH=\/usr\/bin:\/bin HOME=\/root/u);
+  assert.match(native, /PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 PAYLOAD_REQUIRE_NATIVE_TRUST=1/u);
+  assert.match(native, /tests\/unit\/payload-preparation-authentication.test.mjs/u);
+  assert.match(native, /'tests\/fixtures\/payload-b0-native.py'/u);
+  assert.match(preparation, /native root B0 administrative capture[\s\S]*skip: process.env.PAYLOAD_REQUIRE_NATIVE_PREPARATION !== '1'/u);
+  assert.match(preparation, /assert.equal\(process.getuid\(\), 0\)/u);
+  assert.match(preparation, /actualCli: true, actualLease: true, actualJournal: true/u);
+  assert.match(preparation, /resumeFieldsRejected: 19, sameNonceCandidateRejected: true, replacementLeaseRepairRejected: true/u);
+  assert.match(native, /'tests\/unit\/payload-receiver-root.test.mjs'/u);
+  assert.match(native, /tests\/unit\/payload-receiver-root.test.mjs \\/u);
+  assert.match(preparation, /downstreamReadinessSimulated: true/u);
+  assert.match(preparation, /privateInstallationQualified: false, restoreQualified: false/u);
+  assert.doesNotMatch(native, /secrets\.|environment: production|docker |ssh |packages: write/u);
+  assert.match(installer, /options: \[admit, resume\]/u);
+  assert.match(installer, /if test "\$OPERATION" = admit; then[\s\S]*preflight=\$\(ssh[\s\S]*exit 0\n          fi\n          receipt="\$RECEIPT_ID"/u);
+});
 
 test('separate production installer is main/environment gated and can finish only installed-private', async () => {
   const workflow = await readFile('.github/workflows/payload-install-production.yml', 'utf8');
@@ -16,7 +57,16 @@ test('separate production installer is main/environment gated and can finish onl
   assert.match(workflow, /group: portal-ownerinc-production/u);
   assert.match(workflow, /VPS_USER" != root/u);
   assert.match(workflow, /production:payload-v2/u);
-  assert.match(workflow, /production:payload-apply-v2/u);
+  assert.match(workflow, /"production:payload-resume-v3 \$receipt \$\{request#production:payload-v2 \}"/u);
+  assert.doesNotMatch(workflow, /production:payload-apply-v2/u);
+  const fields = /request="production:payload-v2 ([^\n]+)"/u.exec(workflow)?.[1];
+  assert.ok(fields);
+  assert.deepEqual([...fields.matchAll(/\$\{\{ inputs\.([a-z0-9_]+) \}\}/gu)].map(match => match[1]),
+    ['commit', 'run_id', 'run_attempt', 'api_image', 'cron_image', 'cms_image',
+      'candidate_artifact_id', 'qualified_artifact_id', 'report_artifact_id',
+      'candidate_artifact_digest', 'qualified_artifact_digest', 'report_artifact_digest',
+      'candidate_sha256', 'qualified_sha256', 'report_sha256',
+      'approval_sha256', 'inventory_identity', 'expires_at', 'nonce']);
   assert.match(workflow, /status!=="installed-private"/u);
   assert.match(workflow, /authority!=="legacy"/u);
   assert.match(workflow, /routeReleased!==false/u);

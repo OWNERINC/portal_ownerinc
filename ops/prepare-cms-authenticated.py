@@ -26,6 +26,7 @@ PRODUCTION_BACKUP = '/opt/ownerinc/backups/portal-ownerinc/production'
 ROOT = '/opt/ownerinc/lib/payload-preparation'
 LAUNCHER = '/usr/local/libexec/ownerinc-payload-prepare.py'
 APPROVAL = '/etc/ownerinc/payload-preparation/production-approval.json'
+B0_ACCEPTANCE = '/etc/ownerinc/payload-preparation/production-b0-acceptance.json'
 OBSERVER_TIMEOUT_SECONDS = 30
 OBSERVER_MAX_FRAME = 4096
 OBSERVER_CLEANUP_INTERRUPT_RETRIES = 3
@@ -404,6 +405,9 @@ def load_runtime_captured(captured):
     runtime.__dict__['__builtins__'] = dict(vars(builtins), __import__=importer)
     exec(compile(captured['ops/payload-control-runtime.py'], filename, 'exec'), runtime.__dict__)
     require(runtime.STATE is state and runtime.INVENTORY is inventory)
+    # Execute authenticated captured code against installed host data, not the
+    # immutable preparation closure directory (which contains no host inventory).
+    runtime.HERE = RUNTIME
     return runtime
 
 
@@ -1061,11 +1065,88 @@ def _publish_candidate_release(receiver, entries, destination, images, nonce):
     verify_received_tree(receiver, destination, entries, private_files={'.image-env': manifest}, private_root=False)
 
 
-def apply_install(receipt_id):
-    plan = check_install_plan(receipt_id, allow_reserved_expired=True)
-    require(plan['classification'] in ('initial_cold', 'pre_floor_install_pending', 'floor_commit_pending', 'floor_committed'))
+def verify_resume_request(request, material):
+    """Bind all original selectors to protected authority, not a client hash."""
+    approval, captured, _, support, _, record, verifier = material
+    receiver = load_authenticated(captured['ops/payload-receiver-admission.py'], ROOT + '/ops/payload-receiver-admission.py')
+    receipt_id, selected = receiver.parse_resume_request(request)
+    authorization = record['authorization']
+    expected = {'commit': record['commit'], 'run-id': record['runId'], 'run-attempt': record['runAttempt'],
+                'candidate-sha256': record['candidateSha256'], 'qualified-sha256': record['qualifiedManifestSha256'],
+                'report-sha256': record['recoveryReportSha256'], 'approval-sha256': authorization['approvalSha256'],
+                'inventory-identity': authorization['inventoryIdentity'], 'expires-at': authorization['expiresAt'],
+                'nonce': authorization['nonce']}
+    expected.update({service + '-image': image for service, image in record['images'].items()})
+    for role, entry in record['artifacts'].items():
+        expected[role + '-artifact-id'] = entry['id']
+        expected[role + '-artifact-digest'] = entry['digest']
+    require(set(expected) == set(receiver.FIELDS) and selected == expected
+            and authorization['approvalSha256'] == approval_binding_digest(approval))
+    receipt = receiver.INCOMING + '/' + receipt_id
+    receiver.protected_directory(receipt, private=True)
+    bound = {key: record[key] for key in ('commit', 'runId', 'runAttempt', 'images', 'authorization')}
+    bound.update(artifactIds={role: item['id'] for role, item in record['artifacts'].items()},
+                 artifactDigests={role: item['digest'] for role, item in record['artifacts'].items()},
+                 contentDigests={'candidate': record['candidateSha256'], 'qualified': record['qualifiedManifestSha256'],
+                                 'report': record['recoveryReportSha256']})
+    evidence = verifier.verify_candidate(receipt + '/candidate.tar.gz', bound)
+    require(evidence['admissionRecordSha256'] == approval['admission']['recordSha256'])
+    admitted = support.strict_json(receiver.read_private_file(receipt + '/admission.json', receiver.MAX_SUBPROCESS_OUTPUT))
+    require(admitted == evidence)
+    return receipt_id
+
+
+def resume_install(request):
+    receipt_id = verify_resume_request(request, _authenticated_material())
+    return apply_install(receipt_id, resume_request=request)
+
+
+def reconcile_install_head(receipt_id, resume_request=None):
+    """Repair only the unique signed append for this authenticated exact receipt.
+
+    Read-only plan inspection still never repairs. Mutating entrypoints retain
+    FD9 through this reconciliation; no corrupt/partial journal is repaired.
+    """
+    require(isinstance(receipt_id, str) and re.fullmatch(r'payload-[a-z0-9_]{8}', receipt_id))
     with deployment_lease() as reaffirm:
-        approval, captured, _, support, digest, record, verifier = _authenticated_material()
+        material = _authenticated_material()
+        if resume_request is not None:
+            require(verify_resume_request(resume_request, material) == receipt_id)
+        approval, captured, _, _, _, record, _ = material
+        runtime = load_runtime_captured(captured)
+        inventory = runtime._inventory(force=True)['document']
+        authority = {'sourceApprovalSha256': approval_binding_digest(approval),
+                     'policySha256': approval['admission']['policySha256'],
+                     'recordSha256': approval['admission']['recordSha256']}
+        def exact(body):
+            intent = body.get('installIntent')
+            require(intent is not None and runtime.STATE.gated_production_binding(intent['binding'])
+                    and intent['binding']['receiptId'] == receipt_id)
+            runtime.STATE.validate_production_correspondence(intent['binding'], approval, record, inventory, authority)
+            reaffirm()
+            descriptor, pathname = os.fstat(9), os.lstat(LOCK)
+            signed = intent['binding']['lease']
+            require((descriptor.st_dev, descriptor.st_ino) == (signed['device'], signed['inode'])
+                    == (pathname.st_dev, pathname.st_ino))
+            reaffirm()
+        runtime.STATE.read_state(RUNTIME, repair_head=True,
+            inventory_identity=runtime.INVENTORY.identity(inventory), before_repair=exact)
+        reaffirm()
+
+
+def apply_install(receipt_id, operation='apply', resume_request=None):
+    require(operation in ('apply', 'capture', 'accept'))
+    require(resume_request is None or operation == 'apply')
+    reconcile_install_head(receipt_id, resume_request=resume_request)
+    plan = check_install_plan(receipt_id, allow_reserved_expired=True)
+    allowed = ('initial_cold', 'pre_floor_install_pending') if operation == 'capture' else \
+              ('pre_floor_install_pending', 'floor_commit_pending', 'floor_committed')
+    require(plan['classification'] in allowed)
+    with deployment_lease() as reaffirm:
+        material = _authenticated_material()
+        if resume_request is not None:
+            require(verify_resume_request(resume_request, material) == receipt_id)
+        approval, captured, _, support, digest, record, verifier = material
         authorization = record['authorization']
         require(authorization['approvalSha256'] == approval_binding_digest(approval))
         receiver = load_authenticated(captured['ops/payload-receiver-admission.py'], ROOT + '/ops/payload-receiver-admission.py')
@@ -1079,12 +1160,31 @@ def apply_install(receipt_id):
                                        'report': record['recoveryReportSha256']}, authorization=authorization)
         evidence = verifier.verify_candidate(archive, request)
         require(evidence['admissionRecordSha256'] == approval['admission']['recordSha256'])
+        admitted = support.strict_json(receiver.read_private_file(receipt + '/admission.json', receiver.MAX_SUBPROCESS_OUTPUT))
+        require(admitted == evidence)
         entries = receiver.inspect_archive(raw, record['commit'], {name + '-image': value for name, value in record['images'].items()})
         destination = RELEASES + '/' + record['commit']
+        reaffirm()
         _publish_candidate_release(receiver, entries, destination, record['images'], authorization['nonce'])
         runtime = load_runtime_captured(captured)
         inventory = runtime._inventory(force=True)['document']
         require(runtime.INVENTORY.identity(inventory) == authorization['inventoryIdentity'])
+        _, _, current, _ = runtime.STATE.read_state(RUNTIME, repair_head=False)
+        intent = current.get('installIntent')
+        if intent is not None:
+            runtime.STATE.validate_production_correspondence(intent['binding'], approval, record, inventory, {
+                'sourceApprovalSha256': approval_binding_digest(approval),
+                'policySha256': approval['admission']['policySha256'], 'recordSha256': approval['admission']['recordSha256']})
+            require(runtime.STATE.gated_production_binding(intent['binding']) and intent['binding']['receiptId'] == receipt_id)
+        if operation != 'capture':
+            require(intent is not None and runtime.STATE.gated_production_binding(intent['binding'])
+                    and intent['binding']['receiptId'] == receipt_id)
+            decision_raw = protected(B0_ACCEPTANCE, 0o600, 1024 * 1024)
+            decision = runtime.STATE.parse_canonical(decision_raw, 'invalid_b0_acceptance')
+            runtime.STATE.validate_b0_acceptance(decision, intent['binding'])
+            if operation == 'apply':
+                require(intent.get('b0Acceptance') == {'decision': decision,
+                    'decisionSha256': hashlib.sha256(decision_raw).hexdigest()})
         if int(time.time()) >= int(authorization['expiresAt']):
             _, _, resumed, _ = runtime.STATE.read_state(
                 RUNTIME, repair_head=False, inventory_identity=authorization['inventoryIdentity'])
@@ -1102,26 +1202,67 @@ def apply_install(receipt_id):
                                 'recordSha256': approval['admission']['recordSha256']},
                   'inventoryIdentity': authorization['inventoryIdentity'],
                   'sourceCommit': approval['hostBaseline']['currentCommit'],
-                  'expiresAt': authorization['expiresAt'], 'nonce': authorization['nonce']}
+                   'expiresAt': authorization['expiresAt'], 'nonce': authorization['nonce'], 'receiptId': receipt_id}
         ticket_path = RUNTIME + '/payload-production-install-' + authorization['nonce'] + '.json'
         ticket_raw = runtime.STATE.canonical(ticket) + b'\n'
         _write_exact_private(ticket_path, ticket_raw)
         reaffirm()
         result = run_bounded_subprocess(
-            ['/usr/bin/python3', '-I', '-S', '-B', ROOT + '/ops/payload-control-runtime.py',
-             'initialize-isolated', destination, ticket_path], timeout=APPLY_RUNTIME_TIMEOUT_SECONDS,
-            pass_fds=(9,), group_mode='inherit')
+            ['/usr/bin/python3', '-I', '-S', '-B', LAUNCHER,
+             '--execute-' + operation, receipt_id], timeout=APPLY_RUNTIME_TIMEOUT_SECONDS,
+             pass_fds=(9,), group_mode='inherit' if operation == 'apply' else 'new')
         require(result.returncode == 0)
         reaffirm()
         final = _authenticated_material()
         require(final[4] == digest and final[5] == record)
-        _, _, body, _ = runtime.STATE.read_state(RUNTIME, repair_head=False,
+        _, _, body, head = runtime.STATE.read_state(RUNTIME, repair_head=False,
                                                  inventory_identity=authorization['inventoryIdentity'])
-        require(body['installIntent']['stage'] == 'floor_committed' and body['authority'] == {'mode': 'legacy', 'epoch': 1}
+        require((operation == 'accept' or body['installIntent']['stage'] == ('floor_committed' if operation == 'apply' else 'reserved')) and body['authority'] == {'mode': 'legacy', 'epoch': 1}
                 and body['admission'] == 'closed' and body['workerHold'] is True)
+        if operation != 'apply':
+            binding = body['installIntent']['binding']
+            return {'kind': 'payload-production-b0-result-v1',
+                    'status': 'held-reserved' if body['installIntent']['stage'] == 'reserved' else 'acceptance-already-recorded',
+                    'stage': body['installIntent']['stage'],
+                    'receiptId': receipt_id, 'accepted': 'b0Acceptance' in body['installIntent'],
+                    'binding': binding, 'installBindingSha256': hashlib.sha256(runtime.STATE.canonical(binding)).hexdigest(),
+                    'originStateSha256': body['installIntent'].get('b0Acceptance', {}).get('decision', {}).get('originStateSha256', head),
+                    'manifestSha256': hashlib.sha256(host_read(binding['b0']['directory'] + '/manifest.sha256', (0, 0), (0o600,))).hexdigest(),
+                    'cmsStatus': body['cmsStatus'], 'installationExecuted': False,
+                    'routeReleased': False, 'workerStarted': False}
         return {'kind': 'payload-production-install-result-v1', 'status': 'installed-private',
                 'authority': 'legacy', 'routeReleased': False, 'workerStarted': False,
                 'commit': record['commit'], 'nonce': authorization['nonce']}
+
+
+def execute_install(operation, receipt_id):
+    """Private root child; code is captured/authenticated before host execution."""
+    require(operation in ('apply', 'capture', 'accept') and re.fullmatch(r'payload-[a-z0-9_]{8}', receipt_id))
+    verify_inherited_lease()
+    approval, captured, _, _, _, record, _ = _authenticated_material()
+    runtime = load_runtime_captured(captured)
+    inventory = runtime._inventory(force=True)['document']
+    require(runtime.INVENTORY.identity(inventory) == record['authorization']['inventoryIdentity'])
+    destination = RELEASES + '/' + record['commit']
+    ticket_path = RUNTIME + '/payload-production-install-' + record['authorization']['nonce'] + '.json'
+    ticket = runtime.STATE.parse_canonical(host_read(ticket_path, (0, 0), (0o600,)), 'invalid_cold_state')
+    require(ticket == {'schemaVersion': 1, 'kind': 'payload-production-install-request-v1',
+        'candidate': runtime.STATE.production_candidate(record),
+        'authority': {'sourceApprovalSha256': approval_binding_digest(approval),
+                      'policySha256': approval['admission']['policySha256'],
+                      'recordSha256': approval['admission']['recordSha256']},
+        'inventoryIdentity': record['authorization']['inventoryIdentity'],
+        'sourceCommit': approval['hostBaseline']['currentCommit'],
+        'expiresAt': record['authorization']['expiresAt'], 'nonce': record['authorization']['nonce'],
+        'receiptId': receipt_id})
+    if operation != 'capture':
+        protected(B0_ACCEPTANCE, 0o600, 1024 * 1024)
+    os.environ.update(PORTAL_OPERATION_LOCK=LOCK, PORTAL_OPERATION_LOCK_HELD=LOCK,
+                      COMPOSE_PROJECT_NAME=inventory['project'], COMPOSE_ENV_FILE=ENVIRONMENT,
+                      COMPOSE_OVERRIDE=runtime._expected_compose_override(destination))
+    action = {'apply': 'initialize-isolated', 'capture': 'capture-production-b0', 'accept': 'accept-production-b0'}[operation]
+    runtime.Runtime(action, destination, ticket_path).run()
+    verify_inherited_lease()
 
 
 def verify():
@@ -1228,19 +1369,26 @@ def dispatch(mode):
 def main():
     args = sys.argv[1:]
     require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in
-             ('--verify-context', '--create-inventory', '--check-install-plan', '--apply-install', '--collect-context'))
+              ('--verify-context', '--create-inventory', '--check-install-plan', '--apply-install', '--resume-install', '--collect-context',
+              '--capture-b0', '--accept-b0', '--execute-apply', '--execute-capture', '--execute-accept'))
     require(sys.platform == 'linux' and os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 0)
     require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode)
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'} and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C')
     require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'))
-    if args[0] == '--collect-context':
+    if args[0].startswith('--execute-'):
+        execute_install(args[0][10:], args[1])
+    elif args[0] in ('--capture-b0', '--accept-b0'):
+        print(json.dumps(apply_install(args[1], 'capture' if args[0] == '--capture-b0' else 'accept'), sort_keys=True))
+    elif args[0] == '--collect-context':
         require(authenticate()[4] == args[1])
         print(json.dumps(collect_context(), sort_keys=True, separators=(',', ':')))
     elif args[0] == '--check-install-plan':
         print(json.dumps(check_install_plan(args[1]), sort_keys=True))
     elif args[0] == '--apply-install':
         print(json.dumps(apply_install(args[1]), sort_keys=True, separators=(',', ':')))
+    elif args[0] == '--resume-install':
+        print(json.dumps(resume_install(args[1]), sort_keys=True, separators=(',', ':')))
     elif args[0] == '--verify-context':
         print(verified_context(args[1]))
     elif args[0] == '--create-inventory':

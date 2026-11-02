@@ -64,6 +64,31 @@ for bad in [request+' extra',request+' ',request.replace('production:', 'staging
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('typed resume carries every original field through real receiver dispatch without admission', () => {
+  const result = probe(fixture + String.raw`
+import json,types
+resume='production:payload-resume-v3 payload-abcdefgh '+request.split(' ',1)[1]
+receipt,selected=m.parse_resume_request(resume)
+assert receipt=='payload-abcdefgh' and selected==m.parse_request(request)
+for bad in (resume+' extra',resume+' ',resume.replace('payload-abcdefgh','../escape'),resume.replace('v3','v2')):
+ denied(lambda:m.parse_resume_request(bad))
+m.protected_directory=lambda *a,**k:None
+m.time.time=lambda:2000000000
+m.os.path.lexists=lambda _:False
+def read(filename,limit):
+ if filename.endswith('admission.json'):return json.dumps({'authorization':{'nonce':selected['nonce'],'expiresAt':selected['expires-at']}}).encode()
+ if filename.endswith('preflight.json'):return b'{"installationExecuted":false,"deploymentAuthorized":false}'
+ raise AssertionError('unexpected receipt read')
+m.read_private_file=read
+calls=[]
+m.bounded_subprocess=lambda command,*args:(calls.append(command) or types.SimpleNamespace(returncode=0,stdout=b'{}'))
+m.reserve_admission=lambda *args:(_ for _ in ()).throw(AssertionError('resume readmitted'))
+m.main(['payload',resume])
+assert len(calls)==1 and calls[0][-2:]==['--resume-install',resume]
+`);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
 test('bounded receipt reads at most limit plus one and writes no overflow', () => {
   const result = probe(`
 class Stream:
