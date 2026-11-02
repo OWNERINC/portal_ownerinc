@@ -34,8 +34,8 @@ No production writes, record registration, installation or deployment in this pl
 ## Steps
 
 - [x] Implement and test strict rotation contracts and observational checks.
-- [ ] Implement and test single-use application and native filesystem behavior.
-- [ ] Document operation and finish regressions, verification and independent review.
+- [x] Implement and test single-use application and native filesystem behavior.
+- [x] Document operation and finish regressions, verification and independent review.
 
 ## Step 1 — Contracts and observation
 
