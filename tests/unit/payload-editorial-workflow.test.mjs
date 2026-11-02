@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -245,7 +245,7 @@ test('workflow YAML has read-only hosted PR/dispatch scope, exact existing actio
   assert.equal(job.steps.at(-1).env, undefined);
   assert.doesNotMatch(text, /secrets\.|upload-artifact|docker (?:push|login)|ip -[46] route|system prune|volume prune|pull_request_target|continue-on-error/u);
   for (const filename of ['cms/src/admin/RestoreDraft.tsx', 'cms/tests/integration/functional-editorial.mjs', 'api/routes/cms.js',
-    'public/js/cms.js', 'nginx/nginx.conf', 'firebase-emulator/Dockerfile', 'scripts/integration/payload-functional-run.mjs',
+    'public/js/cms.js', 'nginx/nginx.conf', 'firebase-emulator/Dockerfile', 'firebase.json', '.firebaserc', 'scripts/integration/payload-functional-run.mjs',
     'scripts/integration/payload-editorial-ci.mjs', 'tests/unit/payload-editorial-workflow.test.mjs', '.github/workflows/payload-editorial-check.yml']) {
     assert.ok(workflow.on.pull_request.paths.some(pattern => path.matchesGlob(filename, pattern)), `missing PR path ${filename}`);
   }
@@ -303,6 +303,27 @@ test('actual bootstrap script binds only this run attempt and includes pre-step 
   }
 });
 
+test('emulator image COPY sources, including .firebaserc, exist in the actual workflow build context', async () => {
+  const workflow = parse(await readFile(workflowPath, 'utf8'));
+  const shell = workflow.jobs['editorial-browser'].steps.find(step => step.name === 'Build immutable local qualification images').run;
+  const build = shell.replace(/\\\r?\n[ \t]*/gu, ' ').split('\n')
+    .find(line => line.includes('--iidfile "$RUNNER_TEMP/editorial-emulator.id"'));
+  const args = /--file (\S+) (\S+)\s*$/u.exec(build || '');
+  assert.ok(args, 'emulator build must declare its Dockerfile and context explicitly');
+  const [, dockerfile, context] = args;
+  const source = await readFile(dockerfile, 'utf8');
+  const copies = [...source.matchAll(/^COPY (.+)$/gmu)].flatMap(match => match[1].trim().split(/\s+/u).slice(0, -1));
+  assert.deepEqual(copies, ['firebase.json', '.firebaserc'], 'check both real COPY sources, not a glob that omits dotfiles');
+  for (const filename of [...copies].sort()) {
+    const target = path.resolve(context, filename);
+    assert.ok((await stat(target)).isFile(), `${filename} must exist in the selected build context`);
+    const text = await readFile(target, 'utf8');
+    assert.doesNotThrow(() => JSON.parse(text), `${filename} must be the checked-in JSON config`);
+  }
+  const compose = parse(await readFile(new URL('../../docker-compose.yml', import.meta.url), 'utf8'));
+  assert.deepEqual({ context, dockerfile }, compose.services['firebase-auth'].build);
+});
+
 const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
 test('actual workflow build shell binds all three contexts, local IDs and revisions; mismatched image labels and packaging fail (Docker doubled)', async t => {
   const bash = ['bash', 'C:/Program Files/Git/bin/bash.exe'].find(command => spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 10000 }).status === 0);
@@ -330,7 +351,7 @@ else process.exitCode=99;`);
     const calls = (await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     const builds = calls.filter(args => args[0] === 'build'); assert.equal(builds.length, 3);
     assert.deepEqual(builds.map(args => [args[args.indexOf('--file') + 1], args.at(-1)]),
-      [['api/Dockerfile', 'api'], ['cms/Dockerfile', '.'], ['firebase-emulator/Dockerfile', 'firebase-emulator']]);
+      [['api/Dockerfile', 'api'], ['cms/Dockerfile', '.'], ['firebase-emulator/Dockerfile', '.']]);
     for (const args of builds) {
       assert.equal(args[args.indexOf('--label') + 1], `org.opencontainers.image.revision=${revision}`);
       assert.equal(args[args.indexOf('--platform') + 1], 'linux/amd64');

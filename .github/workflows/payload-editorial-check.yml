@@ -8,6 +8,8 @@ on:
       - 'public/**'
       - 'nginx/**'
       - 'firebase-emulator/**'
+      - 'firebase.json'
+      - '.firebaserc'
       - '.dockerignore'
       - 'scripts/import-owner-news.mjs'
       - 'scripts/owner-news-payload/**'
@@ -101,7 +103,7 @@ jobs:
           docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --iidfile "$RUNNER_TEMP/editorial-cms.id" --file cms/Dockerfile .
           docker build --platform linux/amd64 --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --iidfile "$RUNNER_TEMP/editorial-emulator.id" --file firebase-emulator/Dockerfile firebase-emulator
+            --iidfile "$RUNNER_TEMP/editorial-emulator.id" --file firebase-emulator/Dockerfile .
           for role in api cms emulator; do
             image=$(cat "$RUNNER_TEMP/editorial-$role.id")
             [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]]

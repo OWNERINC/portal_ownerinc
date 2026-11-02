@@ -7,6 +7,7 @@ import { TLSSocket, createSecureContext } from 'node:tls';
 import { mkdtemp, chmod, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { readOperationalMessageId } from '../helpers/operational-smtp-message.mjs';
 
 assert.equal(process.platform, 'linux');
 assert.equal(process.env.GITHUB_ACTIONS, 'true');
@@ -97,7 +98,7 @@ try {
   assert.equal(messages.length, 2, 'one recovery');
   for (const message of messages) {
     assert.deepEqual(message.envelope, { from: 'sender@example.test', to: ['monitor@example.test'] });
-    assert.match(message.body, /Message-ID: <own34-[a-f0-9]{32}@monitor\.ownerinc\.invalid>/i);
+    assert.match(readOperationalMessageId(message.body), /^<own34-[a-f0-9]{32}@monitor\.ownerinc\.invalid>$/u);
     assert.doesNotMatch(message.body, /fixture-password/);
   }
   rejection = '451 temporary'; bad = true; await cycle(); await cycle();
@@ -105,7 +106,8 @@ try {
   assert.ok(pending.outbox); assert.equal(messages.length, 2);
   const pendingId = pending.outbox.id;
   rejection = null; await cycle();
-  assert.equal(messages.length, 3); assert.ok(messages[2].body.includes(pendingId));
+  assert.equal(messages.length, 3);
+  assert.equal(readOperationalMessageId(messages[2].body), `<own34-${pendingId}@monitor.ownerinc.invalid>`);
   // Keep A permanently rejected/backing off while B becomes critical and then
   // recovers. Every cycle reopens the actual file store, as after a restart.
   rejection = '550 denied'; backupBad = true; await cycle();
@@ -120,7 +122,8 @@ try {
   rejection = null; now = backlog.outbox.nextAt - 60000;
   await cycle(); await cycle(); await cycle(); await cycle();
   assert.equal(messages.length, 6, 'A, then B incident and recovery, with no ordinary duplicate');
-  assert.deepEqual(messages.slice(3).map(message => /Message-ID: <own34-([a-f0-9]{32})@monitor\.ownerinc\.invalid>/i.exec(message.body)?.[1]), retainedIds);
+  assert.deepEqual(messages.slice(3).map(message => readOperationalMessageId(message.body)),
+    retainedIds.map(id => `<own34-${id}@monitor.ownerinc.invalid>`));
   assert.match(messages[4].body, /^disk_monitor: failed \/ disk_critical\r?$/m);
   assert.match(messages[5].body, /^disk_monitor: recovered\r?$/m);
   const drained = await (await openState(directory)).load();

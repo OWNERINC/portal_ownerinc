@@ -187,12 +187,43 @@ repetiu conjuntamente 11 suítes editoriais/catálogo/finalizer/observer/preauth
 **331 PASS / zero FAIL / zero SKIP**. São testes offline com doubles explícitos;
 não comprovam a execução SQL sob os privilégios do PostgreSQL nativo.
 
-A correção de ACL foi entregue e está em revisão de retorno: runtime e finalizer
+A correção de ACL foi entregue e recebeu revisão de retorno **ship**: runtime e finalizer
 compartilham comparadores SELECT-only com inventário completo, privilégios nulos
 no native-absent e direitos estreitos no V2. O primário repetiu sete suítes com
 cache TSX desativado: **318 PASS / zero FAIL / zero SKIP**, incluindo as duas
 regressões P1. O implementador reportou 324 PASS em sua seleção de suítes. Essa
 extensão permanece fora do pacote editorial/monitor congelado abaixo.
+
+O slice de configuração/readiness foi entregue em 27 arquivos, ainda sob revisão:
+lifecycle explícito e imutável, endpoint native-absent sem probe de storage,
+readiness strict com catálogo completo e probe durável, e CLI de saúde com destino
+loopback fixo e deadline de 4,5 s. O implementador reportou **112 PASS / dois skips
+Windows / zero FAIL**, mais 14 PASS após sua última correção. Integração de Compose,
+host, runners e qualificação nativa continuam pendentes. O primário propagou a
+seleção explícita no runner manual: migrations native/held, runtime qualified;
+seus sete testes offline passaram. O primário também repetiu environment,
+readiness, lifecycle, health-response e health-CLI: **46 PASS / zero FAIL / zero
+SKIP**. A fixture Nginx ampliada recebeu revisão **ship**, com 51 probes privados
+por estado inactive/promoted/unavailable. Repetição primária em Windows:
+**um PASS / dois skips Linux / zero FAIL**; sua execução nativa será feita em CI.
+
+A revisão do lifecycle retornou **fix-first**: probe de storage sem deadline no
+servidor, logs do driver antes do catch sanitizado e fingerprint sem
+`flattenedFields`/`sanitizedIndexes`. As correções estão com o implementador;
+os passes anteriores não encerram esses findings. A propagação de perfis nas seis
+fixtures recebeu **ship**. O delta posterior do primário seleciona o endpoint e
+proxy de saúde por fase, com **77 PASS / zero FAIL / zero SKIP**, e recebeu **ship**.
+Essa fixture observa listener/TLS/status; não qualifica os headers de descriptor.
+
+O CAS de coverage foi entregue em três arquivos, sem empacotamento ou admissão
+produtiva. O primário repetiu suas suítes e runtime-catalog: **218 PASS / zero FAIL /
+zero SKIP**. A revisão independente retornou **ship**; execução PostgreSQL pendente.
+Sua resposta mantém `ready:false`, `writeCoverageCertified:false` e
+`releaseCertified:false`; coverage 1 sem receipt autenticado é `coverage_in_doubt`.
+A fonte nativa de catálogo, em dois arquivos, também recebeu **ship** e repetição
+primária **19 PASS / zero FAIL / zero SKIP**. Wiring no runner e execução PG16
+continuam pendentes. A extensão posterior de cancelamento do catálogo está em
+implementação separada; não herda automaticamente esses veredictos.
 
 A suíte de navegador editorial implementa quatro cenários e mantém o resultado
 global `INCOMPLETE`/2 quando os demais continuam pendentes. CI próprio de navegador
@@ -203,8 +234,18 @@ campo persistido `editorialPhaseComplete` e o finalizer na allowlist da imagem;
 deadline derivado de `run_started_at` do run/attempt autenticado, mais 35 minutos;
 reserva mínima de 15 minutos antes da execução (8 execução, 6 cleanup, 1 margem).
 O primário repetiu quatro suítes: **81 PASS / zero FAIL / zero SKIP**.
-O runtime nativo será executado pelo dispatch
-`manual_runtime_only`. Nenhuma jornada nativa/browser foi declarada PASS.
+O runtime nativo foi disparado com `manual_runtime_only` para `88c18eb`, run
+`41546883545`, e falhou em `protocol-finalizer`. O log expõe somente
+`manual_runtime_process_failed`, sem artifacts exportados; diagnóstico finito mais
+amplo está em preparação, e a causa do finalizer ainda não foi identificada.
+O browser `41546885302` falhou no build do emulador: o contexto não contém
+`.firebaserc`. API e CMS foram construídos nessa execução, mas a jornada não
+começou. A correção do contexto está em andamento. Nenhuma jornada nativa/browser
+foi declarada PASS.
+
+A correção do build usa o contexto raiz existente no Compose e acrescenta
+`firebase.json`/`.firebaserc` aos paths do workflow. Repetição primária:
+**60 PASS / zero FAIL / zero SKIP**. Revisão fresca **ship**; publicação pendente.
 
 Recuperação pré-floor e monitoramento OWN-34 seguem em implementação, fora desse
 snapshot. Lifecycle completo, ativação vazia e recuperação active/frozen ainda
@@ -227,6 +268,19 @@ a cadeia ADMIN completa em processos/leases frescos, imagens reais da aplicaçã
 anterior e transporte OpenSSH forced-command do witness. A execução PostgreSQL e
 storage nativa permanece exclusiva ao CI e ainda não foi realizada. O executor
 destrutivo produtivo exige aprovação autenticada específica do incidente.
+
+As três correções pré-floor foram entregues, com qualificação CI ADMIN/PG16,
+imagens históricas e OpenSSH. O implementador reportou **81 PASS / dez skips
+nativos / zero FAIL** em Node e **13 PASS / dois skips Linux / zero FAIL** em
+Python. A revisão fresca retornou **fix-first**: histórico de uso nativo não
+comprovado por sequences em conteúdo UUID, aliases reais de bind mounts do host
+fora da comparação de paths e ausência de orçamento agregado com reserva de
+cleanup no workflow. As correções estão em andamento; estados sem prova confiável
+de ausência de uso devem ser recusados. Essa fonte ainda não executou em CI.
+Os planos de ativação e recuperação active/frozen foram emendados para admissão
+boot-bound, revogação preservadora de sessões, separação entre autorização B e
+efeito A e terceiro lifecycle operacional. Permanecem **PROPOSED**, com todos os
+steps desmarcados, aguardando crítica independente e autorização de implementação.
 
 O núcleo do monitoramento foi entregue com collector, units, runner não
 privilegiado, incident/outbox durável, SMTP e observação API. Testes focados do
@@ -271,7 +325,25 @@ que havia atingido timeout passou nessa execução; o CMS não foi alcançado po
 causa das nove falhas. A correção dos quatro arquivos de preview recebeu revisão
 independente **ship**; o primário repetiu preparation, HTTPS e operations:
 **53 PASS / zero FAIL / zero SKIP**, incluindo limpeza POSIX/PowerShell e Compose
-config read-only. Novo verify integral é obrigatório após a correção.
+config read-only.
+O novo snapshot isolado de 105 arquivos, árvore
+`db151d5715bc73753e0e2d261dd23b34a60c888a`, passou no verify integral:
+**2.214 PASS / 35 SKIP raiz e 533 PASS / 11 SKIP CMS, zero falhas**, incluindo
+sintaxe, typecheck, scanner e Compose. Foi commitado e pushado como
+`88c18eb64402534e37781578fc504615458b8dfa`, com árvore idêntica à verificada.
+PR #82 atualizada; extensões lifecycle/runtime/ops continuam em integração.
+
+CI do SHA `88c18eb`: B0 `41546885268` e rotação `41546885199` **PASS**; geral
+`41546885237` ainda em andamento neste checkpoint. SMTP `41546885341` falhou
+porque a fixture pressupunha Message-ID em uma linha, enquanto Nodemailer emite
+um header RFC dobrado. A correção test-only de três arquivos recebeu **ship** e
+repetição primária **12 PASS / zero FAIL / zero SKIP**, incluindo o composer real
+em stream transport sem sockets. Publicação da correção e repetição nativa pendem.
+
+A bridge privada CMS foi entregue e revisada **fix-first** por alias `/globals`
+antes do dispatcher, ausência da validação do adapter real e ocultação de drift
+quando uma leitura local falha. Registros na config/rota ainda pendem. O orçamento
+da resposta não comprova cessação de I/O nativo do catálogo dentro do agregado.
 A integração de observação CMS, adapters de lifecycle/recovery/rota, instalação,
 SMTP nativo e entrega/ownership reais continuam pendentes. `contract_missing` e
 `unsupported_contract` não são convertidos em saúde ou aceite operacional.
