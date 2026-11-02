@@ -2167,6 +2167,10 @@ preserva owners e ACLs autenticados do archive, sem `--no-owner`,
 O restore operacional mantém o backup de proteção e writers parados em falha; foi
 removida uma chamada duplicada sem efeito a `prepare-restore` antes de `cms-migrate`,
 sem reduzir nenhum boundary destrutivo.
+Imediatamente antes do restore destrutivo Portal, o coordinator lê a identidade
+canônica `database:owner:current_user` e exige o database autenticado do inventory,
+owner `portal_admin` e o cluster authority `$POSTGRES_USER`; esse check não depende
+de interpolação `psql -v` dentro de `-c`.
 Se a comparação e a restauração falharem na mesma passagem, o relatório mantém
 os dois resumos estáticos separados em vez de deixar a falha de restart ocultar a
 falha de snapshot. O `verify-release` seguinte à comparação usa stage por papel e
