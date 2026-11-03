@@ -20,6 +20,24 @@ test('all shell destinations mount repeatedly with one document, sidebar, topbar
   assert.equal(h.disposed.length, h.mounts.length - 1);
 });
 
+test('BFCache keeps the mounted page lifecycle and does not remount on persisted pageshow', async () => {
+  const h = await createRouterHarness();
+  const mounts = h.mounts.length;
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: true }));
+  h.window.dispatchEvent(new TestEvent('test-page-event'));
+  assert.equal(h.events.length, 1);
+
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  await drain();
+  assert.equal(h.mounts.length, mounts);
+  assert.equal(h.disposed.length, 0);
+
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: false }));
+  assert.equal(h.disposed.length, 1);
+  h.window.dispatchEvent(new TestEvent('test-page-event'));
+  assert.equal(h.events.length, 1);
+});
+
 test('signed-out direct links keep the destination query and fragment through login', async () => {
   const destination = '/knowledge.html?q=normas&article=one#pdf';
   const h = await createRouterHarness({ initialURL: `https://portal.test${destination}`, user: null });

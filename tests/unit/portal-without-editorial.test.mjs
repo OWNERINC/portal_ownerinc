@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createDependencyHarness } from '../helpers/api-dependency-harness.mjs';
-import { createFeedbackHarness, drain } from '../helpers/frontend-feedback-harness.mjs';
+import { createFeedbackHarness, drain, TestEvent } from '../helpers/frontend-feedback-harness.mjs';
 
 const removedFiles = [
   'public/announcements.html',
@@ -91,6 +91,57 @@ test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle 
   const pending = h.latest('/api/reminders/upcoming?days=7');
   h.page.dispose();
   assert.equal(pending.options.signal.aborted, true);
+});
+
+test('maintained Dashboard reloads only its areas after a persisted pageshow', async () => {
+  const h = await createFeedbackHarness('dashboard');
+  const initialReminders = h.latest('/api/reminders/upcoming');
+  const initialAcademy = h.latest('/api/academy?');
+  initialReminders.resolve([{ id: 'reminder-initial', title: 'Lembrete inicial', next_occurrence: '2099-01-02', description: 'Inicial' }]);
+  initialAcademy.resolve([{ id: 'course-initial', title: 'Curso inicial', active: true, delivery_mode: 'internal' }]);
+  await drain();
+  assert.match(h.node('reminders-list').textContent, /Lembrete inicial/);
+  assert.match(h.node('academy-preview').textContent, /Curso inicial/);
+
+  const beforeNonPersistedPageshow = h.requests.length;
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: false }));
+  await drain();
+  assert.equal(h.requests.length, beforeNonPersistedPageshow);
+
+  const beforePageshow = h.requests.length;
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  await drain();
+  const reloaded = h.requests.slice(beforePageshow);
+  assert.deepEqual(reloaded.map(request => request.path), [
+    '/api/reminders/upcoming?days=7',
+    '/api/academy?active=true&limit=3',
+  ]);
+  assert.equal(h.requests.filter(request => /announcements|owner-news/i.test(request.path)).length, 0);
+  assert.equal(h.requests.some(request => request.kind === 'asset'), false);
+
+  reloaded[0].resolve([{ id: 'reminder-bfcache', title: 'Lembrete BFCache', next_occurrence: '2099-01-03', description: 'Atualizado' }]);
+  reloaded[1].resolve([{ id: 'course-bfcache', title: 'Curso BFCache', active: true, delivery_mode: 'internal' }]);
+  await drain();
+  assert.match(h.node('reminders-list').textContent, /Lembrete BFCache/);
+  assert.match(h.node('academy-preview').textContent, /Curso BFCache/);
+  assert.doesNotMatch(h.node('reminders-list').textContent, /Lembrete inicial/);
+  assert.doesNotMatch(h.node('academy-preview').textContent, /Curso inicial/);
+
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  await drain();
+  const late = h.requests.slice(-2);
+  const requestCountBeforeDispose = h.requests.length;
+  h.page.dispose();
+  assert.equal(late.every(request => request.options.signal.aborted), true);
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  late[0].resolve([{ id: 'reminder-stale', title: 'Lembrete tardio', next_occurrence: '2099-01-04' }]);
+  late[1].resolve([{ id: 'course-stale', title: 'Curso tardio', active: true, delivery_mode: 'internal' }]);
+  await drain();
+  assert.equal(h.requests.length, requestCountBeforeDispose);
+  assert.match(h.node('reminders-list').textContent, /Lembrete BFCache/);
+  assert.match(h.node('academy-preview').textContent, /Curso BFCache/);
+  assert.doesNotMatch(h.node('reminders-list').textContent, /Lembrete tardio/);
+  assert.doesNotMatch(h.node('academy-preview').textContent, /Curso tardio/);
 });
 
 test('legacy Owner News API paths return controlled 404s without database access', async t => {

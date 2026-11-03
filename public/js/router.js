@@ -419,8 +419,14 @@ export async function startRouter() {
     if (!activePage?.busy) return;
     event.preventDefault(); event.returnValue = '';
   });
-  window.addEventListener('pagehide', () => { transition?.abort(); activePage?.dispose(); disposePageUI(); });
-  window.addEventListener('pageshow', event => { if (event.persisted) void navigate(location.href, { initial: true }); });
+  // BFCache keeps the mounted page alive; its lifecycle owns persisted restores.
+  window.addEventListener('pagehide', event => {
+    if (event.persisted) return;
+    transition?.abort(); activePage?.dispose(); activePage = null; disposePageUI();
+  });
+  window.addEventListener('pageshow', event => {
+    if (event.persisted && !activePage) void navigate(location.href, { initial: true });
+  });
   new MutationObserver(() => {
     // Auth removes this same-account visual marker on definitive session loss.
     if (!document.documentElement.dataset.authSnapshot) {

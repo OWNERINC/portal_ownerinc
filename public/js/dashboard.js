@@ -159,5 +159,10 @@ async function loadAcademy() {
   }
 }
 
+page.listen(window, 'pageshow', event => {
+  if (!event.persisted) return;
+  void Promise.all([loadReminders(), loadAcademy()]);
+});
+
 void Promise.all([loadReminders(), loadAcademy()]);
 }
