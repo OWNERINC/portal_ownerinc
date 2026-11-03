@@ -1,7 +1,7 @@
 # OWN-43 a OWN-46 — Especificação dos gates pós-CMS
 
-Data: 2026-11-03  
-Base: `f7c03da` (`OWN-42` publicada em `8746ce2`)  
+Data: 2026-11-03
+Base: `f7c03da` (`OWN-42` publicada em `8746ce2`)
 Escopo: proteger o banco, remover resíduos órfãos, alinhar documentação e consolidar o aceite sem promover produção.
 
 ## Decisão aprovada
