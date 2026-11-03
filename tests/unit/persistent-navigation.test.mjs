@@ -38,6 +38,53 @@ test('BFCache keeps the mounted page lifecycle and does not remount on persisted
   assert.equal(h.events.length, 1);
 });
 
+test('BFCache aborts pending navigation without replacing the preserved page', async () => {
+  const h = await createRouterHarness();
+  const preservedMain = h.doc.getElementById('main-content');
+  const preservedHeading = preservedMain.querySelector('h1');
+  const preservedMounts = h.mounts.length;
+  const first = deferred();
+  let firstSignal;
+  h.context.fetchOverride = (url, options) => {
+    firstSignal = options.signal;
+    return first.promise;
+  };
+
+  const pendingNavigation = h.router.navigate('/academy.html');
+  await drain();
+  assert.ok(firstSignal, 'navigation must start an abortable fetch');
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: true }));
+  assert.equal(firstSignal.aborted, true);
+  first.resolve({ ok: true, headers: new Map([['content-type', 'text/html']]), text: async () => '/academy.html' });
+  assert.equal(await pendingNavigation, false);
+  assert.equal(h.mounts.length, preservedMounts);
+  assert.equal(h.doc.getElementById('main-content'), preservedMain);
+  assert.equal(h.doc.getElementById('main-content').querySelector('h1'), preservedHeading);
+
+  const second = deferred();
+  let secondSignal;
+  h.context.fetchOverride = (url, options) => {
+    secondSignal = options.signal;
+    return second.promise;
+  };
+  const rejectedNavigation = h.router.navigate('/knowledge.html');
+  await drain();
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: true }));
+  assert.equal(secondSignal.aborted, true);
+  second.reject(new Error('late failure'));
+  assert.equal(await rejectedNavigation, false);
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  await drain();
+  assert.equal(h.mounts.length, preservedMounts);
+  assert.equal(h.doc.getElementById('main-content'), preservedMain);
+  assert.equal(h.doc.getElementById('main-content').querySelector('h1'), preservedHeading);
+
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: false }));
+  assert.equal(h.disposed.length, 1);
+  h.window.dispatchEvent(new TestEvent('test-page-event'));
+  assert.equal(h.events.length, 0);
+});
+
 test('signed-out direct links keep the destination query and fragment through login', async () => {
   const destination = '/knowledge.html?q=normas&article=one#pdf';
   const h = await createRouterHarness({ initialURL: `https://portal.test${destination}`, user: null });

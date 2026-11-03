@@ -421,8 +421,9 @@ export async function startRouter() {
   });
   // BFCache keeps the mounted page alive; its lifecycle owns persisted restores.
   window.addEventListener('pagehide', event => {
+    transition?.abort();
     if (event.persisted) return;
-    transition?.abort(); activePage?.dispose(); activePage = null; disposePageUI();
+    activePage?.dispose(); activePage = null; disposePageUI();
   });
   window.addEventListener('pageshow', event => {
     if (event.persisted && !activePage) void navigate(location.href, { initial: true });
