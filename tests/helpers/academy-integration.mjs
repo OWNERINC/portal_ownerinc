@@ -10,7 +10,7 @@ const require = createRequire(new URL('../../api/package.json', import.meta.url)
 const express = require('express');
 const supertest = require('supertest');
 
-export async function createAcademyHttp(t, pool, users, uploadDirectory) {
+export async function createAcademyHttp(t, pool, users, uploadDirectory, { forbidEditorial = false } = {}) {
   const filename = new URL('../../api/routes/academy.js', import.meta.url);
   const localRequire = createRequire(filename);
   const module = { exports: {} };
@@ -29,7 +29,7 @@ export async function createAcademyHttp(t, pool, users, uploadDirectory) {
   const app = express();
   app.use(express.json());
   app.use('/api/academy', module.exports);
-  for (const [name, mount] of [['cms', '/api/cms'], ['cms-assets', '/api/cms/assets']]) {
+  for (const [name, mount] of (forbidEditorial ? [] : [['cms', '/api/cms'], ['cms-assets', '/api/cms/assets']])) {
     const routeFile = new URL(`../../api/routes/${name}.js`, import.meta.url);
     const routeRequire = createRequire(routeFile);
     const routeModule = { exports: {} };

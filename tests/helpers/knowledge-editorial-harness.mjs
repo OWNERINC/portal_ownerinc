@@ -8,7 +8,7 @@ export const editor = { uid: 'user-1', role: 'admin', permissions: { manageKnowl
 
 // Parse the actual HTML and run the whole Knowledge module, renderer, UI and
 // router/lifecycle with DOM/form/auth/transport doubles.
-export async function createKnowledgeEditorialHarness(t, { user = editor } = {}) {
+export async function createKnowledgeEditorialHarness(t, { user = editor, forbidEditorial = false } = {}) {
   const h = await createRouterHarness({ initialURL: 'https://portal.test/knowledge.html', user, autoStart: false, realUI: true });
   const { doc, context } = h;
   const html = await readFile('public/knowledge.html', 'utf8');
@@ -29,7 +29,10 @@ export async function createKnowledgeEditorialHarness(t, { user = editor } = {})
   doc.createTextNode = text => { const node = doc.createElement('#text'); node.textContent = text; return node; };
   doc.documentElement.dataset.authSnapshot = 'true';
   const requests = [], revoked = [], confirms = [], errors = [];
-  const transport = kind => (path, options = {}) => { const call = { kind, path, options, ...deferred() }; requests.push(call); return call.promise; };
+  const transport = kind => (path, options = {}) => {
+    if (forbidEditorial && /\/api\/cms/i.test(path)) throw new Error(`Forbidden editorial request: ${path}`);
+    const call = { kind, path, options, ...deferred() }; requests.push(call); return call.promise;
+  };
   Object.assign(context, {
     console: { ...console, error: (...args) => errors.push(args) },
     fetchAPI: transport('api'), fetchAPIPage: transport('list'), fetchAPIAsset: transport('asset'), TextEncoder, structuredClone,
@@ -47,7 +50,7 @@ export async function createKnowledgeEditorialHarness(t, { user = editor } = {})
     vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { ${exports} }); })();`, context, { filename: path });
   }
   await load('public/js/pagination.js', 'renderPagination, readOffset, setPaginationBusy');
-  await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
+  if (!forbidEditorial) await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   await load('public/js/knowledge.js', 'knowledgeMount: mount');
   context.onMount = (name, page) => { if (name === './knowledge.js') context.knowledgeMount(page); };
   await h.router.startRouter(); await drain();

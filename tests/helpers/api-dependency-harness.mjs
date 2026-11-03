@@ -13,9 +13,26 @@ const express = apiRequire('express');
 const supertest = apiRequire('supertest');
 const security = apiRequire('./middleware/security');
 const users = {
-  manager: { uid: 'dependency-manager', role: 'admin', permissions: { manageReminders: true, manageKnowledge: true } },
+  manager: {
+    uid: 'dependency-manager', role: 'admin',
+    permissions: { manageReminders: true, manageKnowledge: true, manageBenefits: true },
+  },
   reader: { uid: 'dependency-reader', role: 'viewer', permissions: {} },
 };
+
+const forbiddenEditorialSql = /cms_documents|cms_revisions|cms_assets|7193029/i;
+
+export function assertNoEditorialAccess(state) {
+  assert.equal(state.sql.some(({ sql }) => forbiddenEditorialSql.test(String(sql))), false,
+    'maintained domain touched editorial SQL or the CMS advisory lock');
+  assert.equal(state.incoming.some(request => /\/api\/cms/i.test(String(request.url))), false,
+    'maintained domain requested /api/cms');
+}
+
+export function assertOwnDomainAccess(state, pattern) {
+  assert.ok(state.sql.some(({ sql }) => pattern.test(String(sql))),
+    `expected SQL call matching ${pattern}`);
+}
 
 // Execute complete, unmodified CommonJS source with explicit external seams.
 // A synthetic process prevents dotenv/credential/environment access. Express,
@@ -30,17 +47,62 @@ async function loadSource(relative, dependencies) {
   return module.exports;
 }
 
-export async function createDependencyHarness(t) {
+export async function createDependencyHarness(t, { forbidEditorial = false } = {}) {
   const state = {
     sql: [], verifiedTokens: [], files: new Map(), writes: [], opens: [], assets: new Map(),
+    knowledge: [], benefits: [],
     references: [], connections: 0, releases: 0, incoming: [],
   };
+  const audit = sql => /INSERT INTO audit_log/.test(sql);
   const pool = {
     async query(sql, params = []) {
       state.sql.push({ sql, params });
+      if (forbidEditorial && forbiddenEditorialSql.test(String(sql))) {
+        throw new Error(`Forbidden editorial SQL: ${sql}`);
+      }
       if (/FROM users u/.test(sql)) return { rows: Object.values(users).filter(user => user.uid === params[0]).map(user => structuredClone(user)) };
       if (/COUNT\(\*\)/.test(sql)) return { rows: [{ count: 0 }] };
+      if (/FROM knowledge_base/.test(sql)) {
+        const requested = params[0];
+        const rows = state.knowledge.filter(row => Array.isArray(requested) ? requested.includes(row.id) : !requested || row.id === requested);
+        return { rows: structuredClone(rows) };
+      }
+      if (/FROM benefits/.test(sql)) return { rows: structuredClone(state.benefits) };
       if (/FROM notifications_log|FROM cms_documents/.test(sql) && !/jsonb_array_elements/.test(sql)) return { rows: [] };
+      if (/INSERT INTO knowledge_base/.test(sql)) {
+        const row = { id: randomUUID(), title: params[0], category: params[1], content: params[2], created_by: params[3] };
+        state.knowledge.push(row);
+        return { rows: [structuredClone(row)] };
+      }
+      if (/UPDATE knowledge_base/.test(sql)) {
+        const row = state.knowledge.find(item => item.id === params[0]);
+        if (!row) return { rows: [] };
+        Object.assign(row, { title: params[1], category: params[2], content: params[3] });
+        return { rows: [structuredClone(row)] };
+      }
+      if (/DELETE FROM knowledge_base/.test(sql)) {
+        const index = state.knowledge.findIndex(item => item.id === params[0]);
+        if (index < 0) return { rows: [] };
+        const [row] = state.knowledge.splice(index, 1);
+        return { rows: [{ id: row.id }] };
+      }
+      if (/INSERT INTO benefits/.test(sql)) {
+        const row = { id: randomUUID(), company: params[0], category: params[1], description: params[2], instructions: params[3], order: params[4], active: params[5] };
+        state.benefits.push(row);
+        return { rows: [structuredClone(row)] };
+      }
+      if (/UPDATE benefits/.test(sql)) {
+        const row = state.benefits.find(item => item.id === params[0]);
+        if (!row) return { rows: [] };
+        Object.assign(row, { company: params[1], category: params[2], description: params[3], instructions: params[4], order: params[5], active: params[6] });
+        return { rows: [structuredClone(row)] };
+      }
+      if (/DELETE FROM benefits/.test(sql)) {
+        const index = state.benefits.findIndex(item => item.id === params[0]);
+        if (index < 0) return { rows: [] };
+        const [row] = state.benefits.splice(index, 1);
+        return { rows: [{ id: row.id }] };
+      }
       if (/INSERT INTO reminders/.test(sql)) return { rows: [{
         id: randomUUID(), title: params[0], description: params[1], trigger_day: params[2],
         target_users: JSON.parse(params[3]), channel: params[4], active: params[5], created_by: params[6],
@@ -63,7 +125,7 @@ export async function createDependencyHarness(t) {
           && asset.storage_key != null && !asset.deleting_at && asset.byte_size >= 1 && asset.byte_size <= 52428800) };
       }
       if (/jsonb_array_elements\(r.blocks\)/.test(sql)) return { rows: state.references };
-      if (/^(BEGIN|COMMIT|ROLLBACK)$|pg_advisory_xact_lock|INSERT INTO audit_log|UPDATE users SET photo_url/.test(sql)) return { rows: [] };
+      if (/^(BEGIN|COMMIT|ROLLBACK)$|INSERT INTO audit_log|UPDATE users SET photo_url/.test(sql) || audit(sql)) return { rows: [] };
       throw new Error(`Unmocked SQL in dependency regression: ${sql}`);
     },
     async connect() {
@@ -103,7 +165,7 @@ export async function createDependencyHarness(t) {
     ['../db', pool], ['../middleware/auth', auth], ['node:fs/promises', files],
   ]);
   const actualRoutes = new Map();
-  for (const name of ['reminders', 'cms', 'upload', 'cms-assets']) {
+  for (const name of ['knowledge', 'benefits', 'reminders', 'cms', 'upload', 'cms-assets']) {
     actualRoutes.set(`./routes/${name}`, await loadSource(`routes/${name}.js`, dependencies));
   }
   // Load the real index so JSON sizes, query defaults, request IDs, error

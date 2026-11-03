@@ -77,7 +77,9 @@ export function parseFixture(html) {
 // Mount the complete production module, UI helpers, renderer and lifecycle.
 // Only browser DOM and external transports/timers are doubled. Transports
 // deliberately ignore abort so tests exercise the lifecycle's late-result guard.
-export async function createMountedHarness(name = 'reminders', { user = { permissions: { superAdmin: true } } } = {}) {
+export async function createMountedHarness(name = 'reminders', {
+  user = { permissions: { superAdmin: true } }, forbidEditorial = false,
+} = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = parseFixture(html);
   const requests = [], revoked = [], observers = [], timers = new Map();
@@ -86,6 +88,7 @@ export async function createMountedHarness(name = 'reminders', { user = { permis
   const location = new URL(`https://portal.test/${name}.html`);
   window.history = {};
   const request = kind => (path, options = {}) => {
+    if (forbidEditorial && /\/api\/cms/i.test(path)) throw new Error(`Forbidden editorial request: ${path}`);
     const pending = { kind, path, options, ...deferred() };
     requests.push(pending);
     return pending.promise;
@@ -116,7 +119,7 @@ export async function createMountedHarness(name = 'reminders', { user = { permis
   }
   await loadModule('public/js/ui.js', ['clear', 'element', 'showState', 'safeHttpUrl', 'openDialog', 'closeDialog', 'setDialogCloseGuard', 'protectForm', 'canLeavePageUI']);
   await loadModule('public/js/page-lifecycle.js', ['createPageLifecycle']);
-  await loadModule('public/js/cms-block-renderer.js', ['renderBlocks', 'cleanupRenderedBlocks', 'validateBlocks', 'BLOCK_TYPES']);
+  if (!forbidEditorial) await loadModule('public/js/cms-block-renderer.js', ['renderBlocks', 'cleanupRenderedBlocks', 'validateBlocks', 'BLOCK_TYPES']);
   await loadModule(`public/js/${name}.js`, ['mount']);
   const page = context.createPageLifecycle({ user });
   page.location = location;

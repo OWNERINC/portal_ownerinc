@@ -83,7 +83,10 @@ export class FixtureNode extends Node {
 
 // Entire production mounts and their local modules run with the real lifecycle.
 // Only DOM, browser rendering/export libraries and external transports are doubles.
-export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [], url = `https://portal.test/${name}.html` } = {}) {
+export async function createFeedbackHarness(name, {
+  expose = '', fonts = Promise.resolve(), mount = true, modules = [],
+  url = `https://portal.test/${name}.html`, forbidEditorial = false,
+} = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
   doc.createElement = tag => new FixtureNode(tag, doc);
@@ -114,7 +117,10 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   Object.assign(window, { history, location, matchMedia: () => ({ matches: false }), innerHeight: 900, scrollY: 0, scrollTo(x, y) { this.scrollY = y; }, confirm: () => true });
   const requests = [], revoked = [], frames = new Map(), timers = new Map(), observers = [], captures = [];
   let resourceId = 0;
-  const transport = kind => (path, options = {}) => { const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise; };
+  const transport = kind => (path, options = {}) => {
+    if (forbidEditorial && /\/api\/cms/i.test(path)) throw new Error(`Forbidden editorial request: ${path}`);
+    const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise;
+  };
   const context = vm.createContext({
     document: doc, window, fixtureLocation: location, console, AbortController, DOMException, URLSearchParams, TextEncoder, structuredClone,
     Event: TestEvent, URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },

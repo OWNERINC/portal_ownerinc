@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import {
+  assertNoEditorialAccess, assertOwnDomainAccess, createDependencyHarness,
+} from '../helpers/api-dependency-harness.mjs';
 
 const domainFiles = [
   'api/routes/knowledge.js',
@@ -40,4 +43,32 @@ test('OWN-41: cron entrega a descrição própria e não promove revisões', asy
   const source = await readFile('cron/checkReminders.js', 'utf8');
   assert.match(source, /reminder\.description/);
   assert.doesNotMatch(source, /promoteDueScheduled|promoteScheduledRevisions/);
+});
+
+test('OWN-41: CRUD HTTP real usa Knowledge, Benefits e Reminders sem SQL editorial', async t => {
+  const harness = await createDependencyHarness(t, { forbidEditorial: true });
+  const auth = { Authorization: 'Bearer manager' };
+  const knowledge = await harness.request.post('/api/knowledge').set(auth).send({
+    title: 'Texto próprio', category: 'Operação', content: 'Conteúdo simples',
+  }).expect(201);
+  await harness.request.get('/api/knowledge?limit=20&offset=0').set(auth).expect(200);
+  await harness.request.put(`/api/knowledge/${knowledge.body.id}`).set(auth).send({
+    title: 'Texto atualizado', category: 'Operação', content: 'Texto seguro',
+  }).expect(200);
+  const benefit = await harness.request.post('/api/benefits').set(auth).send({
+    company: 'Benefício próprio', description: 'Descrição', instructions: 'Instruções',
+  }).expect(201);
+  await harness.request.get('/api/benefits?limit=20&offset=0').set(auth).expect(200);
+  await harness.request.put(`/api/benefits/${benefit.body.id}`).set(auth).send({
+    company: 'Benefício atualizado', category: '', description: 'Nova descrição',
+    instructions: 'Novas instruções', order: 0, active: true,
+  }).expect(200);
+  await harness.request.post('/api/reminders').set(auth).send({
+    title: 'Lembrete próprio', description: 'Descrição do lembrete', trigger_day: 15,
+  }).expect(201);
+
+  assertOwnDomainAccess(harness.state, /knowledge_base/);
+  assertOwnDomainAccess(harness.state, /benefits/);
+  assertOwnDomainAccess(harness.state, /reminders/);
+  assertNoEditorialAccess(harness.state);
 });
