@@ -80,8 +80,11 @@ qualquer volume histórico.
   idempotente incluída nos dois cenários.
 - `npm run test:migration-readiness` — PASS, sem relações editoriais.
 - `node scripts/test-academy.mjs` — 6 PASS no database bootstrap isolado.
-- Cabeça testada: `dfea181` (`test: bind migration harness to disposable cluster`).
-- `npm run verify` — 805 PASS, 2 skips esperados por plataforma.
+- Teste unitário adicional — cleanup de `client.release()` e `pool.end()` quando a
+  identidade da Academy é rejeitada.
+- Cabeça testada: `6cb537f` (`fix: close rejected academy migration connections`).
+- `npm run verify` — 808 testes: 806 PASS, 0 falhas e 2 skips esperados por
+  plataforma.
 - `git diff --check` — PASS.
 - Identidades read-only dos clusters na VPS: OWN-43 `7704035034504839201`,
   produção `7667213608036888610`, staging `7665192068030894114`; são distintas.
@@ -95,7 +98,8 @@ qualquer volume histórico.
   `034`=`449f8fba3547004da332a931c3b2d22b74be67fd4610128df751ca8fc44da25f`,
   `035`=`af3370a383f25df1414af6133a2cb25f0e45f1cfd4007d6f1cc52f96aa4488a8`.
 - A alteração ficou limitada à proteção de identidade do harness, às expectativas
-  de grants, à exclusão explícita da fixture de readiness e à documentação.
+  de grants, à exclusão explícita da fixture de readiness, ao cleanup seguro da
+  Academy e à documentação.
 
 ## Decisão do gate
 
