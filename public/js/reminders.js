@@ -1,15 +1,12 @@
 import { can, fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, closeDialog, element, openDialog, setDialogCloseGuard } from './ui.js';
-import { renderBlocks } from './cms-block-renderer.js';
 
 const requests = { fetchAPI, fetchAPIPage };
-const renderContent = renderBlocks;
 export function mount(pageScope) {
 const user = pageScope.user;
 const { fetchAPI, fetchAPIPage } = pageScope.bindAPI(requests);
 const showToast = pageScope.toast;
 const location = pageScope.location;
-const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: pageScope.signal });
 pageScope.cleanup(() => { ++remindersRequest; ++deliveriesRequest; ++cronRequest; ++reminderDetailRequest; });
 const canManage = can(user, 'manageReminders');
 if (canManage) {
@@ -116,7 +113,7 @@ function renderTable() {
       : titleContent]);
     if (contentHref) row.id = `reminder-${reminder.id.toLowerCase()}`;
     const content = element('div', { className: 'table-detail reminder-content' });
-    renderBlocks(content, reminder.content_blocks, { fallbackText: reminder.description || '' });
+    if (reminder.description) content.append(element('p', { text: reminder.description }));
     if (content.childNodes.length) title.append(content);
     row.append(title);
     addCell(row, `Dia ${reminder.trigger_day}`);
@@ -164,7 +161,8 @@ function renderReminderDetail(reminder) {
   reminderDetail.hidden = false;
   reminderDetailTitle.textContent = reminder.title || 'Lembrete';
   reminderDetailMeta.textContent = `Dia ${reminder.trigger_day || '—'} · ${targetLabel(reminder.target_users)}`;
-  renderBlocks(reminderDetailContent, reminder.content_blocks, { fallbackText: reminder.description || '' });
+  clear(reminderDetailContent);
+  if (reminder.description) reminderDetailContent.append(element('p', { text: reminder.description }));
   if (!reminderDetailContent.childNodes.length) {
     reminderDetailContent.append(element('p', { text: 'Este lembrete não possui conteúdo publicado.' }));
   }

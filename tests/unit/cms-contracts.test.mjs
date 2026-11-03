@@ -139,11 +139,10 @@ test('source deletion removes CMS circulation but leaves assets for retention', 
   assert.equal(calls.some(({ sql }) => sql.includes('DELETE FROM cms_assets')), false);
 });
 
-test.skip('legacy managed reminder delivery contract', () => {
-  assert.equal(reminderForDelivery({
-    description: 'Legacy body', cms_document_id: 'document-1', cms_blocks: [{ type: 'divider' }],
-  }), null);
-  assert.equal(reminderForDelivery({ description: 'Legacy body', cms_blocks: [{ type: 'divider' }] }).description, 'Legacy body');
+test('reminder delivery contract uses the own description snapshot', () => {
+  const reminder = { id: 'reminder-1', title: 'Own reminder', description: 'Own body', active: true };
+  assert.equal(reminderForDelivery(reminder), reminder);
+  assert.equal(reminderForDelivery(reminder).description, 'Own body');
 });
 
 test.skip('legacy CMS asset lock protocol', async () => {

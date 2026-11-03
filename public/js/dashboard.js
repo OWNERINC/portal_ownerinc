@@ -1,12 +1,9 @@
 import { fetchAPI } from './auth.js';
-import { blocksToText, renderBlocks } from './cms-block-renderer.js';
 import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
 
 const requests = { fetchAPI };
-const renderContent = renderBlocks;
 export function mount(page) {
-const { fetchAPI } = page.bindAPI(requests);
-const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
+  const { fetchAPI } = page.bindAPI(requests);
 page.cleanup(() => { ++remindersRequest; ++academyRequest; });
 
 const TIME_ZONE = 'America/Sao_Paulo';
@@ -45,11 +42,6 @@ function reminderContentHref(reminder) {
   return reminder.content_url === expected ? reminder.content_url : expected;
 }
 
-function excerpt(blocks, fallback) {
-  const firstText = blocks?.find(block => ['paragraph', 'callout'].includes(block.type));
-  return ((firstText?.text || blocksToText(blocks)).replace(/\s+/g, ' ').trim() || fallback).slice(0, 180);
-}
-
 function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('aria-hidden', 'true');
@@ -59,7 +51,7 @@ function icon(name) {
   return svg;
 }
 
-function storyCard({ title, category, description, blocks, href, newTab, image, alt, meta }) {
+function storyCard({ title, category, description, href, newTab, image, alt, meta }) {
   const titleNode = href
     ? element('a', {
       className: 'dashboard-story-card-title', href,
@@ -70,10 +62,9 @@ function storyCard({ title, category, description, blocks, href, newTab, image, 
     titleNode,
     element('small', { text: [category, meta].filter(Boolean).join(' · ') }),
   ]);
-  if (blocks || description) {
+  if (description) {
     const copy = element('div', { className: 'dashboard-story-card-copy' });
-    if (blocks) renderBlocks(copy, blocks, { fallbackText: description || '' });
-    else copy.append(element('p', { text: description }));
+    copy.append(element('p', { text: description }));
     body.append(copy);
   }
   const children = image
@@ -100,7 +91,6 @@ async function loadReminders() {
       title: reminder.title,
       category: days === 0 ? 'Hoje' : `Em ${days} ${days === 1 ? 'dia' : 'dias'}`,
       description: reminder.description || '',
-      blocks: reminder.content_blocks,
       href: reminderContentHref(reminder),
     })));
   } catch {
@@ -145,7 +135,6 @@ async function loadAcademy() {
         title: course.title,
         category: course.category || 'Desenvolvimento',
         description: course.description || '',
-        blocks: course.content_blocks,
         href,
         newTab: course.delivery_mode !== 'internal' && Boolean(safeHttpUrl(course.url)),
         image: cardImages[index % cardImages.length][0],

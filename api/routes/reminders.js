@@ -12,7 +12,9 @@ const schema = {
   target_users: targetUsers, channel: oneOf('email'), active: boolean,
 };
 const listQuery = { all: (value) => ['true', 'false'].includes(value), active: (value) => value === 'true' };
-const reminderContentUrl = id => `/reminders.html#reminder-${encodeURIComponent(id)}`;
+const reminderContentUrl = id => uuid(id)
+  ? `/reminders.html#reminder-${id.toLowerCase()}`
+  : null;
 const date = (value) => {
   const parsed = new Date(`${value}T00:00:00Z`);
   return /^\d{4}-\d{2}-\d{2}$/.test(value)

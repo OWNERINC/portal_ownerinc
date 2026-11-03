@@ -268,6 +268,19 @@ test('delivery history returns reminder, recipient, reason, stable ID, and pagin
   assert.deepEqual(history.params, ['failed', '00000000-0000-4000-8000-000000000001', 20, 20]);
 });
 
+test('orphaned delivery history has no fabricated reminder URL', async () => {
+  deliveryRows = [{
+    id: '00000000-0000-4000-8000-000000000002', reminder_id: null,
+    scheduled_date: '2026-08-17', status: 'skipped', attempt_count: 1,
+  }];
+  deliveryCount = 1;
+  const response = await request(app)
+    .get('/api/reminders/deliveries?limit=20&offset=0')
+    .set('x-test-admin', 'true');
+  assert.equal(response.status, 200);
+  assert.equal(response.body[0].content_url, null);
+});
+
 test('only reminder managers can request inactive and all-audience records', async () => {
   assert.equal((await request(app).get('/api/reminders?all=true')).status, 403);
   const response = await request(app).get('/api/reminders?all=true').set('x-test-admin', 'true');
