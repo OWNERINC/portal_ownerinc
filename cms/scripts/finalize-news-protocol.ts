@@ -27,16 +27,22 @@ import {
 } from './provision-db'
 import { parsePortalDatabaseName } from './database-contract'
 import { NEWS_MUTATION_LEDGER_STATEMENTS, NEWS_MUTATION_TABLES, type NewsMutationLedgerOperation } from '../src/publication/mutation-ledger'
-import { buildNewsMutationTriggersDDL } from '../src/publication/mutation-triggers'
+import { buildNewsMutationTriggersDDL, NEWS_MUTATION_OWNER_FRAGMENTS } from '../src/publication/mutation-triggers'
 import {
   buildNewsMigrationBootstrapRunDDL,
+  NEWS_BOOTSTRAP_OWNER_FRAGMENTS,
   NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE,
   NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS,
 } from '../src/publication/bootstrap-run'
 import {
+  PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL, PROTOCOL_TRIGGER_EXECUTE_REVOKE_SQL, verifyProtocolFunctionContract,
+  type ProtocolOwnerFragments,
+} from '../src/database/protocol-function-contract'
+import {
   newsProtocolObserverPrivilegesVerificationSQL,
   newsProtocolObserverRoleVerificationSQL,
-  observerRelationProvisioningSQL,
+  observerRelationOnlyProvisioningSQL,
+  newsProtocolObserverPostMigrationVerificationSQL,
 } from './news-protocol-observer-contract'
 
 /** Historical export retained for test/import compatibility. The finalizer now
@@ -83,6 +89,8 @@ export const finalizerDiagnosticPhases = [
 export type FinalizerDiagnosticPhase = typeof finalizerDiagnosticPhases[number]
 export const finalizerGrantOperations = Object.freeze([
   'runtime-grants', 'observer-relation-grants', 'admin-role-reset', 'ownership-transfer', 'observer-privileges-verify',
+  'migrator-role-set', 'control-role-set', 'protocol-relation-grants', 'control-function-create',
+  'control-function-acl', 'trigger-execute-grant', 'trigger-install', 'trigger-execute-revoke',
 ] as const)
 export type FinalizerDiagnosticOperation = NewsMutationLedgerOperation | typeof finalizerGrantOperations[number]
 export type FinalizerTriggerDiagnosticDetails = CatalogTriggerDiagnosticDetails
@@ -909,7 +917,7 @@ const CONTROL_RUN_UPDATE_COLUMNS = new Set([
   'reconciliation_chain_sha256', 'sealed_sequence', 'sealed_chain_sha256', 'sealed_at',
 ])
 const CONTROL_RUN_INSERT_COLUMNS = new Set<string>(NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS)
-export const NEWS_MIGRATION_ITEM_BINDING_DDL = `
+const bindingFunctionCreate = `
 CREATE OR REPLACE FUNCTION public.owner_news_migration_item_binding_guard()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public
@@ -946,10 +954,12 @@ BEGIN
   RETURN NEW;
 END;
 $owner_news_binding$;
-REVOKE ALL ON FUNCTION public.owner_news_migration_item_binding_guard() FROM PUBLIC, cms_runtime;
-ALTER FUNCTION public.owner_news_migration_item_binding_guard() OWNER TO cms_control;
-GRANT SELECT ON public.news_migration_items TO cms_control;
-DROP TRIGGER IF EXISTS owner_news_migration_item_binding_guard ON public.news_migration_items;
+`
+const bindingFunctionACL = `REVOKE ALL ON FUNCTION public.owner_news_migration_item_binding_guard() FROM PUBLIC, cms_runtime;
+`
+const bindingRelationGrants = `GRANT SELECT ON public.news_migration_items TO cms_control;
+`
+const bindingTriggers = `DROP TRIGGER IF EXISTS owner_news_migration_item_binding_guard ON public.news_migration_items;
 CREATE TRIGGER owner_news_migration_item_binding_guard BEFORE INSERT OR UPDATE ON public.news_migration_items
   FOR EACH ROW EXECUTE FUNCTION public.owner_news_migration_item_binding_guard();
 ALTER TABLE public.news_migration_items ENABLE ALWAYS TRIGGER owner_news_migration_item_binding_guard;
@@ -958,6 +968,14 @@ CREATE TRIGGER owner_news_migration_run_binding_guard BEFORE UPDATE OR DELETE ON
   FOR EACH ROW EXECUTE FUNCTION public.owner_news_migration_item_binding_guard();
 ALTER TABLE public.news_migration_runs ENABLE ALWAYS TRIGGER owner_news_migration_run_binding_guard;
 `
+
+export const NEWS_BINDING_OWNER_FRAGMENTS: ProtocolOwnerFragments = Object.freeze({
+  functionCreate: bindingFunctionCreate, functionACL: bindingFunctionACL,
+  relationGrants: bindingRelationGrants, triggers: bindingTriggers,
+})
+export const NEWS_MIGRATION_ITEM_BINDING_DDL = bindingFunctionCreate + bindingFunctionACL
+  + 'ALTER FUNCTION public.owner_news_migration_item_binding_guard() OWNER TO cms_control;\n'
+  + bindingRelationGrants + bindingTriggers
 
 export type QueryResult = { rows: Record<string, unknown>[] }
 export type FinalizerClient = {
@@ -1555,13 +1573,20 @@ async function verifyInstalled(client: FinalizerClient,
   options: { observerAudit?: boolean; protocolVersion: 1 | 2 } = { protocolVersion: 1 }): Promise<void> {
   setPhase('verify-installed')
   const approvedProtocolOidArray = approvedProtocolOidArraySQL(options.protocolVersion)
-  const head = await client.query(`SELECT sequence::text AS sequence, chain_sha256, coverage_version, write_barrier,
+  const verifyHead = async () => {
+    const head = await client.query(`SELECT sequence::text AS sequence, chain_sha256, coverage_version, write_barrier,
     barrier_run_id, barrier_epoch, barrier_receipt_sha256 FROM public.owner_news_mutation_head WHERE singleton=true`)
-  const coverage = head.rows[0]?.coverage_version
-  if (head.rows.length !== 1 || !/^(0|[1-9][0-9]*)$/u.test(String(head.rows[0]?.sequence))
-    || !/^[0-9a-f]{64}$/u.test(String(head.rows[0]?.chain_sha256))
-    || (coverage !== 0 && !(options.observerAudit && coverage === 1))
-     || !['open', 'sealed', 'frozen'].includes(String(head.rows[0]?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
+    const coverage = head.rows[0]?.coverage_version
+    if (head.rows.length !== 1 || !/^(0|[1-9][0-9]*)$/u.test(String(head.rows[0]?.sequence))
+      || !/^[0-9a-f]{64}$/u.test(String(head.rows[0]?.chain_sha256))
+      || (coverage !== 0 && !(options.observerAudit && coverage === 1))
+      || !['open', 'sealed', 'frozen'].includes(String(head.rows[0]?.write_barrier))) fail('ledger_head_invalid_or_coverage_activated')
+  }
+  const observerPrivileges = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
+  const observerDefaults = await client.query(newsProtocolObserverPostMigrationVerificationSQL)
+  if (observerPrivileges.rows[0]?.safe !== true || observerDefaults.rows[0]?.safe !== true) {
+    fail('observer_privilege_contract_mismatch')
+  }
   const fns = await readProtocolFunctions(client, options.protocolVersion)
   assertCanonicalProtocolFunctions(fns.rows, protocolFunctionBodies(options.protocolVersion))
 
@@ -1572,24 +1597,34 @@ async function verifyInstalled(client: FinalizerClient,
   if (options.observerAudit) {
     // Shared ACL queries name cms_runtime explicitly. An observer must not
     // change transaction identity to perform this installed-state check.
+    await verifyHead()
     const privileges = await client.query(runtimeProtocolPrivilegesVerifySQL)
     const functions = await client.query(runtimeProtocolFunctionsVerifySQL)
     runtimeSafe = privileges.rows[0]?.safe === true && functions.rows[0]?.safe === true
   } else {
     // Preserve the one-shot finalizer's existing runtime-principal verification.
     await client.query('SET LOCAL ROLE cms_runtime')
+    let verificationFailed = false
     try {
       const identity = await client.query('SELECT current_user AS role, current_database() AS db')
       if (identity.rows[0]?.role !== 'cms_runtime' || identity.rows[0]?.db !== 'ownerinc_cms') {
         fail('runtime_verifier_role_switch_failed')
       }
+      await verifyHead()
       const privileges = await client.query(runtimeProtocolPrivilegesVerifySQL)
       const functions = await client.query(runtimeProtocolFunctionsVerifySQL)
       runtimeSafe = privileges.rows[0]?.safe === true && functions.rows[0]?.safe === true
+      if (!runtimeSafe) fail('runtime_protocol_acl_mismatch')
+    } catch (error) {
+      verificationFailed = true
+      throw error
     } finally {
       // If a verifier query aborts PostgreSQL's transaction, RESET also errors;
       // the outer transaction rollback restores cms_admin before recovery.
-      try { await client.query('RESET ROLE') } catch { /* The caller rolls back the aborted tx. */ }
+      try { await client.query('RESET ROLE') } catch (error) {
+        if (!verificationFailed) throw error
+        // Preserve the first failure; the caller rolls back the aborted tx.
+      }
     }
   }
   if (!runtimeSafe) fail('runtime_protocol_acl_mismatch')
@@ -1600,6 +1635,10 @@ async function verifyInstalled(client: FinalizerClient,
   if (restored.rows[0]?.role !== expectedConnectionRole || restored.rows[0]?.db !== 'ownerinc_cms'
     || restored.rows[0]?.superuser !== expectedSuperuser) {
     fail(options.observerAudit ? 'unsafe_observer_target' : 'admin_role_restore_failed')
+  }
+
+  if (await verifyProtocolFunctionContract(client) !== (options.protocolVersion === 1 ? 'v1' : 'v2')) {
+    fail('protocol_acl_mismatch')
   }
 
   const scope = await client.query(`SELECT c.relname AS relation, c.relkind AS kind, a.attname AS column_name,
@@ -1805,20 +1844,6 @@ export async function auditNewsProtocolReadOnly(client: FinalizerClient, portalD
 
 type ProtocolFinalizerOperation = 'finalize' | 'upgrade-v1-to-v2'
 
-function migrationOwnedProtocolDDL(sql: string): string {
-  return sql.replace(/^ALTER FUNCTION public\.[^;]+ OWNER TO cms_control;\s*$/gmu, '')
-}
-
-function protocolOwnershipTransferSQL(version: 1 | 2): string {
-  return `
-ALTER FUNCTION public.owner_news_mutation_guard_stmt() OWNER TO cms_control;
-ALTER FUNCTION public.owner_news_mutation_capture_row() OWNER TO cms_control;
-ALTER FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text) OWNER TO cms_control;
-ALTER FUNCTION public.owner_news_migration_item_binding_guard() OWNER TO cms_control;
-${version === 2 ? `ALTER FUNCTION ${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE} OWNER TO cms_control;` : ''}
-`
-}
-
 async function runProtocolFinalizerOperation(client: FinalizerClient, operation: ProtocolFinalizerOperation, portalDatabase: string):
 Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
   let phase: FinalizerDiagnosticPhase = 'transaction-begin'
@@ -1842,46 +1867,77 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
     }
 
     if (operation === 'finalize' && protocolState === 'empty') {
+      phase = 'protocol-grants'
+      diagnosticOperation = 'migrator-role-set'
       await client.query('SET LOCAL ROLE cms_migrator')
       phase = 'protocol-ledger-ddl'
       for (const statement of NEWS_MUTATION_LEDGER_STATEMENTS) {
         diagnosticOperation = statement.operation
         await client.query(statement.sql)
       }
-      diagnosticOperation = undefined
-      phase = 'protocol-trigger-ddl'
-      await client.query(migrationOwnedProtocolDDL(buildNewsMutationTriggersDDL()))
-      phase = 'protocol-binding-ddl'
-      await client.query(migrationOwnedProtocolDDL(NEWS_MIGRATION_ITEM_BINDING_DDL))
       phase = 'protocol-grants'
+      diagnosticOperation = 'protocol-relation-grants'
+      await client.query(NEWS_MUTATION_OWNER_FRAGMENTS.relationGrants)
+      await client.query(NEWS_BINDING_OWNER_FRAGMENTS.relationGrants)
+      await client.query(NEWS_BOOTSTRAP_OWNER_FRAGMENTS.relationGrants)
       diagnosticOperation = 'runtime-grants'
       await client.query(grantsSQL)
-      diagnosticOperation = undefined
-      phase = 'protocol-bootstrap-ddl'
-      await client.query(migrationOwnedProtocolDDL(buildNewsMigrationBootstrapRunDDL()))
-      phase = 'protocol-grants'
       diagnosticOperation = 'observer-relation-grants'
-      await client.query(observerRelationProvisioningSQL(portalDatabase))
+      await client.query(observerRelationOnlyProvisioningSQL(portalDatabase))
       diagnosticOperation = 'admin-role-reset'
       await client.query('RESET ROLE')
-      diagnosticOperation = 'ownership-transfer'
-      await client.query(protocolOwnershipTransferSQL(2))
+      diagnosticOperation = 'control-role-set'
+      await client.query('SET LOCAL ROLE cms_control')
+      diagnosticOperation = 'control-function-create'
+      await client.query(NEWS_MUTATION_OWNER_FRAGMENTS.functionCreate)
+      diagnosticOperation = 'control-function-acl'
+      await client.query(NEWS_MUTATION_OWNER_FRAGMENTS.functionACL)
+      diagnosticOperation = 'control-function-create'
+      await client.query(NEWS_BINDING_OWNER_FRAGMENTS.functionCreate)
+      diagnosticOperation = 'control-function-acl'
+      await client.query(NEWS_BINDING_OWNER_FRAGMENTS.functionACL)
+      diagnosticOperation = 'control-function-create'
+      await client.query(NEWS_BOOTSTRAP_OWNER_FRAGMENTS.functionCreate)
+      diagnosticOperation = 'control-function-acl'
+      await client.query(NEWS_BOOTSTRAP_OWNER_FRAGMENTS.functionACL)
+      diagnosticOperation = 'trigger-execute-grant'
+      await client.query(PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL)
+      diagnosticOperation = 'admin-role-reset'
+      await client.query('RESET ROLE')
+      diagnosticOperation = 'migrator-role-set'
+      await client.query('SET LOCAL ROLE cms_migrator')
+      diagnosticOperation = 'trigger-install'
+      await client.query(NEWS_MUTATION_OWNER_FRAGMENTS.triggers)
+      await client.query(NEWS_BINDING_OWNER_FRAGMENTS.triggers)
+      diagnosticOperation = 'admin-role-reset'
+      await client.query('RESET ROLE')
+      diagnosticOperation = 'control-role-set'
+      await client.query('SET LOCAL ROLE cms_control')
+      diagnosticOperation = 'trigger-execute-revoke'
+      await client.query(PROTOCOL_TRIGGER_EXECUTE_REVOKE_SQL)
+      diagnosticOperation = 'admin-role-reset'
+      await client.query('RESET ROLE')
       diagnosticOperation = 'observer-privileges-verify'
       const observer = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
       if (observer.rows[0]?.safe !== true) fail('observer_privilege_contract_mismatch')
       diagnosticOperation = undefined
       await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
     } else if (operation === 'upgrade-v1-to-v2' && protocolState === 'v1') {
-      phase = 'protocol-bootstrap-ddl'
-      await client.query('SET LOCAL ROLE cms_migrator')
-      await client.query(migrationOwnedProtocolDDL(buildNewsMigrationBootstrapRunDDL()))
       phase = 'protocol-grants'
-      diagnosticOperation = 'observer-relation-grants'
-      await client.query(observerRelationProvisioningSQL(portalDatabase))
+      diagnosticOperation = 'control-role-set'
+      await client.query('SET LOCAL ROLE cms_control')
+      diagnosticOperation = 'control-function-create'
+      await client.query(NEWS_BOOTSTRAP_OWNER_FRAGMENTS.functionCreate)
+      diagnosticOperation = 'control-function-acl'
+      await client.query(NEWS_BOOTSTRAP_OWNER_FRAGMENTS.functionACL)
       diagnosticOperation = 'admin-role-reset'
       await client.query('RESET ROLE')
-      diagnosticOperation = 'ownership-transfer'
-      await client.query(`ALTER FUNCTION ${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE} OWNER TO cms_control`)
+      diagnosticOperation = 'migrator-role-set'
+      await client.query('SET LOCAL ROLE cms_migrator')
+      diagnosticOperation = 'protocol-relation-grants'
+      await client.query(NEWS_BOOTSTRAP_OWNER_FRAGMENTS.relationGrants)
+      diagnosticOperation = 'admin-role-reset'
+      await client.query('RESET ROLE')
       diagnosticOperation = 'observer-privileges-verify'
       const observer = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
       if (observer.rows[0]?.safe !== true) fail('observer_privilege_contract_mismatch')

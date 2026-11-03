@@ -40,6 +40,8 @@ export const manualFinalizerReasons = Object.freeze([
 const phases = new Set(manualFinalizerPhases), reasons = new Set(manualFinalizerReasons);
 export const manualFinalizerGrantOperations = Object.freeze([
   'runtime-grants', 'observer-relation-grants', 'admin-role-reset', 'ownership-transfer', 'observer-privileges-verify',
+  'migrator-role-set', 'control-role-set', 'protocol-relation-grants', 'control-function-create',
+  'control-function-acl', 'trigger-execute-grant', 'trigger-install', 'trigger-execute-revoke',
 ]);
 export const manualFinalizerLedgerOperations = Object.freeze(['ledger-head-create', 'ledger-head-init', 'ledger-events-create']);
 function operationForPhase(phase, operation) {

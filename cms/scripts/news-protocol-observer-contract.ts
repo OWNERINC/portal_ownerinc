@@ -36,7 +36,7 @@ REVOKE CREATE ON SCHEMA public FROM ${OBSERVER_ROLE};
 /** Post-migration relation normalization executed by cms_migrator. Cluster and
  * database/schema authority stays in cms-cluster-bootstrap; this step only
  * normalizes objects that now exist and revokes broad future grants. */
-export function observerRelationProvisioningSQL(rawPortalDatabase: string): string {
+function observerRelationProvisioningPrefix(rawPortalDatabase: string): string {
   const portalDatabase = parsePortalDatabaseName(rawPortalDatabase)
   return `DO $ownerinc_observer_relation_contract$
 BEGIN
@@ -65,8 +65,12 @@ REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${OBSERVER_ROLE};
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${OBSERVER_ROLE};
 ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator IN SCHEMA public REVOKE ALL ON TABLES FROM ${OBSERVER_ROLE};
 ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator IN SCHEMA public REVOKE ALL ON SEQUENCES FROM ${OBSERVER_ROLE};
-ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM ${OBSERVER_ROLE};
-GRANT SELECT ON TABLE public.payload_migrations TO ${OBSERVER_ROLE};
+`
+}
+
+const historicalObserverFunctionDefaults = `ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM ${OBSERVER_ROLE};
+`
+const observerRelationProvisioningSuffix = `GRANT SELECT ON TABLE public.payload_migrations TO ${OBSERVER_ROLE};
 DO $ownerinc_observer_optional_head$
 BEGIN
   IF pg_catalog.to_regclass('public.owner_news_mutation_head') IS NOT NULL THEN
@@ -75,6 +79,16 @@ BEGIN
 END
 $ownerinc_observer_optional_head$;
 `
+
+/** Relation-only replay: function-default drift is refused by verification. */
+export function observerRelationOnlyProvisioningSQL(rawPortalDatabase: string): string {
+  return observerRelationProvisioningPrefix(rawPortalDatabase) + observerRelationProvisioningSuffix
+}
+
+/** Historical aggregate retained byte-for-byte for existing consumers. */
+export function observerRelationProvisioningSQL(rawPortalDatabase: string): string {
+  return observerRelationProvisioningPrefix(rawPortalDatabase) + historicalObserverFunctionDefaults
+    + observerRelationProvisioningSuffix
 }
 
 /** Verifies the common post-migration floor before the protocol head exists.

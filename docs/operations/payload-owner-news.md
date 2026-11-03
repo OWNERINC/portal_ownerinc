@@ -300,6 +300,34 @@ deverá verificar. Nunca use esse finalizer para uma inspeção read-only. Leia
 [o runbook de migração](./owner-news-payload-migration.md#finalizer-one-shot-e-auditoria-instalada)
 antes de provisionar ou executar qualquer um deles.
 
+#### Sequência owner-scoped e replay de grants
+
+O reparo owner-scoped cria relações/ledger e triggers como `cms_migrator` e
+funções diretamente como `cms_control`, em uma transação sob `7194030`.
+PUBLIC é revogado; somente no cold install, migrator recebe EXECUTE temporário
+sem grant option em `owner_news_mutation_guard_stmt()`,
+`owner_news_mutation_capture_row()` e `owner_news_migration_item_binding_guard()`.
+Os três grants são revogados antes da verificação final/COMMIT. Não há transferência
+operacional de owner. Agregados históricos conservam seus bytes para comparação.
+
+O finalizer lê o head sob identidade `cms_runtime` conferida e verifica a
+restauração para admin não-superuser. Observer conserva leitura direta e nenhuma
+troca de role. V1→V2 acrescenta somente bootstrap e os nove INSERT-column grants;
+reentry V2 apenas verifica. Coverage continua 0 e `ready=false`.
+
+`provision-db.ts --grants` usa exclusivamente migrator, adquire `7194030` antes
+de classificar absent/V1-shaped/V2-shaped e normaliza apenas relações, sequences,
+colunas e defaults relacionais. Funções são verificadas por assinatura, owner e
+ACL exata; drift, overload, grants inesperados ou estado parcial causam rollback.
+Defaults de funções do observer são verificados, sem normalização. Replay não lê
+head/coverage nem exige população vazia; a classificação não certifica corpos,
+triggers completos, ativação ou recuperação.
+
+Esse reparo recebeu revisão de fonte e checks offline. A qualificação nova de
+cold/upgrade/replay/rollback em Linux PG16 permanece pendente, exclusivamente em CI.
+O harness Desktop descrito historicamente abaixo não substitui o driver com as
+identidades corrigidas. Fonte aprovada não concede aceite de banco ou produção.
+
 Esta compatibilidade de catálogo e os testes offline não são aceitação de banco.
 Cold install V2 e upgrade V1→V2 precisam de duas novas fixtures PostgreSQL 16 e
 leases one-shot independentes, após autorização separada; não reutilize a fixture

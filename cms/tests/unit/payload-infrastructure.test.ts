@@ -22,9 +22,11 @@ import {
 import { privateStorageDir } from '../../src/media/storage'
 import {
   newsProtocolObserverPostMigrationVerificationSQL,
-  observerRelationProvisioningSQL,
+  observerRelationOnlyProvisioningSQL,
 } from '../../scripts/news-protocol-observer-contract'
 import { NEWS_MUTATION_TABLES } from '../../src/publication/mutation-ledger'
+import { PROTOCOL_FUNCTION_CONTRACT, PROTOCOL_FUNCTION_CATALOG_SQL, PROTOCOL_REQUIRED_RELATIONS_SQL,
+  PROTOCOL_TRIGGER_RESIDUE_SQL } from '../../src/database/protocol-function-contract'
 
 const PORTAL_ENV = { CMS_PORTAL_DATABASE_NAME: 'portal' }
 
@@ -111,17 +113,114 @@ test('the common post-migration grants path normalizes and verifies observer acc
       settings_safe: true, ddl: true, create_schema: false, temporary: false, member: false,
     }] }
     if (sql === newsProtocolObserverPostMigrationVerificationSQL || sql === cmsAdminDatabaseRoleVerificationSQL
-        || sql === clusterRolesPublicVerificationSQL) return { rows: [{ safe: true }] }
+        || sql === clusterRolesPublicVerificationSQL || sql === runtimeProtocolPrivilegesVerifySQL) return { rows: [{ safe: true }] }
+    if (sql === PROTOCOL_FUNCTION_CATALOG_SQL) return { rows: [] }
+    if (sql === PROTOCOL_REQUIRED_RELATIONS_SQL) return { rows: ['payload_migrations', 'news_migration_runs', 'news_migration_items']
+      .map(name => ({ name, kind: 'r', owner: 'cms_migrator' })) }
+    if (sql === PROTOCOL_TRIGGER_RESIDUE_SQL) return { rows: [{ present: false }] }
     return { rows: [] }
   } }
   await run('--grants', { CMS_DATABASE_URL: 'postgresql://cms_migrator@cms.invalid/ownerinc_cms',
     CMS_PORTAL_DATABASE_NAME: 'portal_test' }, client)
   const grantsIndex = statements.indexOf(grantsSQL)
-  const observerIndex = statements.indexOf(observerRelationProvisioningSQL('portal_test'))
+  const observerIndex = statements.indexOf(observerRelationOnlyProvisioningSQL('portal_test'))
   const verifyIndex = statements.indexOf(newsProtocolObserverPostMigrationVerificationSQL)
   assert.ok(grantsIndex > statements.indexOf('BEGIN'))
   assert.ok(observerIndex > grantsIndex && verifyIndex > observerIndex)
   assert.equal(statements.at(-1), 'COMMIT')
+  assert.ok(statements.indexOf('SELECT pg_catalog.pg_advisory_xact_lock(7194030)') < statements.indexOf(PROTOCOL_FUNCTION_CATALOG_SQL))
+  assert.ok(statements.indexOf(PROTOCOL_FUNCTION_CATALOG_SQL) < grantsIndex)
+  assert.ok(statements.lastIndexOf(PROTOCOL_FUNCTION_CATALOG_SQL) > verifyIndex)
+})
+
+function grantsReplayFixture(version: 0 | 1 | 2, fault?: 'before' | 'after' | 'state' | 'relations' | 'observer') {
+  const statements: string[] = []
+  const persisted = { relationACL: 'drifted', coverage: 1, population: 7, barrier: 'frozen', sequence: '19' }
+  let provisional = { ...persisted }, functionReads = 0
+  const functionRows = (selected: number) => selected === 0 ? [] : PROTOCOL_FUNCTION_CONTRACT.filter(value => value.version <= selected)
+    .map(value => ({ name: value.name, arguments: value.arguments, kind: 'f', owner: 'cms_control',
+      acl: ['cms_control', ...(value.controller ? ['cms_controller'] : [])]
+        .map(grantee => ({ grantor: 'cms_control', grantee, privilege: 'EXECUTE', grantable: false })) }))
+  const client = { async connect() {}, async end() {}, async query(sql: string) {
+    statements.push(sql)
+    assert.doesNotMatch(sql, /SET (?:LOCAL )?ROLE|verify_cms_ownership_contract|FROM public\.owner_news_mutation_head/u)
+    assert.doesNotMatch(sql, /(?:REVOKE|GRANT) (?:ALL|EXECUTE)[^;]*ON FUNCTION/u)
+    if (sql.includes('SELECT current_user AS name')) return { rows: [{
+      name: 'cms_migrator', database: 'ownerinc_cms', rolsuper: false, rolcreatedb: false, rolcreaterole: false,
+      rolinherit: false, rolreplication: false, rolbypassrls: false, connection_limit_safe: true, expiry_safe: true,
+      settings_safe: true, ddl: true, create_schema: false, temporary: false, member: false,
+    }] }
+    if (sql === PROTOCOL_FUNCTION_CATALOG_SQL) {
+      assert.ok(statements.includes('SELECT pg_catalog.pg_advisory_xact_lock(7194030)'))
+      functionReads++
+      const rows = functionRows(fault === 'state' && functionReads === 2 ? 1 : version)
+      if (fault === 'before' && functionReads === 1 || fault === 'after' && functionReads === 2) {
+        rows.find(row => row.name === 'owner_news_migration_item_binding_guard')!.acl.push(
+          { grantor: 'cms_control', grantee: 'cms_migrator', privilege: 'EXECUTE', grantable: false })
+      }
+      return { rows }
+    }
+    if (sql === PROTOCOL_REQUIRED_RELATIONS_SQL) return { rows: ['payload_migrations', 'news_migration_runs', 'news_migration_items',
+      ...(version ? ['owner_news_mutation_head', 'owner_news_mutation_events'] : [])]
+      .map(name => ({ name, kind: 'r', owner: 'cms_migrator' })) }
+    if (sql === PROTOCOL_TRIGGER_RESIDUE_SQL) return { rows: [{ present: false }] }
+    if (sql === grantsSQL) { assert.ok(functionReads > 0); provisional.relationACL = 'normalized' }
+    if (sql === 'BEGIN') provisional = { ...persisted }
+    if (sql === 'ROLLBACK') provisional = { ...persisted }
+    if (sql === 'COMMIT') Object.assign(persisted, provisional)
+    return { rows: [{ safe: !(fault === 'relations' && sql === runtimeProtocolPrivilegesVerifySQL
+      || fault === 'observer' && sql === newsProtocolObserverPostMigrationVerificationSQL) }] }
+  } }
+  return { client, statements, persisted }
+}
+
+test('pure migrator replay accepts absent/V1/V2 twice without reading populated coverage-1 state', async () => {
+  for (const version of [0, 1, 2] as const) {
+    const { client, statements, persisted } = grantsReplayFixture(version)
+    const env = { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_migrator@cms.invalid/ownerinc_cms' }
+    await run('--grants', env, client); await run('--grants', env, client)
+    assert.deepEqual(persisted, { relationACL: 'normalized', coverage: 1, population: 7, barrier: 'frozen', sequence: '19' })
+    assert.equal(statements.filter(sql => sql === 'COMMIT').length, 2)
+    assert.equal(statements.filter(sql => sql === PROTOCOL_FUNCTION_CATALOG_SQL).length, 4)
+  }
+})
+
+for (const fault of ['before', 'after', 'state', 'relations', 'observer'] as const) {
+  test(`pure migrator ${fault} refusal rolls back and never repairs control functions`, async () => {
+    const { client, statements, persisted } = grantsReplayFixture(2, fault)
+    await assert.rejects(run('--grants', { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_migrator@cms.invalid/ownerinc_cms' }, client))
+    assert.deepEqual(persisted, { relationACL: 'drifted', coverage: 1, population: 7, barrier: 'frozen', sequence: '19' })
+    assert.equal(statements.at(-1), 'ROLLBACK'); assert.equal(statements.includes('COMMIT'), false)
+    assert.equal(statements.includes(grantsSQL), fault !== 'before')
+  })
+}
+
+test('observer function-default drift survives relation-only normalization and forces rollback', async () => {
+  const { client, statements, persisted } = grantsReplayFixture(2)
+  const query = client.query.bind(client)
+  const functionDefaults = [{ role: 'cms_migrator', namespace: 'public', type: 'f', grantee: 'cms_observer', privilege: 'EXECUTE' }]
+  const before = structuredClone(functionDefaults)
+  let relationNormalized = false, defaultsVerified = false
+  client.query = async sql => {
+    assert.doesNotMatch(sql, /ALTER DEFAULT PRIVILEGES[^;]*ON FUNCTIONS/u)
+    if (sql === observerRelationOnlyProvisioningSQL(PORTAL_ENV.CMS_PORTAL_DATABASE_NAME)) relationNormalized = true
+    if (sql === newsProtocolObserverPostMigrationVerificationSQL) {
+      assert.equal(relationNormalized, true)
+      assert.match(sql, /pg_catalog\.pg_default_acl defaults/u)
+      assert.match(sql, /aclexplode\(defaults\.defaclacl\)/u)
+      assert.doesNotMatch(sql, /defaclobjtype/u, 'function defaults must not be excluded')
+      defaultsVerified = true
+      await query(sql)
+      return { rows: [{ safe: !functionDefaults.some(acl => acl.role === 'cms_migrator'
+        && acl.namespace === 'public' && acl.grantee === 'cms_observer') }] }
+    }
+    return query(sql)
+  }
+  await assert.rejects(run('--grants', { ...PORTAL_ENV, CMS_DATABASE_URL: 'postgresql://cms_migrator@cms.invalid/ownerinc_cms' }, client),
+    /Unsafe CMS observer relation grants/u)
+  assert.equal(defaultsVerified, true); assert.deepEqual(functionDefaults, before)
+  assert.equal(persisted.relationACL, 'drifted'); assert.equal(statements.at(-1), 'ROLLBACK')
+  assert.equal(statements.includes('COMMIT'), false)
 })
 
 test('cluster bootstrap reconciles all bounded roles without ever elevating cms_admin', () => {
@@ -513,9 +612,11 @@ test('runtime grants restore native privileges then narrow optional protocol tab
   for (const allowed of ['progress_state', 'commit_outcome', 'reconciliation_sha256', 'destination_fingerprint', 'unresolved_exceptions']) assert.ok(protocol.includes(`'${allowed}'`))
   for (const forbidden of ['admission_state', 'activation_epoch', 'drain_receipt_sha256', 'reconciliation_sequence', 'reconciliation_chain_sha256', 'sealed_sequence', 'sealed_chain_sha256', 'sealed_at']) assert.ok(!protocol.includes(`'${forbidden}'`))
   assert.match(protocol, /GRANT UPDATE \(%1\$I\) ON TABLE %2\$s TO cms_runtime/)
-  assert.match(protocol, /REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, cms_runtime/)
+  assert.doesNotMatch(protocol, /(?:REVOKE|GRANT)[^;]*ON FUNCTION|function_signature/u)
+  assert.doesNotMatch(grants, /GRANT USAGE ON SCHEMA|ALTER DEFAULT PRIVILEGES[^;]*ON FUNCTIONS/u)
   for (const expected of ['has_column_privilege', 'TRUNCATE', 'TRIGGER', 'owner_news_mutation_head', 'owner_news_mutation_events', 'news_migration_runs']) assert.ok(runtimeProtocolPrivilegesVerifySQL.includes(expected))
-  for (const expected of ['owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row', 'owner_news_seal_run', 'has_function_privilege']) assert.ok(runtimeProtocolFunctionsVerifySQL.includes(expected))
+  for (const expected of ['owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row', 'owner_news_seal_run',
+    'owner_news_migration_item_binding_guard', 'owner_news_bootstrap_run', 'has_function_privilege']) assert.ok(runtimeProtocolFunctionsVerifySQL.includes(expected))
 })
 
 test('runtime preflight fails closed on excessive roles, ownership or missing grants and closes connections', async () => {

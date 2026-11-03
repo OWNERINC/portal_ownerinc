@@ -710,6 +710,8 @@ const FINALIZER_DIAGNOSTIC_REASONS = new Set([
 const FINALIZER_LEDGER_OPERATIONS = new Set(['ledger-head-create', 'ledger-head-init', 'ledger-events-create'])
 const FINALIZER_GRANT_OPERATIONS = new Set([
   'runtime-grants', 'observer-relation-grants', 'admin-role-reset', 'ownership-transfer', 'observer-privileges-verify',
+  'migrator-role-set', 'control-role-set', 'protocol-relation-grants', 'control-function-create',
+  'control-function-acl', 'trigger-execute-grant', 'trigger-install', 'trigger-execute-revoke',
 ])
 const FINALIZER_TRIGGER_DETAIL_KEYS = [
   'trigger_index', 'expected_count', 'observed_count', 'matched_count', 'relation_schema_match', 'enabled_match',

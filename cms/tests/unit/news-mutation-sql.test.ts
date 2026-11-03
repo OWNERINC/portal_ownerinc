@@ -1,10 +1,70 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
-import { buildNewsMutationTriggersDDL, NEWS_MUTATION_TRIGGER_TABLES } from '../../src/publication/mutation-triggers'
+import { createHash } from 'node:crypto'
+import { buildNewsMutationTriggersDDL, NEWS_MUTATION_TRIGGER_TABLES, NEWS_MUTATION_OWNER_FRAGMENTS } from '../../src/publication/mutation-triggers'
 import { NEWS_MUTATION_LEDGER_DDL, NEWS_MUTATION_TABLES } from '../../src/publication/mutation-ledger'
+import { buildNewsMigrationBootstrapRunDDL, NEWS_BOOTSTRAP_OWNER_FRAGMENTS } from '../../src/publication/bootstrap-run'
+import { NEWS_MIGRATION_ITEM_BINDING_DDL, NEWS_BINDING_OWNER_FRAGMENTS, canonicalTriggerDefinitions,
+  extractCanonicalFunctionBodies } from '../../scripts/finalize-news-protocol'
+import { observerRelationProvisioningSQL, observerRelationOnlyProvisioningSQL,
+  buildNewsProtocolObserverProvisioningSQL } from '../../scripts/news-protocol-observer-contract'
 
 const ddl = buildNewsMutationTriggersDDL()
+
+test('observer literal split preserves independently captured published aggregates', () => {
+  // Captured from 1310efc and compared with the scope-amendment saved bytes
+  // before editing the observer module, for both explicit database inputs.
+  const expected = [
+    ['ownerinc', 'ee99196efddd4b6f4e7d04f770f3052a23ee49fe26b12d3b2b0cbff596a74e91', 'e6f98f71f6a58ba04be95c2bcd9c4254ff0dfe2ce3e9b531cf3c0d9a41979ca6'],
+    ['portal_main', '8d5e90707f05069b6fbeb4ac584be78e5a864c636e0b8e185778d3ab83e565fc', 'eccc25466b1bdc6a98ed279e977c92a370cc94f4a003328428016944e68bff2d'],
+  ]
+  const hash = (sql: string) => createHash('sha256').update(sql).digest('hex')
+  for (const [database, relationHash, aggregateHash] of expected) {
+    assert.equal(hash(observerRelationProvisioningSQL(database!)), relationHash)
+    assert.equal(hash(buildNewsProtocolObserverProvisioningSQL(database!)), aggregateHash)
+    const relationOnly = observerRelationOnlyProvisioningSQL(database!)
+    assert.doesNotMatch(relationOnly, /ON FUNCTIONS|SET (?:LOCAL )?ROLE|CREATE ROLE/u)
+    assert.match(relationOnly, /ALTER DEFAULT PRIVILEGES[^;]*ON TABLES/u)
+    assert.match(relationOnly, /ALTER DEFAULT PRIVILEGES[^;]*ON SEQUENCES/u)
+    const legacyLines = observerRelationProvisioningSQL(database!).split('\n')
+    const omitted = legacyLines.filter(line => line.includes('ON FUNCTIONS'))
+    assert.deepEqual(omitted, ['ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM cms_observer;'])
+    assert.equal(relationOnly, legacyLines.filter(line => !line.includes('ON FUNCTIONS')).join('\n'))
+  }
+})
+
+test('owner fragments preserve independently captured 1310efc aggregate, body and 80-trigger bytes', () => {
+  // Captured from git-show 1310efcf9efbc47ce7a159c89e336f89a5122b0f before
+  // refactoring. Do not regenerate these expectations from the current builders.
+  const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+  assert.equal(hash(ddl), '3ba4a65081597dc509e186e2139f20861d4cf469189d314796e49eb49a73eec6')
+  assert.equal(hash(buildNewsMigrationBootstrapRunDDL()), 'b6deead27fd3e315392db836d2cd53855c61a182ece69f8d5da799089343d66d')
+  assert.equal(hash(NEWS_MIGRATION_ITEM_BINDING_DDL), '577a64b4a247a5f23af711a5672d8effbab7f7f3aec02403464dc1c643cfb627')
+  const expected = new Map([
+    ['owner_news_mutation_guard_stmt', 'a78b49c80342746d2a0c316d95af2469f08b320d13439c4aca339db0bd12e332'],
+    ['owner_news_mutation_capture_row', '585f9f3d3fd2daaff59ba9e4399113505bb143eae7a21f6a0e005e2b8d9709d2'],
+    ['owner_news_seal_run', 'bf3916410814f0cba4c542ddfc692f1510e93afe95da695444cd8bd36bc2624b'],
+    ['owner_news_migration_item_binding_guard', 'e90203d4bd2bdc012b045bf47bca26fe15277d6296cfd8a347f948c817d549a3'],
+    ['owner_news_bootstrap_run', 'f64559022a5f9252db4aaceab52a301e9c18ba27aa99c184040d09f00be0cab4'],
+  ])
+  const fragments = [NEWS_MUTATION_OWNER_FRAGMENTS, NEWS_BINDING_OWNER_FRAGMENTS, NEWS_BOOTSTRAP_OWNER_FRAGMENTS]
+  const bodies = extractCanonicalFunctionBodies(fragments.map(value => value.functionCreate).join('\n'), [...expected.keys()])
+  assert.deepEqual(new Map([...bodies].map(([name, body]) => [name, hash(body)])), expected)
+  assert.equal(canonicalTriggerDefinitions.size, 80)
+  assert.equal(hash(JSON.stringify([...canonicalTriggerDefinitions])), '023d759e96f567fb7e8a89b3adb45f5063097148c0d50a050d78817754bb870e')
+  for (const part of fragments) {
+    assert.doesNotMatch(part.functionCreate, /ALTER FUNCTION|GRANT|REVOKE/u)
+    assert.doesNotMatch(part.functionACL, /CREATE|ALTER|ON (?:TABLE|SCHEMA)|DEFAULT PRIVILEGES/u)
+    assert.doesNotMatch(part.relationGrants, /FUNCTION|ON SCHEMA|OWNER TO/u)
+    assert.doesNotMatch(part.triggers, /CREATE OR REPLACE FUNCTION|OWNER TO|GRANT|REVOKE/u)
+  }
+  const emittedTriggers = fragments.map(value => value.triggers).join('\n')
+  assert.equal([...emittedTriggers.matchAll(/CREATE TRIGGER/gu)].length, 80)
+  // Compare the literal trigger statements to the compatibility aggregate too.
+  const triggerStatements = (value: string) => value.match(/CREATE TRIGGER[\s\S]*?EXECUTE FUNCTION[^;]+;/gu)
+  assert.deepEqual(triggerStatements(emittedTriggers), triggerStatements(ddl + NEWS_MIGRATION_ITEM_BINDING_DDL))
+})
 
 test('SQL builder consumes the canonical exact relation inventory with closed identifiers', () => {
   assert.deepEqual(NEWS_MUTATION_TRIGGER_TABLES, NEWS_MUTATION_TABLES)

@@ -4,9 +4,14 @@ import { readFile } from 'node:fs/promises'
 import { runManualRuntimeFinalizer } from '../integration/manual-runtime-finalizer'
 import { extractManualFinalizerDiagnostic } from '../../../scripts/integration/payload-manual-diagnostics.mjs'
 import { NEWS_MUTATION_LEDGER_STATEMENTS, NEWS_MUTATION_TABLES, type NewsMutationLedgerOperation } from '../../src/publication/mutation-ledger'
-import { buildNewsMutationTriggersDDL } from '../../src/publication/mutation-triggers'
+import { buildNewsMutationTriggersDDL, NEWS_MUTATION_OWNER_FRAGMENTS } from '../../src/publication/mutation-triggers'
+import {
+  PROTOCOL_FUNCTION_CONTRACT, PROTOCOL_FUNCTION_CATALOG_SQL, PROTOCOL_REQUIRED_RELATIONS_SQL,
+  PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL, PROTOCOL_TRIGGER_EXECUTE_REVOKE_SQL,
+} from '../../src/database/protocol-function-contract'
 import {
   buildNewsMigrationBootstrapRunDDL,
+  NEWS_BOOTSTRAP_OWNER_FRAGMENTS,
   NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE,
   NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS,
 } from '../../src/publication/bootstrap-run'
@@ -22,6 +27,7 @@ import {
   normalizeTriggerDefinition,
   extractCanonicalFunctionBodies,
   NEWS_MIGRATION_ITEM_BINDING_DDL,
+  NEWS_BINDING_OWNER_FRAGMENTS,
   nativeSchemaSnapshot,
   jsonbDefaultLiteralsMatch,
   catalogTextArrayMatches,
@@ -52,7 +58,8 @@ import {
 import {
   newsProtocolObserverPrivilegesVerificationSQL,
   newsProtocolObserverRoleVerificationSQL,
-  observerRelationProvisioningSQL as observerRelationProvisioningSQLImpl,
+  observerRelationOnlyProvisioningSQL as observerRelationProvisioningSQLImpl,
+  newsProtocolObserverPostMigrationVerificationSQL,
 } from '../../scripts/news-protocol-observer-contract'
 
 const PORTAL_DATABASE = 'portal'
@@ -244,6 +251,13 @@ function fakeClient(options: {
     connect: async () => {}, end: async () => {},
     query: async (sql, values): Promise<QueryResult> => {
       statements.push(sql)
+      if (sql === PROTOCOL_FUNCTION_CATALOG_SQL) return { rows: PROTOCOL_FUNCTION_CONTRACT
+        .filter(value => value.version <= protocolVersion).map(value => ({ name: value.name, arguments: value.arguments,
+          kind: 'f', owner: 'cms_control', acl: ['cms_control', ...(value.controller ? ['cms_controller'] : [])]
+            .map(grantee => ({ grantor: 'cms_control', grantee, privilege: 'EXECUTE', grantable: false })) })) }
+      if (sql === PROTOCOL_REQUIRED_RELATIONS_SQL) return { rows: ['payload_migrations', 'news_migration_runs', 'news_migration_items',
+        ...(protocolLedgerExists ? ['owner_news_mutation_head', 'owner_news_mutation_events'] : [])]
+        .map(name => ({ name, kind: 'r', owner: 'cms_migrator' })) }
       if (sql === 'SELECT $1::jsonb = $2::jsonb AS matches') {
         jsonbComparisonParams.push(values || [])
         return { rows: [{ matches: options.jsonbDefaultsMatch !== false }] }
@@ -273,6 +287,7 @@ function fakeClient(options: {
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK' || sql.includes('pg_advisory_xact_lock')) return { rows: [] }
       if (sql === 'SET LOCAL ROLE cms_runtime') { activeRole = 'cms_runtime'; return { rows: [] } }
       if (sql === 'SET LOCAL ROLE cms_migrator') { activeRole = 'cms_migrator'; return { rows: [] } }
+      if (sql === 'SET LOCAL ROLE cms_control') { activeRole = 'cms_control'; return { rows: [] } }
       if (sql === 'RESET ROLE') { activeRole = 'cms_admin'; return { rows: [] } }
       if (sql.includes('current_user AS role')) return { rows: [{ role: activeRole, session_role: 'cms_admin', db: 'ownerinc_cms', superuser: options.identitySuperuser === true, read_only: options.readOnly ? 'on' : 'off' }] }
       if (sql === cmsAdminFinalizerAuthoritySQL || sql === cmsAdminDatabaseRoleVerificationSQL
@@ -399,7 +414,7 @@ function fakeClient(options: {
           protocol_triggers: NEWS_MUTATION_TABLES.length * 2 + 2, inventory_triggers: NEWS_MUTATION_TABLES.length * 2 + 2,
         } : { ledger_relations: 0, protocol_functions: 0, unexpected_protocol_functions: 0, v1_signatures: 0, bootstrap_signature: false,
           protocol_triggers: 0, inventory_triggers: 0 }] }
-      if (sql.includes('FROM public.owner_news_mutation_head')) {
+      if (sql.startsWith('SELECT sequence::text') && sql.includes('FROM public.owner_news_mutation_head')) {
         if (!protocolLedgerExists) {
           const error = new Error('relation does not exist') as Error & { code: string }
           error.code = '42P01'
@@ -1051,7 +1066,7 @@ test('failure after ledger DDL preserves its SQLSTATE and rolls back without com
   const { client, statements } = fakeClient({ failTriggerSqlState: '42501' })
   const error = await finalizeNewsProtocol(client).catch(value => value)
   const diagnostic = getFinalizerFailureDiagnostic(error)
-  assert.deepEqual(diagnostic, { phase: 'protocol-trigger-ddl', reason: 'database_error', sqlstate: '42501' })
+  assert.deepEqual(diagnostic, { phase: 'protocol-grants', reason: 'database_error', sqlstate: '42501', operation: 'control-function-create' })
   const formatted = formatFinalizerFailureDiagnostic(diagnostic!)
   assert.equal(formatted.includes('sensitive DDL message'), false)
   assert.ok(NEWS_MUTATION_LEDGER_STATEMENTS.every(statement => statements.includes(statement.sql)))
@@ -1088,25 +1103,37 @@ test('ledger operation diagnostics cannot echo injected operation/source/owner o
     'CMS news protocol diagnostic: phase=protocol-ledger-ddl reason=database_error sqlstate=42501 operation=ledger-head-create ddl_source=mutation-ledger expected_owner=cms_migrator')
 })
 
-// Diagnostic-only doubles below preserve the existing query text/grouping. They
-// inject failures at observed boundaries, not by exporting operational helpers.
-for (const upgrade of [false, true]) for (const target of finalizerGrantOperations.filter(operation => !upgrade || operation !== 'runtime-grants')) {
+const ownerFragments = [NEWS_MUTATION_OWNER_FRAGMENTS, NEWS_BINDING_OWNER_FRAGMENTS, NEWS_BOOTSTRAP_OWNER_FRAGMENTS]
+function ownerBoundary(sql: string): string | undefined {
+  if (sql === grantsSQL) return 'runtime-grants'
+  if (sql === observerRelationProvisioningSQL()) return 'observer-relation-grants'
+  if (sql === 'SET LOCAL ROLE cms_migrator') return 'migrator-role-set'
+  if (sql === 'SET LOCAL ROLE cms_control') return 'control-role-set'
+  if (sql === 'RESET ROLE') return 'admin-role-reset'
+  if (ownerFragments.some(part => sql === part.functionCreate)) return 'control-function-create'
+  if (ownerFragments.some(part => sql === part.functionACL)) return 'control-function-acl'
+  if (ownerFragments.some(part => sql === part.relationGrants)) return 'protocol-relation-grants'
+  if (ownerFragments.some(part => part.triggers && sql === part.triggers)) return 'trigger-install'
+  if (sql === PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL) return 'trigger-execute-grant'
+  if (sql === PROTOCOL_TRIGGER_EXECUTE_REVOKE_SQL) return 'trigger-execute-revoke'
+  if (sql === newsProtocolObserverPrivilegesVerificationSQL) return 'observer-privileges-verify'
+}
+const upgradeOperations = ['control-role-set', 'control-function-create', 'control-function-acl', 'admin-role-reset',
+  'migrator-role-set', 'protocol-relation-grants', 'observer-privileges-verify']
+for (const upgrade of [false, true]) for (const target of finalizerGrantOperations.filter(operation =>
+  operation !== 'ownership-transfer' && (!upgrade || upgradeOperations.includes(operation)))) {
   for (const rollbackFails of [false, true]) test(`${upgrade ? 'upgrade' : 'cold'} ${target} 42501 round-trips through the manual fixture; rollback ${rollbackFails ? 'fails' : 'succeeds'}`, async () => {
     const { client } = fakeClient(upgrade ? { protocolVersion: 1 } : {})
     const canary = 'PRIVATE_GRANT_DIAGNOSTIC_CANARY', primary = Object.assign(new Error(canary), { code: '42501', detail: canary, query: canary })
     let operationReads = 0
     Object.defineProperty(primary, 'operation', { get: () => { operationReads++; throw new Error(canary) } })
     const query = client.query.bind(client), calls: string[] = [], boundaries: string[] = []
-    let relationGrants = false, transferred = false, failedAt = -1, closeCount = 0, caught: unknown, atRollback: unknown
+    let installing = false, failedAt = -1, closeCount = 0, caught: unknown, atRollback: unknown
     client.end = async () => { closeCount++ }
     client.query = async (sql, values) => {
       calls.push(sql)
-      let boundary: string | undefined
-      if (sql === grantsSQL) boundary = 'runtime-grants'
-      if (sql === observerRelationProvisioningSQL()) { relationGrants = true; boundary = 'observer-relation-grants' }
-      if (relationGrants && sql === 'RESET ROLE') boundary = 'admin-role-reset'
-      if (/^\s*ALTER FUNCTION public\.owner_news_/u.test(sql)) { transferred = true; boundary = 'ownership-transfer' }
-      if (transferred && sql === newsProtocolObserverPrivilegesVerificationSQL) boundary = 'observer-privileges-verify'
+      if (sql === (upgrade ? 'SET LOCAL ROLE cms_control' : 'SET LOCAL ROLE cms_migrator')) installing = true
+      const boundary = installing ? ownerBoundary(sql) : undefined
       if (boundary) boundaries.push(boundary)
       if (boundary === target) { failedAt = calls.length - 1; throw primary }
       if (sql === 'ROLLBACK') {
@@ -1126,34 +1153,165 @@ for (const upgrade of [false, true]) for (const target of finalizerGrantOperatio
     assert.equal(formatFinalizerFailureDiagnostic(getFinalizerFailureDiagnostic(primary)!), formatted)
     assert.deepEqual(output, [formatted]); assert.equal(extractManualFinalizerDiagnostic(`# ${formatted}\nnot ok 1\n${canary}`, ''), formatted)
     assert.ok(failedAt >= 0); assert.deepEqual(calls.slice(failedAt + 1), ['ROLLBACK']); assert.equal(calls.includes('COMMIT'), false)
-    const applicable = finalizerGrantOperations.filter(operation => !upgrade || operation !== 'runtime-grants')
-    assert.deepEqual(boundaries, applicable.slice(0, applicable.indexOf(target) + 1))
+    assert.equal(boundaries.at(-1), target)
     assert.equal(closeCount, 1); assert.equal(operationReads, 0); assert.equal(output.join('').includes(canary), false)
-    if (target === 'ownership-transfer') assert.equal((calls[failedAt]!.match(/ALTER FUNCTION/gu) || []).length, upgrade ? 1 : 5)
   })
 }
 
-test('grant operation state is cleared for bootstrap DDL, installed verification and commit failures', async () => {
-  for (const target of ['bootstrap', 'verify-installed', 'commit'] as const) {
+test('grant operation state is cleared for installed verification and commit failures', async () => {
+  for (const target of ['verify-installed', 'commit'] as const) {
     const { client } = fakeClient(), query = client.query.bind(client)
     const primary = Object.assign(new Error('PRIVATE_OPERATION_CLEAR_CANARY'), { code: '42501', operation: 'ownership-transfer' })
-    let transferred = false
     client.query = async (sql, values) => {
-      if (/^\s*ALTER FUNCTION public\.owner_news_/u.test(sql)) transferred = true
-      if (target === 'bootstrap' && sql.includes('CREATE OR REPLACE FUNCTION public.owner_news_bootstrap_run(')
-        || target === 'verify-installed' && transferred && sql.includes('FROM public.owner_news_mutation_head')
+      if (target === 'verify-installed' && sql.startsWith('SELECT sequence::text') && sql.includes('FROM public.owner_news_mutation_head')
         || target === 'commit' && sql === 'COMMIT') throw primary
       return query(sql, values)
     }
     await assert.rejects(runFinalizer(adminEnvironment, client), error => error === primary)
     const diagnostic = getFinalizerFailureDiagnostic(primary)!
-    assert.equal(diagnostic.phase, target === 'bootstrap' ? 'protocol-bootstrap-ddl' : target === 'commit' ? 'transaction-commit' : 'verify-installed')
+    assert.equal(diagnostic.phase, target === 'commit' ? 'transaction-commit' : 'verify-installed')
     assert.equal(Object.hasOwn(diagnostic, 'operation'), false)
     assert.equal(formatFinalizerFailureDiagnostic(diagnostic).includes('operation='), false)
   }
 })
 
-test('role-aware source model rejects admin old-owner and migrator new-owner checks; this is not PostgreSQL proof', async () => {
+for (const upgrade of [false, true]) test(`${upgrade ? 'upgrade' : 'cold'} every successful owner boundary rolls back on an injected failure`, async t => {
+  const reference = fakeClient(upgrade ? { protocolVersion: 1 } : {})
+  const run = upgrade ? runProtocolV1Upgrade : runFinalizer
+  await run(adminEnvironment, reference.client)
+  const start = reference.statements.indexOf(upgrade ? 'SET LOCAL ROLE cms_control' : 'SET LOCAL ROLE cms_migrator')
+  const commit = reference.statements.indexOf('COMMIT')
+  assert.ok(start > 0 && commit > start)
+  // Occurrence indices include every repeated switch/fragment plus every final
+  // verification query. Inject after success so provisional effects exist.
+  const targets = reference.statements.map((sql, index) => ({ sql, index })).filter(({ index }) => index >= start && index < commit)
+  t.diagnostic(`${targets.length} successful query occurrences; ${targets.length * 2} injected runs including failed rollback`)
+  for (const { sql: targetSQL, index: target } of targets) for (const rollbackFails of [false, true]) {
+    const { client } = fakeClient(upgrade ? { protocolVersion: 1 } : {})
+    const query = client.query.bind(client), calls: string[] = []
+    const initialFunctions = upgrade ? PROTOCOL_FUNCTION_CONTRACT.filter(value => value.version === 1) : []
+    const persisted = {
+      functions: initialFunctions.map(value => value.name),
+      acl: initialFunctions.map(value => `${value.name}:cms_control${value.controller ? ',cms_controller' : ''}`),
+      ledger: upgrade ? ['existing-ledger'] : [], triggers: upgrade ? ['existing-80-triggers'] : [],
+      relations: ['existing-relation-acls'], temporaryExecute: false, sequence: upgrade ? '17' : null,
+    }
+    const before = structuredClone(persisted)
+    let provisional = structuredClone(persisted), role = 'cms_admin', failed = false
+    const primary = Object.assign(new Error('PRIVATE_AFTER_BOUNDARY'), { code: 'P0001' })
+    const secondary = Object.assign(new Error('PRIVATE_ROLLBACK'), { code: '08006' })
+    client.query = async (sql, values) => {
+      calls.push(sql)
+      if (sql === 'ROLLBACK') {
+        if (rollbackFails) throw secondary
+        provisional = structuredClone(persisted); role = 'cms_admin'
+        return query(sql, values)
+      }
+      const result = await query(sql, values)
+      if (sql.startsWith('SET LOCAL ROLE ')) role = sql.slice('SET LOCAL ROLE '.length)
+      if (sql === 'RESET ROLE') role = 'cms_admin'
+      for (const part of ownerFragments) {
+        if (sql === part.functionCreate) provisional.functions.push(sql)
+        if (sql === part.functionACL) provisional.acl.push(sql)
+        if (sql === part.relationGrants) provisional.relations.push(sql)
+        if (sql === part.triggers) provisional.triggers.push(sql)
+      }
+      if (NEWS_MUTATION_LEDGER_STATEMENTS.some(part => part.sql === sql)) provisional.ledger.push(sql)
+      if (sql === grantsSQL || sql === observerRelationProvisioningSQL()) provisional.relations.push(sql)
+      if (sql === PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL) provisional.temporaryExecute = true
+      if (sql === PROTOCOL_TRIGGER_EXECUTE_REVOKE_SQL) provisional.temporaryExecute = false
+      if (sql === 'COMMIT') Object.assign(persisted, provisional)
+      if (calls.length - 1 === target) {
+        assert.equal(sql, targetSQL); failed = true
+        throw primary
+      }
+      return result
+    }
+    const caught = await run(adminEnvironment, client).catch(error => error)
+    assert.equal(caught, primary, `occurrence ${target}`); assert.equal(failed, true)
+    assert.equal(getFinalizerFailureDiagnostic(primary)?.sqlstate, 'P0001')
+    assert.equal(calls.includes('COMMIT'), false); assert.equal(calls.at(-1), 'ROLLBACK')
+    assert.ok(calls.slice(target + 1).every(sql => sql === 'RESET ROLE' || sql === 'ROLLBACK'))
+    assert.deepEqual(persisted, before)
+    if (!rollbackFails) { assert.deepEqual(provisional, before); assert.equal(role, 'cms_admin') }
+  }
+})
+
+for (const fault of ['identity', 'head', 'acl', 'reset', 'restored-role', 'restored-superuser'] as const) {
+  test(`runtime head scope refuses ${fault} and preserves its first failure through cleanup`, async () => {
+    const { client } = fakeClient({ protocolVersion: 2 }), query = client.query.bind(client)
+    const calls: string[] = []
+    const primary = Object.assign(new Error('PRIVATE_HEAD_READ'), { code: '42501' })
+    const resetError = Object.assign(new Error('PRIVATE_RESET'), { code: '08006' })
+    let inRuntime = false, identityChecked = false, headReads = 0, resetAttempts = 0
+    client.query = async (sql, values) => {
+      calls.push(sql)
+      if (sql === 'ROLLBACK') throw new Error('PRIVATE_ROLLBACK')
+      if (sql === 'SET LOCAL ROLE cms_runtime') inRuntime = true
+      if (inRuntime && sql === 'SELECT current_user AS role, current_database() AS db') {
+        identityChecked = true
+        if (fault === 'identity') return { rows: [{ role: 'cms_admin', db: 'ownerinc_cms' }] }
+      }
+      if (sql.startsWith('SELECT sequence::text') && sql.includes('FROM public.owner_news_mutation_head')) {
+        assert.equal(inRuntime, true); assert.equal(identityChecked, true); headReads++
+        if (fault === 'head') throw primary
+      }
+      if (inRuntime && sql === runtimeProtocolPrivilegesVerifySQL && fault === 'acl') return { rows: [{ safe: false }] }
+      if (inRuntime && sql === 'RESET ROLE') {
+        resetAttempts++; inRuntime = false
+        if (['identity', 'head', 'acl', 'reset'].includes(fault)) throw resetError
+      }
+      if (resetAttempts && sql.includes('r.rolsuper AS superuser FROM pg_roles')) {
+        if (fault === 'restored-role') return { rows: [{ role: 'cms_runtime', db: 'ownerinc_cms', superuser: false }] }
+        if (fault === 'restored-superuser') return { rows: [{ role: 'cms_admin', db: 'ownerinc_cms', superuser: true }] }
+      }
+      return query(sql, values)
+    }
+    const caught = await runFinalizer(adminEnvironment, client).catch(error => error)
+    assert.equal(resetAttempts, 1); assert.equal(calls.at(-1), 'ROLLBACK'); assert.equal(calls.includes('COMMIT'), false)
+    assert.equal(headReads, fault === 'identity' ? 0 : 1)
+    if (fault === 'head' || fault === 'reset') {
+      assert.equal(caught, fault === 'head' ? primary : resetError)
+      assert.equal(getFinalizerFailureDiagnostic(caught)?.sqlstate, fault === 'head' ? '42501' : '08006')
+    } else assert.equal(getFinalizerFailureDiagnostic(caught)?.reason,
+      fault === 'identity' ? 'runtime_verifier_role_switch_failed' : fault === 'acl' ? 'runtime_protocol_acl_mismatch' : 'admin_role_restore_failed')
+  })
+}
+
+for (const version of [0, 1, 2] as const) test(`V${version} observer function-default drift refuses without repair`, async () => {
+  const { client } = fakeClient(version ? { protocolVersion: version } : {})
+  const query = client.query.bind(client), calls: string[] = []
+  const defaults = Object.freeze([{ owner: 'cms_migrator', type: 'f', grantee: 'cms_observer' }])
+  client.query = async (sql, values) => {
+    calls.push(sql)
+    assert.doesNotMatch(sql, /ALTER DEFAULT PRIVILEGES[^;]*ON FUNCTIONS/u)
+    if (sql === newsProtocolObserverPostMigrationVerificationSQL) return { rows: [{ safe: defaults.length === 0 }] }
+    return query(sql, values)
+  }
+  const caught = await (version === 1 ? runProtocolV1Upgrade : runFinalizer)(adminEnvironment, client).catch(error => error)
+  assert.equal(getFinalizerFailureDiagnostic(caught)?.reason, 'observer_privilege_contract_mismatch')
+  assert.equal(calls.at(-1), 'ROLLBACK'); assert.equal(calls.includes('COMMIT'), false)
+  if (version) assert.equal(calls.some(sql => ownerFragments.some(part => sql === part.functionCreate || sql === part.relationGrants)), false)
+})
+
+test('observer audit refuses function-default drift while retaining its no-role-switch contract', async () => {
+  const { client, statements } = fakeClient({ protocolVersion: 2 })
+  configureReadOnlyAuditClient(client, statements, { observedCoverage: 1 })
+  const query = client.query.bind(client)
+  client.query = async (sql, values) => {
+    if (sql === newsProtocolObserverPostMigrationVerificationSQL) {
+      statements.push(sql)
+      return { rows: [{ safe: false }] }
+    }
+    return query(sql, values)
+  }
+  const caught = await auditNewsProtocolReadOnly(client).catch(error => error)
+  assert.equal(getFinalizerFailureDiagnostic(caught)?.reason, 'observer_privilege_contract_mismatch')
+  assert.equal(statements.at(-1), 'ROLLBACK'); assert.equal(statements.includes('COMMIT'), false)
+  assert.equal(statements.some(sql => /SET (?:LOCAL )?ROLE|RESET ROLE|ALTER DEFAULT PRIVILEGES/u.test(sql)), false)
+})
+
+test('role-aware orchestration respects owners, trigger EXECUTE and authorized reads; this is not PostgreSQL proof', async () => {
   const provision = await readFile(new URL('../../scripts/provision-db.ts', import.meta.url), 'utf8')
   const memberships = [...provision.matchAll(/^GRANT (cms_[a-z]+) TO (cms_[a-z]+) WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;$/gmu)]
     .map(([, role, member]) => ({ role, member }))
@@ -1169,27 +1327,62 @@ test('role-aware source model rejects admin old-owner and migrator new-owner che
   assert.equal(deniedCheck('cms_migrator', 'cms_migrator'), 'new-owner')
   for (const upgrade of [false, true]) {
     const { client } = fakeClient(upgrade ? { protocolVersion: 1 } : {}), query = client.query.bind(client)
-    const calls: string[] = [], owners = new Map<string, string>()
-    let role = 'cms_admin', denied: string | null = null, failedAt = -1
+    const calls: string[] = [], owners = new Map<string, string>(), execute = new Map<string, Set<string>>()
+    if (upgrade) for (const contract of PROTOCOL_FUNCTION_CONTRACT.filter(value => value.version === 1)) {
+      owners.set(contract.name, 'cms_control')
+      execute.set(contract.name, new Set(['cms_control', ...(contract.controller ? ['cms_controller'] : [])]))
+    }
+    const created: string[] = []
+    let role = 'cms_admin', temporaryExecute = false, triggers = 0
     client.query = async (sql, values) => {
       calls.push(sql)
       const switched = /^SET LOCAL ROLE (cms_[a-z]+)$/u.exec(sql)?.[1]
       if (switched) role = switched
       if (sql === 'RESET ROLE') role = 'cms_admin'
-      for (const match of sql.matchAll(/CREATE OR REPLACE FUNCTION public\.(owner_news_[a-z_]+)\(/gu)) owners.set(match[1]!, role)
-      const transfer = /^\s*ALTER FUNCTION public\.(owner_news_[a-z_]+)\(/u.exec(sql)
-      if (transfer) {
-        assert.equal(role, 'cms_admin'); assert.equal(owners.get(transfer[1]!), 'cms_migrator')
-        denied = deniedCheck(role, owners.get(transfer[1]!)!); failedAt = calls.length - 1
-        assert.equal(denied, 'old-owner')
-        throw Object.assign(new Error('PRIVATE_OWNERSHIP_MODEL_CANARY'), { code: '42501' })
+      assert.doesNotMatch(sql, /ALTER FUNCTION[^;]*OWNER TO/u)
+      for (const match of sql.matchAll(/CREATE OR REPLACE FUNCTION public\.(owner_news_[a-z_]+)\(/gu)) {
+        assert.equal(role, 'cms_control'); assert.equal(owners.has(match[1]!), false)
+        owners.set(match[1]!, role); execute.set(match[1]!, new Set(['cms_control', 'PUBLIC'])); created.push(match[1]!)
       }
-      return query(sql, values)
+      if (ownerFragments.some(part => sql === part.functionACL)) {
+        assert.equal(role, 'cms_control')
+        for (const match of sql.matchAll(/REVOKE ALL ON FUNCTION public\.([a-z_]+)\([^)]*\) FROM ([^;]+);/gu)) {
+          for (const grantee of match[2]!.split(', ')) execute.get(match[1]!)!.delete(grantee)
+        }
+        for (const match of sql.matchAll(/GRANT EXECUTE ON FUNCTION public\.([a-z_]+)\([^)]*\) TO cms_controller;/gu)) {
+          execute.get(match[1]!)!.add('cms_controller')
+        }
+      }
+      if (sql === PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL || sql === PROTOCOL_TRIGGER_EXECUTE_REVOKE_SQL) {
+        assert.equal(upgrade, false); assert.equal(role, 'cms_control')
+        temporaryExecute = sql === PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL
+        assert.doesNotMatch(sql, /seal_run|bootstrap_run|GRANT OPTION/u)
+        for (const contract of PROTOCOL_FUNCTION_CONTRACT.filter(value => value.trigger)) {
+          assert.equal(execute.get(contract.name)!.has('PUBLIC'), false)
+          if (temporaryExecute) execute.get(contract.name)!.add('cms_migrator')
+          else execute.get(contract.name)!.delete('cms_migrator')
+        }
+      }
+      if (/CREATE TRIGGER/u.test(sql)) {
+        assert.equal(role, 'cms_migrator'); assert.equal(temporaryExecute, true)
+        for (const match of sql.matchAll(/EXECUTE FUNCTION public\.([a-z_]+)\(\)/gu)) assert.ok(execute.get(match[1]!)!.has(role))
+        triggers += [...sql.matchAll(/CREATE TRIGGER/gu)].length
+      }
+      if (ownerFragments.some(part => sql === part.relationGrants) || sql === grantsSQL
+        || sql === observerRelationProvisioningSQL() || NEWS_MUTATION_LEDGER_STATEMENTS.some(part => sql === part.sql)) assert.equal(role, 'cms_migrator')
+      if (sql.startsWith('SELECT sequence::text') && sql.includes('FROM public.owner_news_mutation_head')) assert.equal(role, 'cms_runtime')
+      if (sql === PROTOCOL_FUNCTION_CATALOG_SQL || sql === 'COMMIT') {
+        assert.equal(role, 'cms_admin'); assert.equal(temporaryExecute, false)
+      }
+      const result = await query(sql, values)
+      if (sql === PROTOCOL_FUNCTION_CATALOG_SQL) return { rows: result.rows.map(row => ({ ...row, owner: owners.get(String(row.name)),
+        acl: [...execute.get(String(row.name))!].map(grantee => ({ grantor: 'cms_control', grantee, privilege: 'EXECUTE', grantable: false })) })) }
+      return result
     }
-    const error = await (upgrade ? runProtocolV1Upgrade : runFinalizer)(adminEnvironment, client).then(() => assert.fail('role-aware model cannot pass ownership transfer'), value => value)
-    assert.deepEqual(getFinalizerFailureDiagnostic(error), { phase: 'protocol-grants', reason: 'database_error', sqlstate: '42501', operation: 'ownership-transfer' })
-    assert.equal(denied, 'old-owner'); assert.ok(failedAt >= 0); assert.deepEqual(calls.slice(failedAt + 1), ['ROLLBACK'])
-    assert.equal(calls.includes('COMMIT'), false)
+    assert.deepEqual(await (upgrade ? runProtocolV1Upgrade : runFinalizer)(adminEnvironment, client),
+      { installed: !upgrade, ready: false, coverageVersion: 0 })
+    assert.equal(created.length, upgrade ? 1 : 5); assert.equal(triggers, upgrade ? 0 : 80)
+    assert.equal(calls.at(-1), 'COMMIT'); assert.equal(role, 'cms_admin')
   }
 })
 
@@ -1216,7 +1409,9 @@ test('finalizer installs atomically only after exact native inventory and role c
   const bootstrapDDL = statements.find(sql => sql.includes('CREATE OR REPLACE FUNCTION public.owner_news_bootstrap_run('))
   assert.ok(bootstrapDDL)
   assert.doesNotMatch(bootstrapDDL, /ALTER FUNCTION[^;]+OWNER TO cms_control/u)
-  assert.ok(statements.some(sql => /ALTER FUNCTION public\.owner_news_bootstrap_run\(uuid,text,text,text,integer\) OWNER TO cms_control/u.test(sql)))
+  assert.equal(statements.some(sql => /ALTER FUNCTION[^;]*OWNER TO/u.test(sql)), false)
+  assert.ok(statements.includes(PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL))
+  assert.ok(statements.indexOf(PROTOCOL_TRIGGER_EXECUTE_REVOKE_SQL) < statements.indexOf(PROTOCOL_FUNCTION_CATALOG_SQL))
   assert.ok(statements.indexOf(ledgerHeadDDL) < statements.findIndex(sql => sql.includes('FROM public.owner_news_mutation_head')))
   assert.equal(statements.filter(sql => sql.includes('SELECT sequence::text AS sequence')).length, 1)
   assert.ok(statements.includes(NATIVE_ENUM_CATALOG_SQL))
@@ -1252,7 +1447,12 @@ test('explicit V1-to-V2 upgrade changes only the bootstrap RPC and exact insert 
   assert.deepEqual(result, { installed: false, ready: false, coverageVersion: 0 })
   assert.equal(statements.filter(sql => sql.includes('CREATE OR REPLACE FUNCTION public.owner_news_bootstrap_run(')).length, 1)
   assert.ok(statements.includes('SET LOCAL ROLE cms_migrator'))
-  assert.ok(statements.some(sql => /ALTER FUNCTION public\.owner_news_bootstrap_run\(uuid,text,text,text,integer\) OWNER TO cms_control/u.test(sql)))
+  assert.ok(statements.includes('SET LOCAL ROLE cms_control'))
+  assert.ok(statements.includes(NEWS_BOOTSTRAP_OWNER_FRAGMENTS.relationGrants))
+  assert.equal(statements.includes(observerRelationProvisioningSQL()), false)
+  assert.equal(statements.some(sql => /ALTER FUNCTION[^;]*OWNER TO|CREATE TRIGGER/u.test(sql)), false)
+  assert.equal(statements.includes(PROTOCOL_TRIGGER_EXECUTE_GRANT_SQL), false)
+  assert.equal(statements.includes(PROTOCOL_TRIGGER_EXECUTE_REVOKE_SQL), false)
   assert.equal(statements.includes(ledgerHeadDDL), false)
   assert.equal(statements.includes(buildNewsMutationTriggersDDL()), false)
   assert.equal(statements.includes(NEWS_MIGRATION_ITEM_BINDING_DDL), false)
@@ -1268,6 +1468,7 @@ test('exact V2 finalization and explicit upgrade retry verify without protocol D
     assert.equal(statements.some(sql => sql === buildNewsMigrationBootstrapRunDDL()), false)
     assert.ok(statements.some(sql => sql.includes('p.proisstrict AS bootstrap_is_strict')))
     assert.equal(statements.some(sql => NEWS_MUTATION_LEDGER_STATEMENTS.some(statement => statement.sql === sql) || sql === buildNewsMutationTriggersDDL()), false)
+    assert.equal(statements.some(sql => /^\s*(?:CREATE|ALTER|GRANT|REVOKE|INSERT|UPDATE|DELETE)\b/u.test(sql)), false)
     assert.equal(statements.at(-1), 'COMMIT')
   }
 })
@@ -1336,7 +1537,7 @@ test('ordinary finalizer bootstrap DDL failure rolls back the cold install', asy
   const error = await finalizeNewsProtocol(client).catch(value => value)
 
   assert.deepEqual(getFinalizerFailureDiagnostic(error), {
-    phase: 'protocol-bootstrap-ddl', reason: 'database_error', sqlstate: '42501',
+    phase: 'protocol-grants', reason: 'database_error', sqlstate: '42501', operation: 'control-function-create',
   })
   assert.ok(NEWS_MUTATION_LEDGER_STATEMENTS.every(statement => statements.includes(statement.sql)))
   assert.ok(statements.some(sql => sql.includes('CREATE OR REPLACE FUNCTION public.owner_news_bootstrap_run(')))
@@ -1349,7 +1550,7 @@ test('V1 upgrade DDL failure rolls back without replacing native or existing V1 
   const error = await upgradeNewsProtocolV1ToV2(client).catch(value => value)
 
   assert.deepEqual(getFinalizerFailureDiagnostic(error), {
-    phase: 'protocol-bootstrap-ddl', reason: 'database_error', sqlstate: '42501',
+    phase: 'protocol-grants', reason: 'database_error', sqlstate: '42501', operation: 'control-function-create',
   })
   assert.equal(statements.filter(sql => sql.includes('CREATE OR REPLACE FUNCTION public.owner_news_bootstrap_run(')).length, 1)
   assert.equal(statements.some(sql => sql === ledgerHeadDDL || sql === buildNewsMutationTriggersDDL()
@@ -1809,7 +2010,7 @@ for (const failurePhase of ['precondition', 'ddl', 'commit'] as const) {
     assert.deepEqual(diagnostic, failurePhase === 'precondition'
       ? { phase: 'precondition-columns', reason: 'native_column_inventory_mismatch', sqlstate: null }
       : failurePhase === 'ddl'
-        ? { phase: 'protocol-trigger-ddl', reason: 'database_error', sqlstate: '42501' }
+        ? { phase: 'protocol-grants', reason: 'database_error', sqlstate: '42501', operation: 'control-function-create' }
         : { phase: 'transaction-commit', reason: 'database_error', sqlstate: '40001' })
     assert.deepEqual(getFinalizerCloseDiagnostic(error), { phase: 'admin-disconnect', sqlstate: '08003' })
     assert.deepEqual(warnings, [{ phase: 'admin-disconnect', sqlstate: '08003' }])

@@ -1,4 +1,5 @@
 import { NEWS_MUTATION_TABLES } from './mutation-ledger'
+import type { ProtocolOwnerFragments } from '../database/protocol-function-contract'
 
 const quoteIdentifier = (value: string): string => `"${value.replaceAll('"', '""')}"`
 const qualifiedTable = (table: string): string => `public.${quoteIdentifier(table)}`
@@ -11,17 +12,9 @@ const bookkeepingColumns = [
 ] as const
 const bookkeepingArray = `ARRAY[${bookkeepingColumns.map(value => `'${value}'`).join(',')}]::text[]`
 
-/**
- * SQL for the migration owner. The caller must first provision cms_control as a
- * distinct NOLOGIN role and cms_controller as the private control connection
- * role; neither role receives a password or other credential from this module.
- * This is executable migration SQL, not a runtime installer.
- */
-export function buildNewsMutationTriggersDDL(): string {
-  const triggerInstall = NEWS_MUTATION_TABLES.map(table => {
-    const quoted = quoteIdentifier(table)
-    const qualified = qualifiedTable(table)
-    return `
+const triggerInstall = NEWS_MUTATION_TABLES.map(table => {
+  const qualified = qualifiedTable(table)
+  return `
 DROP TRIGGER IF EXISTS owner_news_mutation_guard_stmt ON ${qualified};
 CREATE TRIGGER owner_news_mutation_guard_stmt
 BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${qualified}
@@ -32,9 +25,9 @@ AFTER INSERT OR UPDATE OR DELETE ON ${qualified}
 FOR EACH ROW EXECUTE FUNCTION public.owner_news_mutation_capture_row();
 ALTER TABLE ${qualified} ENABLE ALWAYS TRIGGER owner_news_mutation_guard_stmt;
 ALTER TABLE ${qualified} ENABLE ALWAYS TRIGGER owner_news_mutation_capture_row;`
-  }).join('\n')
+}).join('\n')
 
-  return `
+const mutationFunctionCreate = `
 -- Requires PostgreSQL 16's built-in pg_catalog.sha256(bytea); no extension is
 -- installed implicitly. Integration must verify the exact function on PG16.
 CREATE OR REPLACE FUNCTION public.owner_news_mutation_guard_stmt()
@@ -123,14 +116,18 @@ BEGIN
 END;
 $owner_news$;
 
-REVOKE ALL ON FUNCTION public.owner_news_mutation_guard_stmt() FROM PUBLIC;
+`
+const mutationFunctionACL = `REVOKE ALL ON FUNCTION public.owner_news_mutation_guard_stmt() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.owner_news_mutation_capture_row() FROM PUBLIC;
-REVOKE ALL ON public.owner_news_mutation_head, public.owner_news_mutation_events FROM PUBLIC;
+`
+const ledgerRelationGrants = `REVOKE ALL ON public.owner_news_mutation_head, public.owner_news_mutation_events FROM PUBLIC;
 REVOKE ALL ON public.owner_news_mutation_head, public.owner_news_mutation_events FROM cms_runtime;
-GRANT USAGE ON SCHEMA public TO cms_control, cms_controller;
+`
+const historicalOwnership = `GRANT USAGE ON SCHEMA public TO cms_control, cms_controller;
 ALTER FUNCTION public.owner_news_mutation_guard_stmt() OWNER TO cms_control;
 ALTER FUNCTION public.owner_news_mutation_capture_row() OWNER TO cms_control;
-GRANT SELECT ON public.owner_news_mutation_head, public.owner_news_mutation_events TO cms_runtime;
+`
+const runRelationGrants = `GRANT SELECT ON public.owner_news_mutation_head, public.owner_news_mutation_events TO cms_runtime;
 GRANT SELECT, UPDATE ON public.owner_news_mutation_head TO cms_control;
 GRANT INSERT ON public.owner_news_mutation_events TO cms_control;
 GRANT SELECT ON public.news_migration_runs TO cms_control;
@@ -142,9 +139,8 @@ GRANT UPDATE (admission_state, activation_epoch, drain_receipt_sha256,
   reconciliation_sequence, reconciliation_chain_sha256,
   sealed_sequence, sealed_chain_sha256, sealed_at) ON public.news_migration_runs TO cms_control;
 
-${triggerInstall}
-
-CREATE OR REPLACE FUNCTION public.owner_news_seal_run(
+`
+const sealFunctionCreate = `CREATE OR REPLACE FUNCTION public.owner_news_seal_run(
   run uuid, manifest text, epoch integer, expected_seq bigint,
   expected_chain text, drain_receipt text, actor_uid text
 ) RETURNS TABLE(id uuid)
@@ -225,11 +221,25 @@ BEGIN
 END;
 $owner_news$;
 
-REVOKE ALL ON FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text) FROM PUBLIC;
+`
+const sealFunctionACL = `REVOKE ALL ON FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text) FROM cms_runtime;
 GRANT EXECUTE ON FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text) TO cms_controller;
-ALTER FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text) OWNER TO cms_control;
 `
+
+export const NEWS_MUTATION_OWNER_FRAGMENTS: ProtocolOwnerFragments = Object.freeze({
+  functionCreate: mutationFunctionCreate + sealFunctionCreate,
+  functionACL: mutationFunctionACL + sealFunctionACL,
+  relationGrants: ledgerRelationGrants + runRelationGrants,
+  triggers: triggerInstall,
+})
+
+/** Historical aggregate retained byte-for-byte for comparison and legacy
+ * fixtures. The owner-scoped finalizer executes only the explicit fragments. */
+export function buildNewsMutationTriggersDDL(): string {
+  return mutationFunctionCreate + mutationFunctionACL + ledgerRelationGrants + historicalOwnership
+    + runRelationGrants + triggerInstall + '\n\n' + sealFunctionCreate + sealFunctionACL
+    + 'ALTER FUNCTION public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text) OWNER TO cms_control;\n'
 }
 
 export function expectedNewsMutationTriggerFunctionBodies(): ReadonlyMap<string, string> {

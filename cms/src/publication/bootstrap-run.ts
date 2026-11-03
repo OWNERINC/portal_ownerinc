@@ -1,3 +1,5 @@
+import type { ProtocolOwnerFragments } from '../database/protocol-function-contract'
+
 /** The narrow column set required by the SECURITY DEFINER bootstrap function.
  * Keep this aligned with its explicit INSERT column list. cms_control gets no
  * table-level INSERT and cms_controller gets no table INSERT at all. */
@@ -20,8 +22,7 @@ export const NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE =
  * protocol DDL, not a Payload/runtime helper. Keep all object references
  * qualified: SECURITY DEFINER execution uses a fixed search_path and no
  * dynamic SQL. */
-export function buildNewsMigrationBootstrapRunDDL(): string {
-  return `
+const functionCreate = `
 CREATE OR REPLACE FUNCTION public.owner_news_bootstrap_run(
   p_run_id uuid,
   p_manifest_sha256 text,
@@ -151,10 +152,20 @@ BEGIN
 END;
 $owner_news_bootstrap$;
 
-REVOKE ALL ON FUNCTION public.owner_news_bootstrap_run(uuid,text,text,text,integer) FROM PUBLIC, cms_runtime;
+`
+const functionACL = `REVOKE ALL ON FUNCTION public.owner_news_bootstrap_run(uuid,text,text,text,integer) FROM PUBLIC, cms_runtime;
 GRANT EXECUTE ON FUNCTION public.owner_news_bootstrap_run(uuid,text,text,text,integer) TO cms_controller;
-ALTER FUNCTION public.owner_news_bootstrap_run(uuid,text,text,text,integer) OWNER TO cms_control;
-GRANT INSERT (${NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS.join(', ')})
+`
+const relationGrants = `GRANT INSERT (${NEWS_MIGRATION_RUN_BOOTSTRAP_INSERT_COLUMNS.join(', ')})
   ON TABLE public.news_migration_runs TO cms_control;
 `
+
+export const NEWS_BOOTSTRAP_OWNER_FRAGMENTS: ProtocolOwnerFragments = Object.freeze({
+  functionCreate, functionACL, relationGrants, triggers: '',
+})
+
+/** Historical aggregate; operational callers use the owner-scoped fragments. */
+export function buildNewsMigrationBootstrapRunDDL(): string {
+  return functionCreate + functionACL
+    + 'ALTER FUNCTION public.owner_news_bootstrap_run(uuid,text,text,text,integer) OWNER TO cms_control;\n' + relationGrants
 }

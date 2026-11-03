@@ -2,10 +2,11 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE } from '../src/publication/bootstrap-run'
 import { NEWS_MUTATION_TABLES } from '../src/publication/mutation-ledger'
+import { PROTOCOL_FUNCTION_CONTRACT, verifyProtocolFunctionContract } from '../src/database/protocol-function-contract'
 import { parsePortalDatabaseName, quotePostgresIdentifier } from './database-contract'
 import {
   newsProtocolObserverPostMigrationVerificationSQL,
-  observerRelationProvisioningSQL,
+  observerRelationOnlyProvisioningSQL,
 } from './news-protocol-observer-contract'
 
 const require = createRequire(import.meta.url)
@@ -544,7 +545,6 @@ DECLARE
     'progress_state', 'commit_outcome', 'reconciliation_sha256',
     'destination_fingerprint', 'unresolved_exceptions'
   ];
-  function_signature text;
 BEGIN
   relation := to_regclass('public.owner_news_mutation_head');
   IF relation IS NOT NULL THEN
@@ -585,16 +585,6 @@ BEGIN
     END LOOP;
   END IF;
 
-  FOREACH function_signature IN ARRAY ARRAY[
-    'public.owner_news_mutation_guard_stmt()',
-    'public.owner_news_mutation_capture_row()',
-    'public.owner_news_seal_run(uuid,text,integer,bigint,text,text,text)',
-    '${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE}'
-  ] LOOP
-    IF to_regprocedure(function_signature) IS NOT NULL THEN
-      EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, cms_runtime', to_regprocedure(function_signature));
-    END IF;
-  END LOOP;
 END;
 $owner_news_runtime_grants$;
 `
@@ -650,14 +640,12 @@ export const runtimeProtocolFunctionsVerifySQL = `
 SELECT NOT EXISTS (
   SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
   WHERE n.nspname='public'
-    AND p.proname IN ('owner_news_mutation_guard_stmt','owner_news_mutation_capture_row','owner_news_seal_run',
-      'owner_news_bootstrap_run')
+    AND p.proname IN (${PROTOCOL_FUNCTION_CONTRACT.map(value => `'${value.name}'`).join(',')})
     AND has_function_privilege('cms_runtime',p.oid,'EXECUTE')
 ) AS safe
 `
 
 export const grantsSQL = `
-GRANT USAGE ON SCHEMA public TO cms_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cms_runtime;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO cms_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE cms_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO cms_runtime;
@@ -869,10 +857,15 @@ async function runProvisioning(mode: string, env: Record<string, string | undefi
         if (clusterRoles.rows[0]?.safe !== true) throw new Error('Unsafe CMS cluster role contract')
         await client.query('BEGIN')
         try {
+          await client.query('SELECT pg_catalog.pg_advisory_xact_lock(7194030)')
+          const applicability = await verifyProtocolFunctionContract(client)
           await client.query(grantsSQL)
-          await client.query(observerRelationProvisioningSQL(portalDatabase!))
+          await client.query(observerRelationOnlyProvisioningSQL(portalDatabase!))
+          const protocol = await client.query(runtimeProtocolPrivilegesVerifySQL)
+          if (protocol.rows[0]?.safe !== true) throw new Error('Unsafe CMS protocol grants')
           const observer = await client.query(newsProtocolObserverPostMigrationVerificationSQL)
           if (observer.rows[0]?.safe !== true) throw new Error('Unsafe CMS observer relation grants')
+          if (await verifyProtocolFunctionContract(client) !== applicability) throw new Error('CMS protocol applicability changed')
           await client.query('COMMIT')
         } catch (error) {
           await client.query('ROLLBACK').catch(() => {})
