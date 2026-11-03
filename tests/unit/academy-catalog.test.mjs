@@ -20,13 +20,12 @@ function fixture() {
   const lessons = modules.flatMap(module => [0, 1].map(order => ({ id: randomUUID(), module_id: module.id,
     active: true, title: `Lesson ${order}`, description: 'Simple description', order, media_type: 'youtube',
     youtube_video_id: 'dQw4w9WgXcQ', media_version: 1 })));
-  const documents = [];
   const progress = [];
-  const assets = [];
   const calls = [];
   let connections = 0;
-  let cmsLocks = 0;
-  let beforeCurriculumLock;
+  let beforeCourseLock;
+  let beforeModuleLock;
+  let beforeLessonLock;
   const users = {
     closer: { uid: 'closer', role: 'viewer', job_title_id: closerJob, job_title_active: true, permissions: {} },
     capture: { uid: 'capture', role: 'viewer', job_title_id: captureJob, job_title_active: true, permissions: {} },
@@ -38,11 +37,22 @@ function fixture() {
     async connect() { connections++; return { query: pool.query, release() { connections--; } }; },
     async query(sql, values = []) {
       calls.push({ sql, values });
-      if (/pg_advisory_xact_lock/.test(sql) && ++cmsLocks === 3 && beforeCurriculumLock) {
-        beforeCurriculumLock();
+      if (/cms_documents|cms_revisions|cms_assets|7193029|\/api\/cms/i.test(sql)) {
+        throw new Error(`Forbidden Academy editorial access: ${sql}`);
+      }
+      const lock = /FROM academy\s+WHERE id=ANY/.test(sql) ? 'course'
+        : /FROM academy_modules[\s\S]*FOR UPDATE/.test(sql) ? 'module'
+          : /FROM academy_lessons[\s\S]*FOR UPDATE/.test(sql) ? 'lesson' : null;
+      const callback = lock === 'course' ? beforeCourseLock
+        : lock === 'module' ? beforeModuleLock : beforeLessonLock;
+      if (callback) {
+        if (lock === 'course') beforeCourseLock = null;
+        if (lock === 'module') beforeModuleLock = null;
+        if (lock === 'lesson') beforeLessonLock = null;
+        callback();
       }
       let rows;
-      if (/^(BEGIN|COMMIT|ROLLBACK)$|pg_advisory_xact_lock/.test(sql)) rows = [];
+      if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql)) rows = [];
       else if (/scheduled.status = 'scheduled'/.test(sql)) rows = [];
       else if (/FROM academy a/.test(sql)) {
         rows = courses.filter(course => {
@@ -53,16 +63,7 @@ function fixture() {
             && (!category || course.category.trim() === values[Number(category[1]) - 1])
             && (!group || course.learning_group === values[Number(group[1]) - 1]);
         }); // Policy still executes for every candidate; no policy replacement in the double.
-      } else if (/FROM academy s/.test(sql)) {
-        const ids = /FOR UPDATE OF s/.test(sql) ? values[0] : values[1];
-        rows = courses.filter(row => ids.includes(row.id)).map(row => {
-          const doc = documents.find(doc => doc.type === 'academy' && doc.source_id === row.id);
-          return { source_id: row.id, source_active: row.active, document_id: doc?.id || null,
-            published_revision_id: doc?.blocks ? doc.id : null, blocks: doc?.blocks || null };
-        });
-      } else if (/FROM cms_documents d/.test(sql)) {
-        rows = documents.filter(row => row.type === values[0] && (Array.isArray(values[1]) ? values[1].includes(row.source_id) : row.source_id === values[1]));
-      } else if (/FROM cms_assets/.test(sql)) rows = assets.filter(row => values[0].includes(row.id) && !row.deleting_at);
+      }
       else if (/SELECT m.course_id/.test(sql)) {
         const lesson = lessons.find(row => row.id === values[0].toLowerCase());
         const module = modules.find(row => row.id === lesson?.module_id);
@@ -85,12 +86,13 @@ function fixture() {
       return { rows: structuredClone(rows) };
     },
   };
-  return { pool, users, courses, modules, lessons, documents, progress, assets, calls, connections: () => connections,
-    beforeCurriculumLock(callback) { beforeCurriculumLock = callback; },
-    publish(type, source_id, blocks) { documents.push({ id: randomUUID(), type, source_id, blocks }); } };
+  return { pool, users, courses, modules, lessons, progress, calls, connections: () => connections,
+    beforeCourseLock(callback) { beforeCourseLock = callback; },
+    beforeModuleLock(callback) { beforeModuleLock = callback; },
+    beforeLessonLock(callback) { beforeLessonLock = callback; } };
 }
 
-test.skip('legacy CMS publication filtering in continue', async t => {
+test('continue uses only active curriculum, current media versions and own progress', async t => {
   const f = fixture();
   const { request } = await createAcademyHttp(t, f.pool, f.users);
   const get = (path = '/continue?limit=1', user = 'closer') => request.get(`/api/academy${path}`).set('x-fixture-user', user);
@@ -105,9 +107,9 @@ test.skip('legacy CMS publication filtering in continue', async t => {
   f.lessons[2].media_version = 2; f.lessons[3].media_version = 2;
   assert.deepEqual((await get()).body, []);
   f.lessons[2].media_version = 1;
-  f.publish('academy_lesson', f.lessons[2].id, null);
+  f.lessons[2].active = false;
   assert.deepEqual((await get()).body, []);
-  f.documents.length = 0;
+  f.lessons[2].active = true;
   f.courses[1].active = false;
   assert.deepEqual((await get()).body, []);
   for (const query of ['limit=0', 'limit=101', 'limit=1.5', 'all=true', 'limit=1&limit=2']) await get(`/continue?${query}`).expect(400);
@@ -145,12 +147,9 @@ test('HTTP authorization precedes pagination, counts and categories; groups are 
   assert.ok(f.calls.some(call => call.values[0] === true && call.values[1] === f.users.closer.job_title_id));
 });
 
-test.skip('legacy CMS source revalidation', async t => {
+test('catalog revalidates course, module and lesson state while holding domain locks', async t => {
   const changes = {
-    'unpublished source and document deleted': f => {
-      f.lessons.splice(4, 1);
-      f.documents.length = 0;
-    },
+    'lesson removed': f => { f.lessons.splice(4, 1); },
     'lesson deactivated': f => { f.lessons[4].active = false; },
     'module deactivated': f => { f.modules[2].active = false; },
     'course deactivated': f => { f.courses[2].active = false; },
@@ -163,19 +162,19 @@ test.skip('legacy CMS source revalidation', async t => {
     const f = fixture();
     const lessonId = f.lessons[4].id;
     let interleaved = false;
-    if (name.startsWith('unpublished')) f.publish('academy_lesson', lessonId, null);
-    f.beforeCurriculumLock(() => { change(f); interleaved = true; });
+    const hook = ['course deactivated', 'course audience revoked', 'course deleted'].includes(name)
+      ? 'beforeCourseLock' : name.startsWith('module ') ? 'beforeModuleLock' : 'beforeLessonLock';
+    f[hook](() => { change(f); interleaved = true; });
     const { request } = await createAcademyHttp(t, f.pool, f.users);
     await request.get(`/api/academy/lessons/${lessonId}`).set('x-fixture-user', 'closer').expect(404);
     assert.equal(interleaved, true);
     assert.equal(f.connections(), 0);
   });
-  for (const target of ['course', 'catalog', 'neighbor']) await t.test(`deleted unpublished source excluded from ${target}`, async t => {
+  for (const target of ['course', 'catalog', 'neighbor']) await t.test(`inactive lesson excluded from ${target}`, async t => {
     const f = fixture();
     const [first, second] = f.lessons.slice(4);
     let interleaved = false;
-    f.publish('academy_lesson', first.id, null);
-    f.beforeCurriculumLock(() => { changes['unpublished source and document deleted'](f); interleaved = true; });
+    f.beforeLessonLock(() => { first.active = false; interleaved = true; });
     const { request } = await createAcademyHttp(t, f.pool, f.users);
     const path = target === 'course' ? `/${f.courses[2].id}` : target === 'catalog' ? '' : `/lessons/${second.id}`;
     const result = await request.get(`/api/academy${path}`).set('x-fixture-user', 'closer').expect(200);
@@ -189,7 +188,7 @@ test.skip('legacy CMS source revalidation', async t => {
   });
 });
 
-test.skip('legacy CMS lock ordering', async t => {
+test('catalog locks the Academy hierarchy in course, module, lesson order', async t => {
   const f = fixture();
   const { request } = await createAcademyHttp(t, f.pool, f.users);
   await request.get('/api/academy').set('x-fixture-user', 'closer').expect(200);
@@ -200,15 +199,14 @@ test.skip('legacy CMS lock ordering', async t => {
     assert.match(call.sql, /ANY\(\$1::uuid\[\]\)/);
   }
   const firstRowLock = f.calls.indexOf(hierarchyReads[0]);
-  const priorLocks = f.calls.slice(0, firstRowLock).filter(call => /pg_advisory_xact_lock/.test(call.sql));
-  assert.equal(priorLocks.length, 3);
-  assert.match(hierarchyReads[0].sql, /FROM academy\s/);
+    assert.equal(f.calls.some(call => /pg_advisory_xact_lock|cms_documents|cms_revisions|cms_assets|7193029/.test(call.sql)), false);
+    assert.match(hierarchyReads[0].sql, /FROM academy\s/);
   assert.match(hierarchyReads[1].sql, /FROM academy_modules/);
   assert.match(hierarchyReads[2].sql, /FROM academy_lessons/);
   assert.equal(f.connections(), 0);
 });
 
-test.skip('legacy publication visibility in curriculum', async t => {
+test('curriculum visibility follows active hierarchy and preserves current progress', async t => {
   const f = fixture();
   const { request } = await createAcademyHttp(t, f.pool, f.users);
   const get = (path, user = 'closer') => request.get(`/api/academy${path}`).set('x-fixture-user', user);
@@ -223,7 +221,7 @@ test.skip('legacy publication visibility in curriculum', async t => {
   assert.equal(view.modules[0].lessons[1].completed, false);
   assert.equal((await get(`/lessons/${first.id}`)).body.next_lesson_id, second.id);
   assert.equal((await get(`/lessons/${second.id}`)).body.previous_lesson_id, first.id);
-  f.publish('academy_lesson', second.id, null);
+  second.active = false;
   await get(`/lessons/${second.id}`).expect(404);
   assert.equal((await get(`/lessons/${first.id}`)).body.next_lesson_id, null);
   module.active = false;
@@ -239,55 +237,45 @@ test.skip('legacy publication visibility in curriculum', async t => {
   course.active = false;
   await get(`/lessons/${first.id}`).expect(404);
   course.active = true;
-  f.publish('academy', course.id, null);
+  course.active = false;
   await get(`/${course.id}`).expect(404);
   await get(`/lessons/${first.id}`).expect(404);
   assert.equal((await get('')).headers['x-total-count'], '1');
   assert.deepEqual((await get('/categories')).body, ['Cultura']);
 });
 
-test.skip('legacy CMS transaction authorization', async () => {
+test('transaction authorization rechecks the own course tree and audience', async () => {
   const f = fixture();
   const lesson = f.lessons[4];
   const db = { query: f.pool.query }; // No connect method: nested pool readers cannot work.
   assert.ok(await authorizeLessonInTransaction(db, f.users.closer, lesson.id));
   const locks = f.calls.filter(call => /pg_advisory_xact_lock|FOR UPDATE/.test(call.sql));
-  assert.match(locks[0].sql, /pg_advisory_xact_lock/);
-  assert.match(locks[1].sql, /FROM academy WHERE/);
-  assert.match(locks[2].sql, /FROM academy_modules/);
-  assert.match(locks[3].sql, /FROM academy_lessons/);
+  assert.match(locks[0].sql, /FROM academy WHERE/);
+  assert.match(locks[1].sql, /FROM academy_modules/);
+  assert.match(locks[2].sql, /FROM academy_lessons/);
+  assert.equal(locks.some(call => /cms_documents|cms_revisions|cms_assets|7193029|pg_advisory/.test(call.sql)), false);
   assert.equal(f.connections(), 0);
   assert.equal(await authorizeLessonInTransaction(db, f.users.capture, lesson.id), null);
   f.modules[2].active = false;
   assert.equal(await authorizeLessonInTransaction(db, f.users.closer, lesson.id), null);
   f.modules[2].active = true;
-  f.publish('academy_lesson', lesson.id, [{ type: 'pdf', asset_id: randomUUID(), title: 'Missing PDF' }]);
-  assert.equal(await authorizeLessonInTransaction(db, f.users.closer, lesson.id), null);
-  assert.ok(f.calls.some(call => /FROM cms_assets/.test(call.sql)));
-  f.documents.length = 0;
-  f.publish('academy', f.courses[2].id, null);
+  f.courses[2].active = false;
   assert.equal(await authorizeLessonInTransaction(db, f.users.closer, lesson.id), null);
 });
 
-test.skip('legacy CMS block projection', async t => {
+test('course and lesson views project only persisted Academy fields', async t => {
   const f = fixture();
   const { request } = await createAcademyHttp(t, f.pool, f.users);
   const lesson = f.lessons[4];
-  const image = { id: randomUUID(), mime_type: 'image/png', byte_size: 100, storage_key: randomUUID() };
-  const pdf = { id: randomUUID(), mime_type: 'application/pdf', byte_size: 100, storage_key: randomUUID() };
-  f.assets.push(image, pdf);
-  f.publish('academy', f.courses[2].id, [{ type: 'image', asset_id: image.id, alt: 'Cover' }]);
-  f.publish('academy_lesson', lesson.id, [{ type: 'pdf', asset_id: pdf.id, title: 'Material' }]);
   const get = path => request.get(`/api/academy${path}`).set('x-fixture-user', 'closer');
   const course = (await get(`/${f.courses[2].id}`).expect(200)).body;
-  assert.equal(course.course.cover_asset_id, image.id);
-  assert.equal(course.course.description, '');
+  assert.equal(course.course.description, 'Legacy');
+  assert.equal(Object.hasOwn(course.course, 'content_blocks'), false);
   const detail = (await get(`/lessons/${lesson.id.toUpperCase()}`).expect(200)).body;
-  assert.equal(detail.description, '');
-  assert.deepEqual(detail.content_blocks, [{ type: 'pdf', asset_id: pdf.id, title: 'Material' }]);
-  pdf.deleting_at = '2026-09-30';
-  await get(`/lessons/${lesson.id}`).expect(404);
-  assert.equal((await get(`/${f.courses[2].id}`)).body.course.total_lessons, 1);
+  assert.equal(detail.description, 'Simple description');
+  assert.equal(detail.media.type, 'youtube');
+  assert.equal(Object.hasOwn(detail, 'content_blocks'), false);
+  assert.equal(f.calls.some(call => /cms_documents|cms_revisions|cms_assets|7193029/.test(call.sql)), false);
   const original = f.pool.query;
   f.pool.query = async () => { throw new Error('private database failure'); };
   const failure = await get('').expect(500);

@@ -1,22 +1,43 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
-// Controlled database boundary only: tests run the real routers, validators,
-// mutations, CMS block validation and withAudit. Real SQL runs in test-academy.
+// Controlled database boundary only: tests run the real Academy routers,
+// validators and withAudit. Editorial history is immutable fixture data.
 export function mutationFixture() {
-  const state = { courses: [], modules: [], lessons: [], audience: [], jobs: [], documents: [], revisions: [], assets: [], audits: [] };
+  const state = {
+    courses: [], modules: [], lessons: [], audience: [], jobs: [],
+    documents: [{ id: 'historical-document', bytes: 'document-bytes' }],
+    revisions: [{ id: 'historical-revision', document_id: 'historical-document', bytes: 'revision-bytes' }],
+    assets: [{ id: 'historical-asset', bytes: 'asset-bytes' }], audits: [],
+  };
   const calls = [];
   const users = {
     manager: { uid: 'manager', role: 'admin', permissions: { manageAcademy: true } },
     denied: { uid: 'denied', role: 'admin', permissions: {} },
   };
-  let queue = Promise.resolve();
   let failAudit = false;
   let connection = 0;
+  const locks = new Map();
+
+  async function acquire(key, clientId) {
+    const lock = locks.get(key) || { owner: null, waiters: [] };
+    locks.set(key, lock);
+    if (lock.owner && lock.owner !== clientId) await new Promise(resolve => lock.waiters.push(resolve));
+    lock.owner = clientId;
+  }
+
+  function release(clientId) {
+    for (const [key, lock] of locks) {
+      if (lock.owner !== clientId) continue;
+      const next = lock.waiters.shift();
+      if (next) next();
+      else locks.delete(key);
+    }
+  }
+
   const pool = {
     async connect() {
       const clientId = ++connection;
-      let unlock;
       let snapshot;
       let inTransaction = false;
       return {
@@ -24,22 +45,37 @@ export function mutationFixture() {
         async query(raw, values = []) {
           const sql = raw.replace(/\s+/g, ' ').trim();
           calls.push({ sql, values, clientId });
+          if (/cms_documents|cms_revisions|cms_assets|7193029|\/api\/cms/i.test(sql)) {
+            throw new Error(`Forbidden Academy editorial SQL: ${sql}`);
+          }
           let rows = [];
           if (sql === 'BEGIN') { assert.equal(inTransaction, false); inTransaction = true; }
-          else if (/pg_advisory_xact_lock/.test(sql)) {
-            assert.equal(inTransaction, true);
-            assert.deepEqual(values, [7193029]);
-            if (!unlock) {
-              const previous = queue;
-              queue = new Promise(resolve => { unlock = resolve; });
-              await previous;
-              snapshot = structuredClone(state);
+          else if (sql === 'COMMIT' || sql === 'ROLLBACK') {
+            if (sql === 'ROLLBACK' && snapshot) {
+              for (const key of Object.keys(state)) state[key] = structuredClone(snapshot[key]);
             }
-          } else if (sql === 'COMMIT' || sql === 'ROLLBACK') {
-            if (sql === 'ROLLBACK' && snapshot) Object.assign(state, snapshot);
             inTransaction = false;
-            unlock?.(); unlock = null;
-          } else if (/INSERT INTO audit_log/.test(sql)) {
+            release(clientId);
+          } else {
+            if (inTransaction && /FOR UPDATE/.test(sql)) {
+            const key = /SELECT \* FROM academy WHERE id=\$1 FOR UPDATE/.test(sql)
+              ? `course:${values[0]}`
+              : /SELECT \* FROM academy_modules WHERE id=\$1/.test(sql)
+                ? `module:${values[0]}`
+                : /SELECT \* FROM academy_lessons WHERE id=\$1/.test(sql)
+                  ? `lesson:${values[0]}`
+                  : /academy_modules WHERE course_id=\$1/.test(sql)
+                    ? `module-set:${values[0]}`
+                    : /academy_lessons WHERE module_id=ANY\(\$1/.test(sql)
+                      ? `lesson-set:${JSON.stringify(values[0])}`
+                      : /academy_lessons WHERE module_id=\$1/.test(sql)
+                        ? `lesson-set:${values[0]}` : null;
+            if (key) {
+              await acquire(key, clientId);
+              snapshot ||= structuredClone(state);
+            }
+            }
+          if (/INSERT INTO audit_log/.test(sql)) {
             if (failAudit) throw new Error('audit unavailable');
             state.audits.push(values);
           } else if (/SELECT m.course_id/.test(sql)) {
@@ -64,32 +100,7 @@ export function mutationFixture() {
             rows = state.lessons.filter(row => /module_id=ANY/.test(sql) ? values[0].includes(row.module_id)
               : /WHERE module_id/.test(sql) ? row.module_id === values[0]
               : row.id === values[0] && row.module_id === values[1]);
-          } else if (/scheduled.status = 'scheduled'/.test(sql)) {
-            rows = state.documents.filter(row => row.type === values[1] && values[2].includes(row.source_id)
-              && row.scheduled_at && new Date(row.scheduled_at) <= values[0])
-              .flatMap(row => {
-                const revision = state.revisions.find(r => r.id === row.scheduled_revision_id && r.status === 'scheduled');
-                return revision ? [{ ...row, scheduled_blocks: revision.blocks }] : [];
-              });
-          } else if (/UPDATE cms_revisions SET status/.test(sql)) {
-            const revision = state.revisions.find(row => row.id === values[0]);
-            const expected = /AND status = 'published'/.test(sql) ? 'published' : 'scheduled';
-            if (revision?.status === expected) revision.status = /SET status = 'published'/.test(sql) ? 'published' : 'archived';
-          } else if (/UPDATE cms_documents/.test(sql)) {
-            const document = state.documents.find(row => row.id === values[0]);
-            if (/SET published_revision_id/.test(sql)) {
-              document.published_revision_id = values[1];
-              document.published_at = values[2];
-            }
-            document.scheduled_revision_id = null;
-            document.scheduled_at = null;
-          } else if (/FROM cms_documents d/.test(sql)) {
-            rows = state.documents.filter(row => row.type === values[0] && row.source_id === values[1]);
-            rows = rows.map(row => Object.hasOwn(row, 'published_revision_id') ? { ...row,
-              blocks: state.revisions.find(r => r.id === row.published_revision_id && r.status === 'published')?.blocks ?? null,
-            } : row);
-          } else if (/FROM cms_assets/.test(sql)) rows = state.assets.filter(row => values[0].includes(row.id));
-          else if (/^INSERT INTO academy \(/.test(sql)) {
+           } else if (/^INSERT INTO academy \(/.test(sql)) {
             const keys = [...sql.split('VALUES')[0].matchAll(/"(\w+)"/g)].map(match => match[1]);
             const row = { id: randomUUID(), ...Object.fromEntries(keys.map((key, i) => [key, values[i]])) };
             state.courses.push(row); rows = [row];
@@ -124,13 +135,7 @@ export function mutationFixture() {
             const row = state.lessons.find(row => row.id === id);
             Object.assign(row, { title, description, order, active, media_type, youtube_video_id, media_url, media_version: row.media_version + increment });
             rows = [row];
-          } else if (/DELETE FROM cms_documents/.test(sql)) {
-            const type = /content_type='academy_lesson'/.test(sql) ? 'academy_lesson' : 'academy';
-            const ids = Array.isArray(values[0]) ? values[0] : [values[0]];
-            const deleted = state.documents.filter(row => row.type === type && ids.includes(row.source_id)).map(row => row.id);
-            state.documents = state.documents.filter(row => !deleted.includes(row.id));
-            state.revisions = state.revisions.filter(row => !deleted.includes(row.document_id));
-          } else if (/^DELETE FROM academy( |_modules |_lessons )/.test(sql)) {
+           } else if (/^DELETE FROM academy( |_modules |_lessons )/.test(sql)) {
             const key = /academy_modules/.test(sql) ? 'modules' : /academy_lessons/.test(sql) ? 'lessons' : 'courses';
             rows = state[key].filter(row => row.id === values[0]).map(row => ({ id: row.id }));
             state[key] = state[key].filter(row => row.id !== values[0]);
@@ -140,6 +145,7 @@ export function mutationFixture() {
             }
             if (key !== 'lessons') state.lessons = state.lessons.filter(row => state.modules.some(m => m.id === row.module_id));
           } else throw new Error(`Unhandled mutation SQL: ${sql}`);
+          }
           return { rows: structuredClone(rows), rowCount: rows.length };
         },
       };
