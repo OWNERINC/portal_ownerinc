@@ -81,6 +81,17 @@ git ls-remote --tags origin "payload-*-frozen-2026-11-03*"
 - No editorial functionality was introduced.
 - The only repository file added by `OWN-36` is this baseline document.
 
+## Post-preservation result
+
+- The initial baseline document was committed as
+  `ae5ea3b736f4ebceb1517d5d5a2551381207c76e` and published on
+  `origin/tiownerinc/own-36-freeze`.
+- After remote preservation was proved, PR #82 was closed at
+  `2026-11-03T13:20:20Z` with `mergedAt=null`.
+- A final `git ls-remote` check confirmed both archive branches and both peeled
+  annotated tags still resolve to the hashes recorded above after closure.
+- The isolated worktree was clean after publishing the baseline commit.
+
 ## Verification applicability
 
 This issue changes documentation only and performs Git preservation operations.
