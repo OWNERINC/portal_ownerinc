@@ -103,7 +103,7 @@ test('reminder reloads ignore deferred responses that finish out of order', asyn
   assert.equal(harness.context.tableStates.length, 4);
 });
 
-test('maintained frontends have no shared CMS renderer dependency', () => {
+test('maintained frontends have no editorial renderer dependency', () => {
   for (const source of [knowledge, academy, academyLesson, benefits, reminders, dashboard]) {
     assert.doesNotMatch(source, /cms-block-renderer|content_blocks|\/api\/cms|renderBlocks/);
   }

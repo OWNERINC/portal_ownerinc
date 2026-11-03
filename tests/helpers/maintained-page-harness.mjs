@@ -6,7 +6,8 @@ export { TestEvent, drain };
 
 const booleanAttributes = new Set(['hidden', 'disabled', 'required', 'checked', 'selected', 'inert', 'novalidate', 'open']);
 
-// Extend the shared DOM double with text/form behavior used by Knowledge and
+// Extend the shared DOM double with text/form behavior used by maintained pages
+// such as Knowledge and
 // reminder filters. No application state or loader logic is reproduced here.
 class FormNode extends Node {
   constructor(tag, owner, attrs = {}) {

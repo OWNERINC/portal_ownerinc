@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMountedHarness, drain } from '../helpers/cms-harness.mjs';
+import { createMountedHarness, drain } from '../helpers/maintained-page-harness.mjs';
 
 const UUID = '550e8400-e29b-41d4-a716-446655440000';
 const cron = overrides => ({

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { parseFixture } from './cms-harness.mjs';
+import { parseFixture } from './maintained-page-harness.mjs';
 import { createRouterHarness, TestEvent, deferred, drain } from './router-harness.mjs';
 
 export { TestEvent, drain };
