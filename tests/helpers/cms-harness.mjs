@@ -6,7 +6,7 @@ export { TestEvent, drain };
 
 const booleanAttributes = new Set(['hidden', 'disabled', 'required', 'checked', 'selected', 'inert', 'novalidate', 'open']);
 
-// Extend the shared DOM double with text/form behavior used by both CMS and
+// Extend the shared DOM double with text/form behavior used by Knowledge and
 // reminder filters. No application state or loader logic is reproduced here.
 class FormNode extends Node {
   constructor(tag, owner, attrs = {}) {
@@ -77,10 +77,10 @@ export function parseFixture(html) {
 // Mount the complete production module, UI helpers, renderer and lifecycle.
 // Only browser DOM and external transports/timers are doubled. Transports
 // deliberately ignore abort so tests exercise the lifecycle's late-result guard.
-export async function createMountedHarness(name = 'cms', { user = { permissions: { superAdmin: true } } } = {}) {
+export async function createMountedHarness(name = 'reminders', { user = { permissions: { superAdmin: true } } } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = parseFixture(html);
-  const requests = [], revoked = [], observers = [], editorCallbacks = [], timers = new Map();
+  const requests = [], revoked = [], observers = [], timers = new Map();
   let timerId = 0;
   const window = new FormNode('window', doc);
   const location = new URL(`https://portal.test/${name}.html`);
@@ -117,24 +117,12 @@ export async function createMountedHarness(name = 'cms', { user = { permissions:
   await loadModule('public/js/ui.js', ['clear', 'element', 'showState', 'safeHttpUrl', 'openDialog', 'closeDialog', 'setDialogCloseGuard', 'protectForm', 'canLeavePageUI']);
   await loadModule('public/js/page-lifecycle.js', ['createPageLifecycle']);
   await loadModule('public/js/cms-block-renderer.js', ['renderBlocks', 'cleanupRenderedBlocks', 'validateBlocks', 'BLOCK_TYPES']);
-  if (name === 'cms') {
-    await loadModule('public/js/pagination.js', ['renderPagination']);
-    await loadModule('public/js/cms-editor-values.js', ['normalizeEditorBlocks']);
-    await loadModule('public/js/cms-block-editor.js', ['createBlockEditor', 'createBlockSettings', 'serializeBlocks', 'STANDARD_BLOCK_TYPES']);
-    await loadModule('public/js/owner-news/model.js', ['normalizeEditorial', 'getNewsPresentation', 'estimateNewsReadTime']);
-    await loadModule('public/js/owner-news/reader-view.js', ['renderNewsArticle']);
-    await loadModule('public/js/owner-news/cms-editorial.js', ['createEditorialFields', 'editorialPublicationError']);
-    await loadModule('public/js/owner-news/cms-home.js', ['mountNewsHomeEditor']);
-    await loadModule('public/js/owner-news/cms-polls.js', ['mountNewsPollManager']);
-    const createEditor = context.createBlockEditor;
-    context.createBlockEditor = options => { editorCallbacks.push(options); return createEditor(options); };
-  }
   await loadModule(`public/js/${name}.js`, ['mount']);
   const page = context.createPageLifecycle({ user });
   page.location = location;
   context.mount(page);
   return {
-    doc, html, window, context, page, requests, revoked, observers, editorCallbacks, timers,
+    doc, html, window, context, page, requests, revoked, observers, timers,
     get confirms() { return confirms; },
     node: id => doc.getElementById(id),
     matching: fragment => requests.filter(request => request.path.includes(fragment)),

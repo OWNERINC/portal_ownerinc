@@ -91,7 +91,6 @@ test('admin navigation restores the last verified role before paint and revalida
   assert.match(layout, /html\[data-auth-state="ready"\]\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
   assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
   assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-autocard-access="true"\]\s+\.autocard-link/);
-  assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-cms-access="true"\]\s+\.cms-link/);
   assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-pos-cards-access="true"\]\s+\.pos-cards-link/);
   assert.match(auth, /sessionStorage\.setItem\('ownerinc-verified-role', user\.role\)/);
   assert.match(auth, /sessionStorage\.setItem\(AUTH_SNAPSHOT_KEY/);
@@ -507,7 +506,7 @@ test('authenticated shell is generated from one static build source', async () =
   assert.match(generator, /id="btn-new"/);
   assert.match(generator, /id="btn-new-reminder"/);
   assert.doesNotMatch(generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '', /benefits|solides/i);
-  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos', 'solides']) {
+  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'autocard', 'cards-pos', 'solides']) {
     const html = await readFile(`public/${page}.html`, 'utf8');
     assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);
     const brands = html.match(/<a\b[^>]*\bclass="sidebar-brand"[^>]*>/g) || [];

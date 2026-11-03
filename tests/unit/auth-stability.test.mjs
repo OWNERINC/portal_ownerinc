@@ -16,7 +16,7 @@ const userDoc = (uid = 'a', overrides = {}) => ({
 const visualSnapshot = (uid = 'a', overrides = {}) => ({
   version: 2, uid, firebaseStorageKey: firebaseKey, savedAt: Date.now() - 86400000,
   user: { uid }, role: 'admin', permissions: { manageUsers: true, manageKnowledge: true },
-  autocardAccess: true, posCardsAccess: true, cmsAccess: true, ...overrides,
+  autocardAccess: true, posCardsAccess: true, ...overrides,
 });
 const response = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'Content-Type': 'application/json' },
@@ -139,7 +139,6 @@ test('concurrent validations share one request, subsequent validation refreshes 
   assert.equal(h.document.documentElement.dataset.portalRole, 'viewer');
   assert.equal(h.document.documentElement.dataset.autocardAccess, 'false');
   assert.equal(h.document.documentElement.dataset.posCardsAccess, 'false');
-  assert.equal(h.document.documentElement.dataset.cmsAccess, 'false');
   assert.match(h.redirects.at(-1), /dashboard\.html/);
 });
 

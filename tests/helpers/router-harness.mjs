@@ -123,7 +123,7 @@ function makeDocument(path, styles = [], dependencies = []) {
   const wrapper = new Node('div', doc, { class: 'portal-wrapper' });
   const sidebar = new Node('aside', doc, { class: 'sidebar' });
   const nav = new Node('ul', doc, { class: 'sidebar-nav' });
-  for (const name of ['dashboard', 'knowledge', 'academy', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos']) {
+  for (const name of ['dashboard', 'knowledge', 'academy', 'announcements', 'profile', 'admin', 'autocard', 'cards-pos']) {
     nav.append(new Node('a', doc, { href: `https://portal.test/${name}.html` }));
   }
   sidebar.append(nav);

@@ -119,17 +119,18 @@
    assets inacessíveis até a retenção remover arquivos sem referências.
 
 6. A edição legacy de PDF altera somente o único bloco PDF sem ambiguidade.
-   Quando há múltiplos blocos PDF, a operação é rejeitada e o Editor CMS é o
-   caminho obrigatório para escolher o bloco correto.
+    Quando há múltiplos blocos PDF, a operação é rejeitada porque a interface
+    atual não oferece uma entrada editorial para escolher o bloco correto; a
+    retomada desse fluxo fica para a próxima etapa do CMS.
 7. No editor simples da Base de Conhecimento, título/categoria/anexo permanecem
    editáveis. Sem documento CMS, o texto simples continua no payload; com
    `cms_managed=true`, o campo corpo fica desabilitado e `content` é omitido.
    A edição de metadados preserva os blocos e ponteiros de publicação; a troca
    de PDF segue a sincronização específica acima, sem substituir parágrafos.
-   A ajuda oferece `./cms.html` a admin autorizado em `manageKnowledge`
-   (incluindo super-admin), para selecionar a área e o documento existente.
-   Não há parâmetro de documento/deep link novo nem bypass dos guards do router
-   para edição não salva, gravação, upload ou descarte de PDF temporário.
+    A Base de Conhecimento não oferece uma entrada visual para o editor CMS
+    nesta etapa. Não há parâmetro de documento/deep link nem bypass dos guards
+    do router para edição não salva, gravação, upload ou descarte de PDF
+    temporário.
 8. A tradução fica no DOM: `knowledge` → Base de Conhecimento, painel →
    Configuração e publicação, estados `draft`/`published`/`scheduled`/`archived`
    → Rascunho/Publicado/Agendado/Arquivado. Estados desconhecidos permanecem texto

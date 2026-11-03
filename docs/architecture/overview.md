@@ -647,7 +647,7 @@ independentes e cleanup do reader. Escopo exclusivamente sintético/local;
   blocos e assets validados; documento sem publicação válida não reativa o texto
   legado. Busca e resumo usam a projeção textual centralizada de
   `blocksToText`/`validateBlocks`.
-- O Editor CMS mantém revisões imutáveis. Publicação e agendamento resolvem o
+- Os contratos CMS mantêm revisões imutáveis. Publicação e agendamento resolvem o
   `draft_revision_id` sob lock transacional e rejeitam seleção obsoleta com
   `409`; o cancelamento de agendamento preserva um draft posterior e
   despublicar arquiva tanto `published` quanto `scheduled`.

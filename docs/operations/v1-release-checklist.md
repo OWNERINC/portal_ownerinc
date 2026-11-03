@@ -77,7 +77,7 @@ responsável e evidência; não marque uma validação externa usando apenas
   `cms_documents` usa fallback. Scheduled vencido só é promovido após validação de
   blocos e assets; scheduled inválido é arquivado e auditado.
 - [x] Edição legacy de PDF substitui/remove somente o único bloco PDF identificável;
-  artigos com múltiplos PDFs exigem o Editor CMS.
+  artigos com múltiplos PDFs permanecem sem seleção visual nesta etapa do Portal.
 - [ ] Teste da migration CMS e validação da segunda execução requerem `MIGRATION_DATABASE_URL`.
 - [ ] Aceitação autenticada de criação, prévia, publicação, agendamento, fallback e PDF protegido permanece pendente.
 - [ ] Deploy e validação no ambiente live estão fora desta auditoria.

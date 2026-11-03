@@ -7,8 +7,7 @@ export { TestEvent, drain };
 export const editor = { uid: 'user-1', role: 'admin', permissions: { manageKnowledge: true } };
 
 // Parse the actual HTML and run the whole Knowledge module, renderer, UI and
-// router/lifecycle with DOM/form/auth/transport doubles. The destination CMS
-// mount is a marker, not its real editor; CMS has a separate mounted harness.
+// router/lifecycle with DOM/form/auth/transport doubles.
 export async function createKnowledgeEditorialHarness(t, { user = editor } = {}) {
   const h = await createRouterHarness({ initialURL: 'https://portal.test/knowledge.html', user, autoStart: false, realUI: true });
   const { doc, context } = h;
@@ -69,11 +68,6 @@ export async function createKnowledgeEditorialHarness(t, { user = editor } = {})
     },
     input(id, value) { node(id).value = value; node(id).dispatchEvent(new TestEvent('input')); },
     async submit() { node('article-form').dispatchEvent(new TestEvent('submit')); await drain(); },
-    async followCmsLink() {
-      const anchor = node('article-cms-link');
-      if (!anchor) throw new Error('No authorized CMS link');
-      doc.dispatchEvent(new TestEvent('click', { target: anchor })); await drain();
-    },
     async uploadPdf() { node('f-pdf').files = [{ name: 'synthetic.pdf', type: 'application/pdf', size: 100 }]; node('f-pdf').dispatchEvent(new TestEvent('change')); await drain(); return latest('/api/cms/assets'); },
   };
 }

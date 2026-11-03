@@ -18,6 +18,12 @@ const explicitlyExcluded = new Map([
   ['tests/unit/api-security.test.mjs', 'specific negative permission invariant'],
   ['tests/unit/frontend-invariants.test.mjs', 'specific negative frontend invariant'],
   ['tests/unit/schema-invariants.test.mjs', 'specific negative schema invariant'],
+  ['public/cms.html', 'removed legacy CMS surface'],
+  ['public/js/cms.js', 'removed legacy CMS surface'],
+  ['public/js/cms-block-editor.js', 'removed legacy CMS surface'],
+  ['tests/unit/cms-editor-ui.test.mjs', 'removed legacy CMS surface'],
+  ['tests/unit/cms-news-editor.test.mjs', 'removed legacy CMS surface'],
+  ['tests/unit/cms-selection-state.test.mjs', 'removed legacy CMS surface'],
   ['docs/reports/2026-08-18-ombudsman-removal.md', 'the removal report'],
 ]);
 

@@ -119,7 +119,7 @@ test('review 1/2: authoritative revocation purges Admin even when destination HT
     const html = deferred(), auth = deferred();
     h.context.fetchOverride = () => html.promise;
     h.context.getCurrentUserDoc = () => auth.promise;
-    const navigation = h.router.navigate(order === 'destination-denied' ? '/cms.html' : '/dashboard.html');
+    const navigation = h.router.navigate(order === 'destination-denied' ? '/autocard.html' : '/dashboard.html');
     if (order !== 'auth-first') html.reject(new Error('HTML offline'));
     await drain();
     assert.equal(previous.active, true, 'preparation failure alone cannot revoke access');
@@ -151,11 +151,11 @@ test('review 1: a cancelled route still applies its current authorization, but a
   h.context.getCurrentUserDoc = () => lateAuth.promise;
   const stale = h.router.navigate('/academy.html');
   h.context.getCurrentUserDoc = async () => h.context.user;
-  await h.router.navigate('/cms.html');
+  await h.router.navigate('/knowledge.html');
   const newer = h.scope;
   lateAuth.resolve(viewer); await stale;
   assert.equal(newer.active, true);
-  assert.equal(h.location.pathname, '/cms.html');
+  assert.equal(h.location.pathname, '/knowledge.html');
 
   const otherAccount = deferred();
   h.context.getCurrentUserDoc = () => otherAccount.promise;

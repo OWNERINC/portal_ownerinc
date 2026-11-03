@@ -181,12 +181,12 @@ test('Academy catalog return metadata coexists with the real router history inde
 
 test('cancelled dirty dialogs retain the page and history entry; confirmation is checked after preparation', async () => {
   const h = await createRouterHarness();
-  await h.router.navigate('/cms.html');
+  await h.router.navigate('/profile.html');
   h.context.uiLeaveAllowed = false;
   const oldMain = h.doc.getElementById('main-content').children[0];
   assert.equal(await h.router.navigate('/dashboard.html'), false);
   h.history.go(-1); await drain();
-  assert.equal(h.location.pathname, '/cms.html');
+  assert.equal(h.location.pathname, '/profile.html');
   assert.equal(h.doc.getElementById('main-content').children[0], oldMain);
   assert.equal(h.entries.length, 2);
   h.context.uiLeaveAllowed = true;
@@ -232,7 +232,7 @@ test('superseded navigation and transient authentication failure keep the previo
 test('authorization is server-validated and denied tools never mount, including revoked current areas', async () => {
   const h = await createRouterHarness();
   h.context.user = { uid: 'user-1', role: 'viewer', permissions: {}, autocard_access: false, pos_cards_access: false };
-  for (const path of ['/admin.html', '/cms.html', '/autocard.html', '/cards-pos.html']) {
+  for (const path of ['/admin.html', '/autocard.html', '/cards-pos.html']) {
     assert.equal(await h.router.navigate(path), false);
   }
   assert.equal(h.mounts.length, 1);
@@ -290,34 +290,6 @@ test('a UID change during resource preparation cannot mount the previously valid
   css.resolve();
   assert.equal(await loading, false);
   assert.equal(h.mounts.length, 1);
-});
-
-test('CMS guard blocks in-flight work, confirms only unsaved edits, and disposal cancels autosave', async () => {
-  const source = await readFile('public/js/cms.js', 'utf8');
-  let guard, dispose, confirms = 0;
-  const cancelled = [];
-  const context = vm.createContext({
-    page: { beforeLeave(fn) { guard = fn; }, cleanup(fn) { dispose = fn; } },
-    saving: false, actionBusy: false, creatingDocument: false, assetUploading: 0, saveInFlight: null,
-    dirty: false, newDocumentDirty: false, saveQueued: false, saveTimer: 42,
-    homeEditor: null, editorialFields: null, previewCleanup: null,
-    selectionToken: 0, documentsRequestToken: 0, historyRequestToken: 0, creationRequestToken: 0, editorGeneration: 0,
-    showToast() {}, clearTimeout(id) { cancelled.push(id); },
-    window: { confirm() { confirms++; return false; } },
-  });
-  vm.runInContext(source.slice(source.indexOf('page.beforeLeave('), source.indexOf('function setError(')), context);
-  assert.equal(guard(), true);
-  for (const field of ['saving', 'actionBusy', 'creatingDocument', 'assetUploading', 'saveInFlight']) {
-    context[field] = true; assert.equal(guard(), false); context[field] = false;
-  }
-  assert.equal(confirms, 0, 'confirmation cannot abandon a write');
-  context.dirty = true;
-  assert.equal(guard(), false); assert.equal(confirms, 1);
-  assert.equal(context.dirty, true, 'a guard never clears the draft');
-  dispose();
-  assert.deepEqual(cancelled, [42]);
-  assert.equal(context.saveTimer, null);
-  assert.equal(context.selectionToken, 1);
 });
 
 test('the CMS renderer aborts assets and revokes late blobs when the page signal ends', async () => {
