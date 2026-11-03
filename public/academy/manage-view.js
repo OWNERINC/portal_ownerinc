@@ -3,42 +3,6 @@ import { element } from '../js/ui.js';
 import { createCourseEditor } from './course-editor.js';
 import { createCurriculumEditor } from './curriculum-editor.js';
 
-const lessonDocumentFlights = new WeakMap();
-
-export async function ensureLessonDocument(lesson, requestOrPage) {
-  const request = requestOrPage?.fetchAPI ? requestOrPage : requestOrPage.bindAPI({ fetchAPI, fetchAPIPage });
-  const sourceId = lesson.id;
-  const options = arguments[2] || {};
-  const owner = requestOrPage && (typeof requestOrPage === 'object' || typeof requestOrPage === 'function') ? requestOrPage : request;
-  let flights = lessonDocumentFlights.get(owner);
-  if (!flights) { flights = new Map(); lessonDocumentFlights.set(owner, flights); }
-  const existingFlight = flights.get(String(sourceId).toLowerCase());
-  if (existingFlight) return existingFlight;
-  const operation = (async () => {
-  const requestOptions = options.signal ? { signal: options.signal } : {};
-  const findExisting = async () => {
-    const listed = await request.fetchAPIPage(`/api/cms/documents?type=academy_lesson&source_id=${encodeURIComponent(sourceId)}&limit=100&offset=0`, requestOptions);
-    if (options.signal?.aborted) throw new DOMException('Operação cancelada.', 'AbortError');
-    return (listed.data || []).find(doc => doc.content_type === 'academy_lesson' && String(doc.source_id).toLowerCase() === String(sourceId).toLowerCase());
-  };
-    const existing = await findExisting();
-    if (existing) return existing.id;
-    try {
-      const created = await request.fetchAPI('/api/cms/documents', { method: 'POST', body: JSON.stringify({ type: 'academy_lesson', title: lesson.title || 'Aula', category: 'Academy', source_id: sourceId }), ...requestOptions });
-      if (options.signal?.aborted) throw new DOMException('Operação cancelada.', 'AbortError');
-      return created.document?.id || created.id;
-    } catch (error) {
-      if (error?.status === 409) {
-        const concurrent = await findExisting();
-        if (concurrent) return concurrent.id;
-      }
-      throw error;
-    }
-  })();
-  flights.set(String(sourceId).toLowerCase(), operation);
-  try { return await operation; } finally { if (flights.get(String(sourceId).toLowerCase()) === operation) flights.delete(String(sourceId).toLowerCase()); }
-}
-
 export function mountAcademyManager({ root, page, courseId, newCourse = false } = {}) {
   let editor = null, curriculum = null, disposed = false;
   if (!root || !can(page?.user, 'manageAcademy')) { root?.replaceChildren(element('p', { role: 'status', text: 'Este conteúdo não está disponível para seu perfil.' })); return () => {}; }
@@ -54,7 +18,7 @@ export function mountAcademyManager({ root, page, courseId, newCourse = false } 
         const courseRoot = element('div'); shell.append(courseRoot);
         editor = createCourseEditor({ root: courseRoot, page, course, onSaved: () => window.location.reload() });
         if (course.delivery_mode === 'internal') {
-          curriculum = createCurriculumEditor({ root: shell, page, courseId, initialCourse: course, onSaved: () => {}, ensureLessonDocument: (lesson, request, options) => ensureLessonDocument(lesson, request, options) });
+          curriculum = createCurriculumEditor({ root: shell, page, courseId, initialCourse: course, onSaved: () => {} });
         } else shell.append(element('p', { className: 'academy-manager-help', role: 'status', text: 'Curso externo: somente os metadados e a URL podem ser editados. Módulos e aulas pertencem ao curso interno.' }));
         status.remove(); return;
       }

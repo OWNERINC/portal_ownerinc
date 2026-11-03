@@ -52,11 +52,6 @@ function applyPosCardsNavigation(user) {
   document.documentElement.dataset.posCardsAccess = String(user?.pos_cards_access === true);
 }
 
-function applyCmsNavigation(user) {
-  const cmsPermissions = ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders'];
-  document.documentElement.dataset.cmsAccess = String(cmsPermissions.some(permission => can(user, permission)));
-}
-
 function cacheAuthSnapshot(user) {
   // Visual hints only: no profile fields or token, and no authorization lifetime.
   visualSnapshot = {
@@ -69,8 +64,6 @@ function cacheAuthSnapshot(user) {
     user: { uid: user.uid },
     autocardAccess: user?.autocard_access === true,
     posCardsAccess: user?.pos_cards_access === true,
-    cmsAccess: ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders']
-      .some(permission => can(user, permission)),
   };
   try {
     sessionStorage.setItem(AUTH_SNAPSHOT_KEY, JSON.stringify(visualSnapshot));
@@ -105,7 +98,6 @@ function applyNavigation(user) {
   applyVerifiedRole(user);
   applyAutoCardNavigation(user);
   applyPosCardsNavigation(user);
-  applyCmsNavigation(user);
   document.documentElement.dataset.authSnapshot = 'true';
 }
 
@@ -117,7 +109,6 @@ function clearVerifiedRole() {
   delete document.documentElement.dataset.portalRole;
   delete document.documentElement.dataset.authSnapshot;
   delete document.documentElement.dataset.autocardAccess;
-  delete document.documentElement.dataset.cmsAccess;
   delete document.documentElement.dataset.posCardsAccess;
   setAuthState('error');
   try {
