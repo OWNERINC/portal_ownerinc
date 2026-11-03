@@ -387,6 +387,126 @@ A integração de observação CMS, adapters de lifecycle/recovery/rota, instala
 SMTP nativo e entrega/ownership reais continuam pendentes. `contract_missing` e
 `unsupported_contract` não são convertidos em saúde ou aceite operacional.
 
+### Checkpoint após publicação de `c80825f`
+
+O CI geral de `88c18eb`, run `41546885237`, terminou **PASS**: verify,
+builds/scans, Nginx/Chromium e migrations/integrações PostgreSQL 16. Os jobs de
+publicação/deploy/candidate/manual-runtime foram skipped.
+
+Em `c80825fa3086d08a538f3b2b87611ec30d55ce8a`, B0 `41549538184` e rotação
+`41549538105` passaram. O monitor SMTP `41549538117` também passou: 34 testes
+offline, oito fixtures host/root, verificação systemd e SMTP/TLS real descartável,
+incluindo failure/recovery/FIFO/dedup/rejection/timeout. Esse job executou o merge
+ref `92e414d79e9f24a68c7e6df582efea175751f563`, de `c80825f` sobre
+`a6d863e74908e7888d9fc99ee9cb82bb3d7edca5`; não comprova inbox produtivo.
+
+O browser `41549538128` construiu as três imagens e depois falhou em
+`Execute fresh leased editorial browser qualification`, com `runner_failed`.
+O wrapper não expôs a etapa do relatório privado; não há artifacts exportados.
+O transporte de diagnóstico finito está em correção, sem promover esse resultado
+a PASS nem divulgar relatório, credenciais ou dumps. O CI geral `41549538118`
+ainda estava em andamento neste checkpoint.
+
+O snapshot independente de diagnóstico finalizer, árvore
+`a774eca60b8902fa8f74b68e6bff4a8a2b41ec45`, contém cinco arquivos staged e está em
+verify isolado. Esse snapshot exclui o presente checkpoint e a integração
+lifecycle posterior; ainda não foi publicado.
+
+Lifecycle recebeu **ship** depois de atualizar duas fixtures de adapter para
+fornecer a config exata ao initializer; primário **29 PASS / zero FAIL / zero
+SKIP** nas quatro suítes combinadas. Bridge: primário **20 PASS API** e
+**14 PASS CMS observer**; a revisão ainda exige preservar a autoridade final já
+validada quando o rollback de leitura falha. Catálogo: primário **272 PASS / zero
+FAIL / zero SKIP**; a revisão identificou cleanup de listener durante registro e
+checagem do deadline após teardown final. Essas duas correções permanecem em
+implementação; os testes anteriores não as qualificam.
+
+### Checkpoint publicado `52b63ad` e integração posterior
+
+O snapshot de diagnóstico finalizer foi publicado em
+`52b63ad482af70590238f25708e2cf83bcb2ecdf`, árvore exata
+`a774eca60b8902fa8f74b68e6bff4a8a2b41ec45`. O `npm run verify` isolado terminou
+com **2.222 PASS / 35 SKIP raiz + 563 PASS / 11 SKIP CMS**, zero falhas; sintaxe,
+typecheck, scanner e Compose read-only passaram. Os cinco arquivos desse snapshot
+foram commitados; os três hunks lifecycle do runner permaneceram unstaged.
+
+O runtime manual CI `41550800535` falhou com diagnóstico finito
+`phase=protocol-grants reason=database_error sqlstate=42501`. O runner confirmou
+parada dos serviços próprios e retenção privada de evidência; os demais jobs
+mutáveis foram skipped. Essa fase inclui grants, normalização observer, reset de
+role, transferência de ownership e verificações: **a instrução exata recusada
+continua desconhecida**. Duas investigações independentes estão em andamento.
+
+O CI geral de `c80825f`, `41549538118`, terminou **PASS**. Em `52b63ad`, SMTP
+`41550798071`, B0 `41550798282` e rotação `41550798101` passaram; o CI geral
+`41550798178` ainda estava em execução nesta consulta. O browser `41550798148`
+repetiu `runner_failed` depois de construir as imagens; ainda não há diagnóstico
+da etapa nem jornada browser PASS. O transporte finito segue em implementação.
+
+As correções de cleanup do catálogo receberam revisão **ship** e repetição
+primária **279 PASS / zero FAIL / zero SKIP** nas suítes runtime, golden e CAS.
+Isso cobre o abort durante registro de listener e o deadline após teardown;
+SQL, ACLs, fingerprint e API foram preservados. A cessação efetiva de I/O
+PostgreSQL continua sem qualificação nativa.
+
+A bridge corrigida recebeu **ship** com repetição primária **22 PASS API +
+30 PASS CMS/auth**, zero falhas/skips. Leitura final validada sobrevive a rollback
+falho/stalled, mantendo a saúde transacional desconhecida. Registro factory/guard
+na rota e adoção do quarto argumento do catálogo são incrementos separados em
+implementação. O novo valor proposto `bounded-client-discard` descreve somente
+cancelamento/cleanup no cliente, sem certificar cessação física PostgreSQL.
+
+A fixture CAS específica para o runtime manual foi entregue em dois arquivos,
+com repetição primária **122 PASS / zero FAIL / zero SKIP** (21 novos + 101 CAS).
+Revisão fresca e wiring do pai ainda pendem. O implementador identificou possível
+incompatibilidade no endereço observado pelo CLI canônico (`inet::text` versus
+IP sem máscara); a confirmação/correção é separada. Não houve execução PG16 dessa
+fixture nem substituição do UPDATE direto de coverage no runner neste checkpoint.
+
+A recuperação pré-floor recebeu nova entrega para revisão: recusa qualquer
+schema CMS nativo, resolve aliases por mountinfo do kernel e aplica deadline CI
+absoluto de 45 minutos, encerrando trabalho em 38 minutos para preservar cleanup.
+Os negativos UUID INSERT/DELETE, aliases reais e cleanup nativo são assertions
+autorizadas para CI, ainda sem resultado de execução. O pacote permanece
+**NOT SHIP** até revisão e qualificação exigidas.
+
+Os planos de ativação/recuperação active continuam **PROPOSED — BLOCKED / RETHINK**.
+H1 permanece não resolvido: exigir commit até o deadline ou impossibilidade de
+commit posterior não é garantido por checks, timeouts ou broker fechado. H2 e H3
+foram corrigidos somente no desenho; nenhuma implementação está autorizada e
+todos os steps permanecem unchecked. Nenhuma mutação produtiva ocorreu.
+
+### Diagnóstico browser e paralelismo do verify Windows
+
+O CI geral de `52b63ad`, `41550798178`, terminou **PASS**; a falha manual
+`41550800535` permanece separada, sem atribuição da operação exata. O transporte
+finito de diagnóstico browser recebeu **ship** e repetição primária **132 PASS**.
+
+O snapshot inicial de três arquivos, árvore
+`53526a3c3ee97cd2196556c956cc2b2bdadc3528`, teve dois verifies com **2.293 PASS /
+1 FAIL / 35 SKIP raiz**, na preparação autenticada. Sintaxe/typecheck CMS passaram;
+testes CMS/security/Compose posteriores não foram alcançados. Repetição focal
+passou em 33,7 s. Um terceiro verify observacional confirmou timeout no primeiro
+apply: **60.016 ms, `ETIMEDOUT`, `SIGTERM`, status null**, stdout 219 bytes e stderr
+zero. Check anterior passou em 11.367 ms; retry não foi atingido. O preload
+temporário preservou argumentos, limites e resultado; não expôs conteúdo do filho.
+
+Análises independentes e crítica cruzada confirmaram paths/lock únicos e doubles
+de lease/auth; não há evidência de deadlock produtivo. Node 24.15.0 nesse host
+seleciona 15 processos para 158 arquivos. O experimento com a mesma lista e
+concorrência 4 passou: **2.294 PASS / zero FAIL / 35 SKIP**, em 420,4 s, preservando
+600 s agregados e 60 s por filho. Check/apply/retry: **5.650 / 26.850 / 9.152 ms**,
+todos status 0. Isso sustenta mitigação de paralelismo, sem provar o mecanismo da
+lentidão ou término de descendentes.
+
+O incremento limita somente testes raiz Windows a quatro processos, respeitando
+o default menor em hosts pequenos. Inventário, isolamento, assertions e deadlines
+permanecem completos. As regressões executam o bloco real de orquestração com
+fronteiras dobradas; primário **5 PASS**, incluindo propagação da falha raiz antes
+da etapa CMS. A revisão fresca recebeu **ship**; `npm run verify` completo desse
+snapshot ampliado ainda é gate de publicação. Nenhum serviço local ou produtivo
+foi iniciado.
+
 ### Remediação posterior de qs
 
 O lock da API foi atualizado de `qs@6.16.0` para `6.16.2`, mantendo o manifest e

@@ -12,7 +12,7 @@ import { functionalBaseImages } from '../../scripts/integration/payload-function
 import { CI_BASE_PINS } from '../../scripts/prepare-ci-registry-pulls.mjs';
 import { assertExecutionWindow, cleanupGrace, executionDeadline, executionReserve, jobTimeout,
   executionTimeout, fixtureEnvironment, qualifyEditorial, runBounded, scopeSummary,
-  validateEditorialResult } from '../../scripts/integration/payload-editorial-ci.mjs';
+  validateEditorialResult, validateEditorialFailureReport, editorialFailureDetail } from '../../scripts/integration/payload-editorial-ci.mjs';
 
 // Existing locked CMS dependency, installed by the workflow before this test.
 const { parse } = createRequire(new URL('../../cms/package.json', import.meta.url))('yaml');
@@ -132,8 +132,9 @@ test('fixture subprocess environment is a closed projection; ambient production 
   assert.equal(env.PAYLOAD_EDITORIAL_RUN_TOKEN, undefined);
 });
 
-async function orchestrationFixture() {
-  const input = await completedReport(), env = baseEnvironment(), config = readFunctionalConfig(env);
+async function orchestrationFixture(input = null) {
+  input ??= await completedReport();
+  const env = baseEnvironment(), config = readFunctionalConfig(env);
   const directory = path.join(privateRoot, `ownerinc-payload-functional-${runId.replaceAll('-', '')}`), leasePath = path.join(directory, 'lease.json');
   const lease = { phase: 'editorial', identity: { runId }, config, binding: input.expected.source };
   const calls = [], reads = [];
@@ -208,6 +209,257 @@ test('subprocess diagnostics remain captured and process failures are not retrie
   const denied = spawnSync(process.execPath, ['scripts/integration/payload-editorial-ci.mjs'], { env: {}, encoding: 'utf8', timeout: 10000 });
   assert.equal(denied.status, 1); assert.equal(denied.stdout, '');
   assert.ok(denied.stderr.includes('hosted_linux_ci_required')); assert.ok(!denied.stderr.includes('PASS'));
+});
+
+const privateCanary = 'PRIVATE_EDITORIAL_CANARY_7a42';
+const executionStages = ['loopback_listener_reservation', 'runtime_transport_materialization', 'docker_preflight',
+  'resolved_fixture_configuration', 'fresh_database_start', 'physical_targets_before_ddl', 'explicit_fixture_migrations',
+  'real_runtime_start', 'inspected_internal_nginx_binding', 'real_https_readiness', 'synthetic_identity_setup', 'editorial_browser_contracts'];
+const extraFailurePairs = [['owned_forwarder_stop', 'functional_transport_cleanup_failed'],
+  ['owned_process_stop', 'functional_cleanup_failed'], ['runner_interrupted', 'functional_execution_interrupted'],
+  ['report_inventory', 'functional_report_contract_invalid']];
+
+async function failedReport({ stage = 'editorial_browser_contracts', reason = 'functional_execution_failed',
+  failCase = 'EDITORIAL-restore', allPassed = false } = {}) {
+  const reference = await completedReport(), report = newFunctionalReport(runId);
+  Object.assign(report, { scope: reference.report.scope, source: reference.expected.source, startedAt: reference.report.startedAt });
+  if (failCase || allPassed) {
+    for (const key of ['images', 'targetBindings', 'transport', 'editorialAdmission', 'layers']) report[key] = structuredClone(reference.report[key]);
+    report.layers.browser = allPassed ? 'REAL' : 'NOT_EXECUTED';
+    for (const contract of functionalCases.filter(item => item.phase === 'editorial')) {
+      if (contract.scenarioId === failCase && !allPassed) {
+        // The real recorder must erase all driver/assertion payloads. The runner
+        // catches this fixed error and supplies the finite execution stage below.
+        await assert.rejects(runFunctionalCase(report, contract.scenarioId, async () => {
+          throw Object.assign(new Error(privateCanary), { cause: new Error(privateCanary), token: privateCanary });
+        }), /^Error: functional_case_failed$/u);
+        if (failCase === 'EDITORIAL-restore') report.editorialHomeSource = '234cfd81-7f0d-47ca-a4fb-c9cabd069c0f';
+        break;
+      }
+      await runFunctionalCase(report, contract.scenarioId, async () => contract.requiredChecks.map(check => ({ check, passed: true })));
+    }
+  }
+  report.failure = { stage, reason };
+  report.cleanup = stage === 'owned_process_stop' ? 'owned_stop_failed_preserved'
+    : failCase || allPassed ? 'owned_services_stopped_volumes_and_evidence_retained' : 'no_services_created';
+  report.transportCleanup = stage === 'owned_forwarder_stop' ? 'owned_listener_stop_failed'
+    : stage === 'loopback_listener_reservation' ? 'no_listener_created' : 'owned_listener_and_sockets_closed';
+  report.finishedAt = new Date().toISOString();
+  const code = finishFunctionalReport(report);
+  assert.equal(code, failCase && !allPassed ? 1 : 2);
+  // executeFunctionalLease's final override is essential for setup/cleanup
+  // failures: the case recorder alone may still return INCOMPLETE / exit 2.
+  if (report.failure) report.status = 'FAIL';
+  assert.equal(report.editorialPhaseComplete, false);
+  return { report, expected: { ...reference.expected, notAfter: Date.now() + 1000 },
+    result: { code: 1, signal: null, interrupted: false, pid: 4242, stdout: privateCanary, stderr: privateCanary } };
+}
+
+const projectedFailure = report => ({ ...report.failure, cleanup: report.cleanup ?? 'unknown', transportCleanup: report.transportCleanup ?? 'unknown' });
+async function failedOrchestration(input = null) {
+  const f = await orchestrationFixture(input ?? await failedReport());
+  f.deps.now = () => f.calls.length ? f.expected.notAfter : f.expected.notBefore;
+  return f;
+}
+
+for (const scenarioId of functionalCases.filter(item => item.phase === 'editorial').map(item => item.scenarioId)) {
+  test(`real ${scenarioId} failure yields only the frozen finite projection without altering the report`, async () => {
+    const { report, expected } = await failedReport({ failCase: scenarioId }), before = structuredClone(report);
+    const diagnostic = validateEditorialFailureReport(report, expected);
+    assert.deepEqual(diagnostic, projectedFailure(report)); assert.ok(Object.isFrozen(diagnostic));
+    assert.deepEqual(report, before); assert.ok(!JSON.stringify(report).includes(privateCanary));
+    const failed = report.cases.filter(item => item.status === 'FAIL');
+    assert.equal(failed.length, 1); assert.equal(failed[0].reason, 'acceptance_assertion_failed');
+    assert.equal(report.cases.length, 48); assert.equal(report.acceptanceComplete, false); assert.equal(report.productionValidated, false);
+  });
+}
+
+for (const stage of executionStages) test(`bound producer setup stage ${stage} is diagnosable without optional runtime fields`, async () => {
+  const { report, expected } = await failedReport({ stage, failCase: null });
+  for (const key of ['images', 'transport', 'targetBindings', 'editorialAdmission']) assert.equal(Object.hasOwn(report, key), false);
+  assert.equal(report.cases.every(item => item.status === 'INCOMPLETE'), true);
+  assert.deepEqual(validateEditorialFailureReport(report, expected), projectedFailure(report));
+});
+
+for (const [stage, reason] of extraFailurePairs) test(`finite pair ${stage}/${reason} is accepted only as that pair`, async () => {
+  const { report, expected } = await failedReport({ stage, reason, failCase: null, allPassed: true });
+  assert.deepEqual(validateEditorialFailureReport(report, expected), projectedFailure(report));
+  report.failure.reason = 'functional_execution_failed';
+  assert.equal(validateEditorialFailureReport(report, expected), null);
+});
+
+test('cleanup failures retain the earlier execution stage and missing outcomes never imply successful cleanup', async () => {
+  const { report, expected } = await failedReport();
+  report.cleanup = 'owned_stop_failed_preserved'; report.transportCleanup = 'owned_listener_stop_failed';
+  assert.deepEqual(validateEditorialFailureReport(report, expected), projectedFailure(report));
+  for (const cleanup of ['not_started', 'no_services_created', 'owned_services_stopped_volumes_and_evidence_retained', 'owned_stop_failed_preserved']) {
+    for (const transport of ['no_listener_created', 'owned_listener_and_sockets_closed', 'owned_listener_stop_failed']) {
+      report.cleanup = cleanup; report.transportCleanup = transport;
+      assert.deepEqual(validateEditorialFailureReport(report, expected), projectedFailure(report));
+    }
+  }
+  delete report.cleanup; delete report.transportCleanup;
+  assert.deepEqual(validateEditorialFailureReport(report, expected), { ...report.failure, cleanup: 'unknown', transportCleanup: 'unknown' });
+  report.cleanup = 'unknown'; assert.equal(validateEditorialFailureReport(report, expected), null);
+  delete report.cleanup; report.transportCleanup = 'unknown'; assert.equal(validateEditorialFailureReport(report, expected), null);
+});
+
+const failureNegatives = {
+  'wrong schema': ({ report }) => { report.schemaVersion = 2; },
+  'wrong run': ({ report }) => { report.runId = '234cfd81-7f0d-47ca-a4fb-c9cabd069c0f'; },
+  'wrong commit': ({ report }) => { report.source = { ...report.source, commit: 'f'.repeat(40) }; },
+  'wrong diff hash': ({ report }) => { report.source = { ...report.source, diffHash: 'f'.repeat(64) }; },
+  'wrong source hash': ({ report }) => { report.source = { ...report.source, sourceHash: 'f'.repeat(64) }; },
+  'missing source': ({ report }) => { delete report.source; },
+  'extra source field': ({ report }) => { report.source = { ...report.source, token: privateCanary }; },
+  'wrong image': ({ report }) => { report.images.cms = image('9'); },
+  'wrong scope': ({ report }) => { report.scope = 'preauthority-real-https-first-slice'; },
+  'wrong case phase': ({ report }) => { editorialCase(report).phase = 'preauthority'; },
+  'case identity reorder': ({ report }) => { [report.cases[8], report.cases[9]] = [report.cases[9], report.cases[8]]; },
+  'case inventory missing': ({ report }) => { report.cases.pop(); },
+  'case contract changed': ({ report }) => { editorialCase(report).requiredChecks = ['invented']; },
+  'PASS without observations': ({ report }) => { editorialCase(report).observations = []; },
+  'private observation': ({ report }) => { editorialCase(report).observations[0].token = privateCanary; },
+  'malformed observation': ({ report }) => { editorialCase(report).observations[0].httpStatus = 600; },
+  'noneditorial executed': ({ report }) => { report.cases[0].status = 'PASS'; },
+  'private case reason': ({ report }) => { report.cases.find(item => item.status === 'FAIL').reason = privateCanary; },
+  'unknown layer': ({ report }) => { report.layers.browser = privateCanary; },
+  'missing failure': ({ report }) => { delete report.failure; },
+  'private failure field': ({ report }) => { report.failure.error = privateCanary; },
+  'arbitrary stage': ({ report }) => { report.failure.stage = privateCanary; },
+  'other phase stage': ({ report }) => { report.failure.stage = 'real_browser_contracts'; },
+  'arbitrary reason': ({ report }) => { report.failure.reason = privateCanary; },
+  'wrong execution reason pair': ({ report }) => { report.failure.reason = 'functional_cleanup_failed'; },
+  'newline stage suffix': ({ report }) => { report.failure.stage += '\n'; },
+  'newline reason suffix': ({ report }) => { report.failure.reason += '\n'; },
+  'private cleanup': ({ report }) => { report.cleanup = privateCanary; },
+  'private transport cleanup': ({ report }) => { report.transportCleanup = privateCanary; },
+  'null cleanup': ({ report }) => { report.cleanup = null; },
+  'contradictory service cleanup': ({ report }) => { report.failure = { stage: 'owned_process_stop', reason: 'functional_cleanup_failed' }; },
+  'contradictory transport cleanup': ({ report }) => { report.failure = { stage: 'owned_forwarder_stop', reason: 'functional_transport_cleanup_failed' }; },
+  'stale start': ({ report, expected }) => { report.startedAt = new Date(expected.notBefore - 1).toISOString(); },
+  'future finish': ({ report, expected }) => { report.finishedAt = new Date(expected.notAfter + 1).toISOString(); },
+  'reversed times': ({ report, expected }) => { report.finishedAt = new Date(expected.notBefore - 1).toISOString(); },
+  'missing finish': ({ report }) => { delete report.finishedAt; },
+  'noncanonical time': ({ report }) => { report.startedAt = '2026-11-02'; },
+  'case before report': ({ report, expected }) => { editorialCase(report).startedAt = new Date(expected.notBefore - 1).toISOString(); },
+  'case after report': ({ report, expected }) => { editorialCase(report).finishedAt = new Date(expected.notAfter + 1).toISOString(); },
+  'untimed failed case': ({ report }) => { report.cases.find(item => item.status === 'FAIL').finishedAt = null; },
+  'acceptance promoted': ({ report }) => { report.acceptanceComplete = true; },
+  'production promoted': ({ report }) => { report.productionValidated = true; },
+  'editorial promoted': ({ report }) => { report.editorialPhaseComplete = true; },
+  'preauthority promoted': ({ report }) => { report.preauthorityComplete = true; },
+  'passing status': ({ report }) => { report.status = 'PASS'; },
+  'private top-level field': ({ report }) => { report.token = privateCanary; },
+};
+for (const [label, mutate] of Object.entries(failureNegatives)) test(`exit 1 with ${label} retains opaque runner_failed (same lease, no retry)`, async () => {
+  const input = await failedReport(); mutate(input);
+  assert.equal(validateEditorialFailureReport(input.report, input.expected), null);
+  const f = await failedOrchestration(input);
+  await assert.rejects(qualifyEditorial(f.env, f.deps), error => {
+    assert.equal(error.message, 'runner_failed'); assert.equal(editorialFailureDetail(error), '');
+    assert.equal(JSON.stringify(error).includes(privateCanary), false); return true;
+  });
+  assert.equal(f.calls.length, 2); assert.equal(f.reads.length, 2);
+});
+
+test('malformed inventory emitted by the real finalizer remains unknown, never diagnostic evidence', async () => {
+  const { report, expected } = await failedReport(); report.cases.pop();
+  assert.equal(finishFunctionalReport(report), 1);
+  assert.deepEqual(report.failure, { stage: 'report_inventory', reason: 'functional_report_contract_invalid' });
+  assert.equal(validateEditorialFailureReport(report, expected), null);
+});
+
+test('bounded own-data snapshot refuses accessors, proxies and toJSON without executing them', async () => {
+  const input = await failedReport(); let reads = 0;
+  const trap = () => { reads++; throw new Error(privateCanary); };
+  for (const select of [report => [report, 'failure'], report => [report.failure, 'stage'],
+    report => [report.source, 'commit'], report => [report.cases, '8'], report => [report.transport, 'origin']]) {
+    const report = structuredClone(input.report), [target, key] = select(report);
+    Object.defineProperty(target, key, { get: trap });
+    assert.equal(validateEditorialFailureReport(report, input.expected), null);
+  }
+  const proxy = new Proxy(input.report, { ownKeys: trap, get: trap, getPrototypeOf: trap, getOwnPropertyDescriptor: trap });
+  assert.equal(validateEditorialFailureReport(proxy, input.expected), null);
+  const revoked = Proxy.revocable({}, {}); revoked.revoke();
+  assert.equal(validateEditorialFailureReport(revoked.proxy, input.expected), null);
+  const nested = structuredClone(input.report); nested.transport = proxy;
+  assert.equal(validateEditorialFailureReport(nested, input.expected), null);
+  const jsonHook = structuredClone(input.report); jsonHook.toJSON = trap;
+  assert.equal(validateEditorialFailureReport(jsonHook, input.expected), null);
+  assert.equal(editorialFailureDetail(proxy), ''); assert.equal(editorialFailureDetail(null), '');
+  assert.equal(reads, 0, 'no getter, proxy trap or toJSON is called');
+});
+
+test('diagnostic limits reject cycles, deep/large graphs, oversized keys/text and non-JSON values', async () => {
+  const { report, expected } = await failedReport();
+  const cycle = {}; cycle.self = cycle;
+  let deep = null; for (let index = 0; index < 14; index++) deep = { child: deep };
+  const revokedPrototype = Object.create({ privateCanary });
+  for (const value of [undefined, 1n, NaN, Infinity, () => {}, Symbol(privateCanary), new Map(), revokedPrototype, cycle, deep,
+    Array(129).fill(null), Array.from({ length: 33 }, (_, index) => [index, null]).reduce((o, [k, v]) => ({ ...o, [k]: v }), {}),
+    Array.from({ length: 100 }, () => Array(100).fill(null)), 'é'.repeat(524289), { ['x'.repeat(1024 * 1024 + 1)]: null }]) {
+    assert.equal(validateEditorialFailureReport({ ...report, transport: value }, expected), null);
+  }
+  const sparse = []; sparse.length = 2;
+  const symbolic = { [Symbol(privateCanary)]: null };
+  for (const value of [sparse, symbolic]) assert.equal(validateEditorialFailureReport({ ...report, transport: value }, expected), null);
+});
+
+test('failure diagnostics recheck checkout and tolerate unavailable private reports without reading child output', async () => {
+  for (const mode of ['missing', 'invalid-json', 'unreadable', 'changed-checkout', 'binding-error', 'passing-report']) {
+    const f = await failedOrchestration(mode === 'passing-report' ? await completedReport() : null);
+    f.result.code = 1; let bindings = 0, outputReads = 0;
+    const binding = f.deps.binding;
+    f.deps.binding = async () => {
+      bindings++;
+      if (bindings === 2 && mode === 'changed-checkout') return { ...f.expected.source, sourceHash: 'f'.repeat(64) };
+      if (bindings === 2 && mode === 'binding-error') throw new Error(privateCanary);
+      return binding();
+    };
+    const read = f.deps.read;
+    f.deps.read = async filename => {
+      if (filename !== f.leasePath && ['missing', 'invalid-json', 'unreadable'].includes(mode)) {
+        if (mode === 'invalid-json') return JSON.parse(privateCanary);
+        throw new Error(privateCanary);
+      }
+      return read(filename);
+    };
+    for (const key of ['stdout', 'stderr']) Object.defineProperty(f.result, key, { get: () => { outputReads++; throw new Error(privateCanary); } });
+    await assert.rejects(qualifyEditorial(f.env, f.deps), error => {
+      assert.equal(error.message, 'runner_failed'); assert.equal(editorialFailureDetail(error), ''); return true;
+    });
+    assert.equal(bindings, 2); assert.equal(f.calls.length, 2); assert.equal(outputReads, 0);
+    if (mode === 'changed-checkout' || mode === 'binding-error') assert.deepEqual(f.reads, [f.leasePath]);
+  }
+});
+
+test('actual CI catch body publishes only the bound finite projection to stderr and step summary; exit stays 1', async () => {
+  const f = await failedOrchestration();
+  f.report.cleanup = 'owned_stop_failed_preserved'; f.report.transportCleanup = 'owned_listener_stop_failed';
+  const error = await qualifyEditorial(f.env, f.deps).then(() => assert.fail('exit 1 cannot pass'), value => value);
+  assert.equal(error.message, 'runner_failed'); assert.deepEqual(Object.keys(error), []);
+  const detail = '; runnerStage=editorial_browser_contracts; runnerReason=functional_execution_failed; ' +
+    'reportedCleanup=owned_stop_failed_preserved; reportedTransportCleanup=owned_listener_stop_failed';
+  assert.equal(editorialFailureDetail(error), detail);
+  assert.equal(editorialFailureDetail(Object.assign(new Error('runner_failed'), { diagnostic: projectedFailure(f.report) })), '');
+  const source = await readFile(new URL('../../scripts/integration/payload-editorial-ci.mjs', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('main().catch(async error => {') + 'main().catch(async error => {'.length, source.lastIndexOf('});'));
+  const handle = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'error', 'EditorialCIError', 'editorialFailureDetail', 'console', 'process', 'appendFile', body);
+  for (const summaryFails of [false, true]) {
+    const output = [], summaries = [], processDouble = { env: { GITHUB_STEP_SUMMARY: privateCanary }, exitCode: 0 };
+    await handle(error, error.constructor, editorialFailureDetail, { error: text => output.push(text) }, processDouble, async (filename, text) => {
+      assert.equal(filename, privateCanary); summaries.push(text); if (summaryFails) throw new Error(privateCanary);
+    });
+    assert.equal(processDouble.exitCode, 1);
+    assert.deepEqual(output, [`payload-editorial-ci: FAIL; runner_failed${detail}; acceptance INCOMPLETE; productionValidated=false`]);
+    assert.deepEqual(summaries, [`### Editorial browser qualification\n\n**FAIL / NOT QUALIFIED**: runner_failed${detail}. Full acceptance INCOMPLETE; production validated false.\n`]);
+    for (const secret of [privateCanary, runId, revision, f.leasePath, f.report.transport.origin, f.report.editorialHomeSource,
+      f.report.targetBindings.portalSystemIdentifierHash]) assert.ok(![...output, ...summaries].join('').includes(secret));
+  }
+  assert.equal(f.calls.length, 2); assert.deepEqual(f.calls[1].options, { env: f.env, timeout: executionTimeout, grace: cleanupGrace });
+  assert.deepEqual(f.reads, [f.leasePath, path.join(path.dirname(f.leasePath), 'functional-acceptance-report.json')]);
 });
 
 test('real stalled offline child is interrupted within a bounded grace and cannot be classified as success', async () => {

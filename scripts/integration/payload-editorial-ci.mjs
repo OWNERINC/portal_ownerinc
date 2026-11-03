@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { chmod, lstat, mkdtemp, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isDeepStrictEqual } from 'node:util';
+import { isDeepStrictEqual, types } from 'node:util';
 import { functionalCases } from '../../cms/tests/integration/functional-matrix.mjs';
 import { checkFunctionalParent, readFunctionalConfig } from '../../cms/tests/support/integration-config.mjs';
 import { checkoutBinding, hash, root } from './payload-functional-fixture.mjs';
@@ -54,6 +54,114 @@ export function fixtureEnvironment(env) {
 }
 
 function parseJSON(text, reason) { try { return JSON.parse(text); } catch { fail(reason); } }
+
+// Diagnostic vocabulary from the published executeFunctionalLease producer.
+// This is a failure-only projection, never evidence for qualification/cleanup.
+const failureStages = new Set(['loopback_listener_reservation', 'runtime_transport_materialization', 'docker_preflight',
+  'resolved_fixture_configuration', 'fresh_database_start', 'physical_targets_before_ddl', 'explicit_fixture_migrations',
+  'real_runtime_start', 'inspected_internal_nginx_binding', 'real_https_readiness', 'synthetic_identity_setup', 'editorial_browser_contracts']);
+const failurePairs = new Map([['owned_forwarder_stop', 'functional_transport_cleanup_failed'],
+  ['owned_process_stop', 'functional_cleanup_failed'], ['runner_interrupted', 'functional_execution_interrupted'],
+  ['report_inventory', 'functional_report_contract_invalid']]);
+const serviceCleanup = new Set(['not_started', 'no_services_created', 'owned_services_stopped_volumes_and_evidence_retained', 'owned_stop_failed_preserved']);
+const transportCleanup = new Set(['no_listener_created', 'owned_listener_and_sockets_closed', 'owned_listener_stop_failed']);
+const runnerDiagnostics = new WeakMap();
+
+// Real reads are already bounded private JSON. Also bound injected/test values
+// without JSON.stringify/structuredClone invoking getters, toJSON or proxies.
+function diagnosticData(value, budget = { nodes: 8192, text: 1024 * 1024 }, depth = 0) {
+  if (--budget.nodes < 0 || depth > 12) throw new Error('invalid_diagnostic_data');
+  if (value === null || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    budget.text -= Buffer.byteLength(value);
+    if (budget.text < 0) throw new Error('invalid_diagnostic_data');
+    return value;
+  }
+  if (typeof value !== 'object' || types.isProxy(value)) throw new Error('invalid_diagnostic_data');
+  const array = Array.isArray(value), prototype = Object.getPrototypeOf(value);
+  if (prototype !== (array ? Array.prototype : Object.prototype) && prototype !== null) throw new Error('invalid_diagnostic_data');
+  const keys = Reflect.ownKeys(value);
+  if (array) {
+    const length = Object.getOwnPropertyDescriptor(value, 'length')?.value;
+    if (!Number.isInteger(length) || length < 0 || length > 128 || keys.length !== length + 1) throw new Error('invalid_diagnostic_data');
+    return Array.from({ length }, (_, index) => {
+      const field = Object.getOwnPropertyDescriptor(value, index);
+      if (!field || !Object.hasOwn(field, 'value')) throw new Error('invalid_diagnostic_data');
+      return diagnosticData(field.value, budget, depth + 1);
+    });
+  }
+  if (keys.length > 32) throw new Error('invalid_diagnostic_data');
+  return Object.fromEntries(keys.map(key => {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    if (typeof key !== 'string' || !Object.hasOwn(field, 'value')) throw new Error('invalid_diagnostic_data');
+    budget.text -= Buffer.byteLength(key);
+    if (budget.text < 0) throw new Error('invalid_diagnostic_data');
+    return [key, diagnosticData(field.value, budget, depth + 1)];
+  }));
+}
+
+export function validateEditorialFailureReport(raw, expected) {
+  try {
+    const report = diagnosticData(raw);
+    const required = ['schemaVersion', 'runId', 'scope', 'status', 'acceptanceComplete', 'productionValidated',
+      'editorialPhaseComplete', 'preauthorityComplete', 'layers', 'cases', 'source', 'startedAt', 'finishedAt', 'failure'];
+    const optional = ['cleanup', 'transportCleanup', 'images', 'targetBindings', 'transport', 'editorialAdmission', 'editorialHomeSource'];
+    if (!object(report) || required.some(key => !Object.hasOwn(report, key)) ||
+        Object.keys(report).some(key => !required.includes(key) && !optional.includes(key))) return null;
+    equal([report.schemaVersion, report.runId, report.scope, report.status, report.acceptanceComplete,
+      report.productionValidated, report.editorialPhaseComplete, report.preauthorityComplete],
+    [1, expected.runId, scope, 'FAIL', false, false, false, false], 'diagnostic_binding_invalid');
+    if (!uuid(report.runId) || !exactKeys(report.source, ['commit', 'diffHash', 'sourceHash'])) return null;
+    equal(report.source, expected.source, 'diagnostic_source_invalid');
+    if (Object.hasOwn(report, 'images')) equal(report.images, expected.images, 'diagnostic_images_invalid');
+    if (!isoTime(report.startedAt) || !isoTime(report.finishedAt) || !Number.isSafeInteger(expected.notBefore) ||
+        !Number.isSafeInteger(expected.notAfter) || Date.parse(report.startedAt) < expected.notBefore ||
+        Date.parse(report.finishedAt) > expected.notAfter || report.startedAt > report.finishedAt) return null;
+    if (!exactKeys(report.layers, ['portalApi', 'firebase', 'cms', 'nginx', 'browser']) ||
+        Object.values(report.layers).some(value => !['REAL', 'NOT_EXECUTED'].includes(value))) return null;
+    if (!Array.isArray(report.cases) || report.cases.length !== contracts.length) return null;
+    let previous = report.startedAt;
+    for (const [index, contract] of contracts.entries()) {
+      const item = report.cases[index];
+      if (!exactKeys(item, [...Object.keys(contract), 'status', 'reason', 'observations', 'startedAt', 'finishedAt'])) return null;
+      for (const key of Object.keys(contract)) equal(item[key], contract[key], 'diagnostic_phase_invalid');
+      if (contract.phase !== 'editorial' || item.status === 'INCOMPLETE') {
+        equal([item.status, item.reason, item.observations, item.startedAt, item.finishedAt],
+          ['INCOMPLETE', contract.implemented ? 'not_executed' : contract.dependency, [], null, null], 'diagnostic_pending_invalid');
+      } else {
+        if (!['PASS', 'FAIL'].includes(item.status) || item.reason !== (item.status === 'FAIL' ? 'acceptance_assertion_failed' : null) ||
+            !isoTime(item.startedAt) || !isoTime(item.finishedAt) || item.startedAt < previous ||
+            item.finishedAt < item.startedAt || item.finishedAt > report.finishedAt || !Array.isArray(item.observations)) return null;
+        previous = item.finishedAt;
+        if (item.status === 'FAIL') equal(item.observations, [], 'diagnostic_failure_invalid');
+        else {
+          for (const observation of item.observations) {
+            if (!object(observation) || !exactKeys(observation, Object.hasOwn(observation, 'httpStatus') ? ['check', 'passed', 'httpStatus'] : ['check', 'passed']) ||
+                observation.passed !== true || (Object.hasOwn(observation, 'httpStatus') &&
+                (!Number.isInteger(observation.httpStatus) || observation.httpStatus < 100 || observation.httpStatus > 599))) return null;
+          }
+          equal(item.observations.map(value => value.check).sort(), [...contract.requiredChecks].sort(), 'diagnostic_observations_invalid');
+        }
+      }
+    }
+    if (!exactKeys(report.failure, ['stage', 'reason'])) return null;
+    const { stage, reason } = report.failure;
+    if (reason !== (failureStages.has(stage) ? 'functional_execution_failed' : failurePairs.get(stage)) || typeof reason !== 'string') return null;
+    const cleanup = Object.hasOwn(report, 'cleanup') ? report.cleanup : 'unknown';
+    const transport = Object.hasOwn(report, 'transportCleanup') ? report.transportCleanup : 'unknown';
+    if (Object.hasOwn(report, 'cleanup') && !serviceCleanup.has(cleanup) ||
+        Object.hasOwn(report, 'transportCleanup') && !transportCleanup.has(transport)) return null;
+    if (stage === 'owned_process_stop' && cleanup !== 'owned_stop_failed_preserved' ||
+        stage === 'owned_forwarder_stop' && transport !== 'owned_listener_stop_failed') return null;
+    return Object.freeze({ stage, reason, cleanup, transportCleanup: transport });
+  } catch { return null; } // No report content or parsing/driver error crosses this boundary.
+}
+
+export function editorialFailureDetail(error) {
+  const diagnostic = runnerDiagnostics.get(error);
+  return diagnostic ? `; runnerStage=${diagnostic.stage}; runnerReason=${diagnostic.reason}; ` +
+    `reportedCleanup=${diagnostic.cleanup}; reportedTransportCleanup=${diagnostic.transportCleanup}` : '';
+}
 
 export function validateEditorialResult(result, report, expected) {
   if (result.code === 1) fail('runner_failed');
@@ -172,7 +280,16 @@ export async function qualifyEditorial(env, { deadline, run = runBounded, read =
   const result = await run(process.execPath, ['scripts/test-payload-integration.mjs', '--execute', '--lease', leasePath],
     { env, timeout: executionTimeout, grace: cleanupGrace });
   // Exit 1, interruption, timeout and missing report can never become a narrow PASS.
-  if (result.code === 1) fail('runner_failed');
+  if (result.code === 1) {
+    const failure = new EditorialCIError('runner_failed');
+    try {
+      equal(await binding(), source, 'checkout_changed_during_execution');
+      const report = await read(path.join(directory, 'functional-acceptance-report.json'));
+      const diagnostic = validateEditorialFailureReport(report, { ...expected, notAfter: now() });
+      if (diagnostic) runnerDiagnostics.set(failure, diagnostic);
+    } catch { /* Missing/unreadable/stale/unbound diagnostics retain the original failure, cause unknown. */ }
+    throw failure;
+  }
   if (result.code !== 2 || result.signal || result.interrupted) fail('runner_exit_or_output_invalid');
   equal(await binding(), source, 'checkout_changed_during_execution');
   const report = await read(path.join(directory, 'functional-acceptance-report.json'));
@@ -211,9 +328,10 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main().catch(async error => {
     const reason = error instanceof EditorialCIError ? error.message : 'editorial_ci_failed_closed';
-    console.error(`payload-editorial-ci: FAIL; ${reason}; acceptance INCOMPLETE; productionValidated=false`);
+    const detail = editorialFailureDetail(error);
+    console.error(`payload-editorial-ci: FAIL; ${reason}${detail}; acceptance INCOMPLETE; productionValidated=false`);
     if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY,
-      `### Editorial browser qualification\n\n**FAIL / NOT QUALIFIED**: ${reason}. Full acceptance INCOMPLETE; production validated false.\n`).catch(() => {});
+      `### Editorial browser qualification\n\n**FAIL / NOT QUALIFIED**: ${reason}${detail}. Full acceptance INCOMPLETE; production validated false.\n`).catch(() => {});
     process.exitCode = 1;
   });
 }

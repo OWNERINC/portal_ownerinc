@@ -64,6 +64,12 @@ doubles não substituem migrations, persistência ou jornadas reais no navegador
 Para conferir o shell gerado sem escrever arquivos, use
 `node scripts/generate-public-shell.mjs --check`; confira também `git diff --check`.
 
+No Windows, a etapa de testes raiz limita o paralelismo entre arquivos a quatro
+processos (ou ao default menor do Node em hosts pequenos). Isso limita a carga
+simultânea das fixtures que encadeiam Git Bash/Python; o inventário completo e
+os deadlines dos testes continuam os mesmos. A etapa raiz mantém seu limite de
+600 segundos. As demais plataformas usam o paralelismo padrão do Node.
+
 ### Persistência de enquetes Owner News
 
 A migration `035_owner_news_polls` cria enquetes, opções e votos. A API recebe

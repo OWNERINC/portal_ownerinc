@@ -2,6 +2,7 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { availableParallelism } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -62,7 +63,11 @@ async function checkSyntax() {
 async function checkTests() {
   console.log('verify: tests');
   const tests = await filesUnder('tests/unit', '.test.mjs');
-  run(process.execPath, ['--test', ...tests], { stdio: 'inherit', timeout: 600000 });
+  // Windows fixtures launch serial Git Bash/Python chains within each test file.
+  // Cap file scheduling without increasing Node's default on smaller hosts.
+  const concurrency = process.platform === 'win32'
+    ? [`--test-concurrency=${Math.min(4, Math.max(1, availableParallelism() - 1))}`] : [];
+  run(process.execPath, ['--test', ...concurrency, ...tests], { stdio: 'inherit', timeout: 600000 });
   console.log('verify: CMS unit tests (offline)');
   run(process.execPath, ['cms/scripts/test.mjs'], { stdio: 'inherit' });
 }
