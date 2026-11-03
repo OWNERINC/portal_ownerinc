@@ -4,9 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { createFeedbackHarness, drain } from '../helpers/frontend-feedback-harness.mjs';
 
-const [renderer, css, knowledgeCss, knowledgeHtml, knowledge, academy, academyLesson, benefits, reminders, dashboard] = await Promise.all([
-  readFile('public/js/cms-block-renderer.js', 'utf8'),
-  readFile('public/css/cms.css', 'utf8'),
+const [knowledgeCss, knowledgeHtml, knowledge, academy, academyLesson, benefits, reminders, dashboard] = await Promise.all([
   readFile('public/css/knowledge.css', 'utf8'),
   readFile('public/knowledge.html', 'utf8'),
   readFile('public/js/knowledge.js', 'utf8'),
@@ -105,16 +103,10 @@ test('reminder reloads ignore deferred responses that finish out of order', asyn
   assert.equal(harness.context.tableStates.length, 4);
 });
 
-test('safe renderer validates the allowlist and never uses raw HTML sinks', () => {
-  for (const type of ['quote', 'profile']) assert.match(renderer, new RegExp(`['"]${type}['"]`));
-  assert.match(renderer, /export const BLOCK_TYPES/);
-  assert.match(renderer, /export function validateBlocks/);
-  assert.match(renderer, /MAX_CMS_PAYLOAD_BYTES = 5 \* 1024 \* 1024/);
-  assert.match(renderer, /TextEncoder\(\)\.encode\(JSON\.stringify\(blocks\)\)/);
-  assert.match(renderer, /textContent/);
-  assert.match(renderer, /fetchAPIAsset/);
-  assert.match(renderer, /\/api\/cms\/assets\//);
-  assert.doesNotMatch(renderer, /innerHTML|outerHTML|insertAdjacentHTML/);
+test('maintained frontends have no shared CMS renderer dependency', () => {
+  for (const source of [knowledge, academy, academyLesson, benefits, reminders, dashboard]) {
+    assert.doesNotMatch(source, /cms-block-renderer|content_blocks|\/api\/cms|renderBlocks/);
+  }
 });
 
 test('optional pagination containers stay null-safe on list and detail pages', async () => {
@@ -155,35 +147,16 @@ test('Benefits renders own description as text without the CMS transport', async
   assert.equal(h.requests.some(request => /\/api\/benefits\?/.test(request.path)), true);
 });
 
-test.skip('legacy Knowledge PDF upload limit', () => {
-  assert.equal((knowledge.match(/file\.size > 100 \* 1024 \* 1024/g) || []).length, 2);
-  assert.equal((knowledge.match(/O PDF deve ter no máximo 100 MB\./g) || []).length, 2);
+test('Knowledge has retired the PDF upload surface', () => {
+  assert.doesNotMatch(knowledgeHtml, /f-pdf|pdf_state|application\/pdf/i);
+  assert.doesNotMatch(knowledge, /file\.size|pdf_asset_id|pdf_title|fetchAPIAsset|\/api\/cms/);
 });
 
-test.skip('legacy CMS block rendering transition', () => {
-  for (const source of [knowledge, academy, academyLesson, benefits]) {
-    assert.match(source, /content_blocks/);
-    assert.match(source, /renderBlocks/);
-  }
-  assert.match(reminders, /renderBlocks\(content, reminder\.content_blocks/);
-  assert.match(reminders, /fallbackText: reminder\.description/);
-  assert.match(dashboard, /renderBlocks\(copy, blocks/);
-  assert.match(dashboard, /fallbackText: description/);
-  assert.match(reminders, /renderBlocks/);
-});
-
-test('private preview URLs are revoked and media reserve intrinsic layout space', () => {
-  assert.match(renderer, /export function cleanupRenderedBlocks/);
-  assert.match(renderer, /URL\.revokeObjectURL/);
-  assert.match(renderer, /MutationObserver/);
-  assert.match(css, /aspect-ratio: 16 \/ 9/);
-});
-
-test('one document-level observer cleans private media when any rendered ancestor detaches', () => {
-  assert.match(renderer, /const documentObservers = new WeakMap\(\)/);
-  assert.match(renderer, /container\.ownerDocument\?\.documentElement/);
-  assert.match(renderer, /observer\.observe\(document\.documentElement, \{ childList: true, subtree: true \}\)/);
-  assert.match(renderer, /candidate\.container\.isConnected/);
-  assert.match(renderer, /record\.states\.add\(state\)/);
-  assert.doesNotMatch(renderer, /observer\.observe\(parent/);
+test('descriptions stay in each maintained domain and the retired shared CSS is not loaded', async () => {
+  const pages = await Promise.all(['public/academy.html', 'public/dashboard.html', 'public/reminders.html', 'public/benefits.html']
+    .map(file => readFile(file, 'utf8')));
+  for (const source of pages) assert.doesNotMatch(source, /css\/cms\.css|content_blocks|\/api\/cms/);
+  assert.match(benefits, /description/);
+  assert.match(reminders, /description/);
+  assert.match(dashboard, /description/);
 });

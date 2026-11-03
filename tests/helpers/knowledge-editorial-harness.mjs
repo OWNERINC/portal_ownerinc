@@ -6,7 +6,7 @@ import { createRouterHarness, TestEvent, deferred, drain } from './router-harnes
 export { TestEvent, drain };
 export const editor = { uid: 'user-1', role: 'admin', permissions: { manageKnowledge: true } };
 
-// Parse the actual HTML and run the whole Knowledge module, renderer, UI and
+// Parse the actual HTML and run the whole Knowledge module, UI and
 // router/lifecycle with DOM/form/auth/transport doubles.
 export async function createKnowledgeEditorialHarness(t, { user = editor, forbidEditorial = false } = {}) {
   const h = await createRouterHarness({ initialURL: 'https://portal.test/knowledge.html', user, autoStart: false, realUI: true });
@@ -28,15 +28,14 @@ export async function createKnowledgeEditorialHarness(t, { user = editor, forbid
   doc.createElement = tag => { const node = new FormNode(tag, doc); adopt(node); return node; };
   doc.createTextNode = text => { const node = doc.createElement('#text'); node.textContent = text; return node; };
   doc.documentElement.dataset.authSnapshot = 'true';
-  const requests = [], revoked = [], confirms = [], errors = [];
+  const requests = [], confirms = [], errors = [];
   const transport = kind => (path, options = {}) => {
     if (forbidEditorial && /\/api\/cms/i.test(path)) throw new Error(`Forbidden editorial request: ${path}`);
     const call = { kind, path, options, ...deferred() }; requests.push(call); return call.promise;
   };
   Object.assign(context, {
     console: { ...console, error: (...args) => errors.push(args) },
-    fetchAPI: transport('api'), fetchAPIPage: transport('list'), fetchAPIAsset: transport('asset'), TextEncoder, structuredClone,
-    URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
+    fetchAPI: transport('api'), fetchAPIPage: transport('list'),
     FormData: class {
       constructor(form) { this.form = form; this.parts = []; }
       append(...parts) { this.parts.push(parts); }
@@ -50,7 +49,6 @@ export async function createKnowledgeEditorialHarness(t, { user = editor, forbid
     vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { ${exports} }); })();`, context, { filename: path });
   }
   await load('public/js/pagination.js', 'renderPagination, readOffset, setPaginationBusy');
-  if (!forbidEditorial) await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   await load('public/js/knowledge.js', 'knowledgeMount: mount');
   context.onMount = (name, page) => { if (name === './knowledge.js') context.knowledgeMount(page); };
   await h.router.startRouter(); await drain();
@@ -61,7 +59,7 @@ export async function createKnowledgeEditorialHarness(t, { user = editor, forbid
   latest('/api/knowledge?').resolve({ data: [], total: 0 });
   latest('/api/knowledge/categories').resolve([]); await drain();
   return {
-    ...h, html, page, node, requests, revoked, confirms, errors, latest,
+    ...h, html, page, node, requests, confirms, errors, latest,
     async showArticle(article, edit = true) {
       page.history.pushState({}, '', `/knowledge.html?article=${encodeURIComponent(article.id)}`);
       h.window.dispatchEvent(new TestEvent('popstate', { state: h.history.state })); await drain();
@@ -71,6 +69,5 @@ export async function createKnowledgeEditorialHarness(t, { user = editor, forbid
     },
     input(id, value) { node(id).value = value; node(id).dispatchEvent(new TestEvent('input')); },
     async submit() { node('article-form').dispatchEvent(new TestEvent('submit')); await drain(); },
-    async uploadPdf() { node('f-pdf').files = [{ name: 'synthetic.pdf', type: 'application/pdf', size: 100 }]; node('f-pdf').dispatchEvent(new TestEvent('change')); await drain(); return latest('/api/cms/assets'); },
   };
 }

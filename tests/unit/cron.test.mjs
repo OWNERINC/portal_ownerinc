@@ -733,24 +733,6 @@ test('health signatures alert on execution failures and recover after heartbeat 
   assert.ok(calls.some(({ sql }) => /alert_signature = NULL/.test(sql)));
 });
 
-test.skip('legacy CMS reader import contract', async () => {
-  const [compose, dockerfile, workflow, cronSource, reader, blocks] = await Promise.all([
-    readFile('docker-compose.yml', 'utf8'),
-    readFile('cron/Dockerfile', 'utf8'),
-    readFile('.github/workflows/ci.yml', 'utf8'),
-    readFile('cron/checkReminders.js', 'utf8'),
-    readFile('api/cms/reader.js', 'utf8'),
-    readFile('api/cms/blocks.js', 'utf8'),
-  ]);
-  assert.match(compose, /context: \.[\s\S]*dockerfile: cron\/Dockerfile/);
-  assert.match(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} --file cron\/Dockerfile \./);
-  assert.doesNotMatch(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} cron\s*$/m);
-  assert.match(dockerfile, /COPY --chown=node:node api\/cms\/ \/api\/cms\//);
-  assert.match(cronSource, /require\('\.\.\/api\/cms\/reader'\)/);
-  assert.match(reader, /require\('\.\/blocks'\)/);
-  assert.match(blocks, /function blocksToText/);
-});
-
 test('Pos-Cards retention accepts only UUID WebP keys and keeps namespaces isolated', async () => {
   assert.equal(isSafePosCardStorageKey('pos-card-123e4567-e89b-12d3-a456-426614174000.webp'), true);
   assert.equal(isSafeStorageKey('pos-card-123e4567-e89b-12d3-a456-426614174000.webp'), true);

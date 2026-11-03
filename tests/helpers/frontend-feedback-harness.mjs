@@ -140,7 +140,6 @@ export async function createFeedbackHarness(name, {
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState, openDialog, closeDialog, setDialogCloseGuard');
   if (name === 'reminders' && mount) await load('public/js/pagination.js', 'readOffset, renderPagination, setPaginationBusy');
-  if (name === 'dashboard') await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   if (name === 'autocard') {
     await load('public/autocard/crop.js', 'DEFAULT_MEDIA_CROP, cropRenderStyle, cropStyle, dragMediaCrop, normalizeMediaCrop');
     await load('public/autocard/asset-catalog.js', 'searchAssets');

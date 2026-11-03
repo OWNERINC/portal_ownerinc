@@ -14,7 +14,7 @@ test('Portal não expõe a interface exclusiva do Editor CMS', async () => {
     assert.equal(existsSync(file), false, file);
   }
 
-  const [router, shell, auth, authShell, layout, knowledge, curriculum] = await Promise.all([
+  const [router, shell, auth, authShell, layout, knowledge, curriculum, academy, dashboard, reminders, benefits] = await Promise.all([
     readFile('public/js/router.js', 'utf8'),
     readFile('scripts/generate-public-shell.mjs', 'utf8'),
     readFile('public/js/auth.js', 'utf8'),
@@ -22,6 +22,10 @@ test('Portal não expõe a interface exclusiva do Editor CMS', async () => {
     readFile('public/css/layout.css', 'utf8'),
     readFile('public/js/knowledge.js', 'utf8'),
     readFile('public/academy/curriculum-editor.js', 'utf8'),
+    readFile('public/academy/course-view.js', 'utf8'),
+    readFile('public/js/dashboard.js', 'utf8'),
+    readFile('public/js/reminders.js', 'utf8'),
+    readFile('public/js/benefits.js', 'utf8'),
   ]);
 
   assert.doesNotMatch(router, /cms\.html|cms\.js/);
@@ -31,12 +35,17 @@ test('Portal não expõe a interface exclusiva do Editor CMS', async () => {
   assert.doesNotMatch(layout, /cms-link|cms-entry-link|data-cms-access/);
   assert.doesNotMatch(knowledge, /Editor CMS|cms\.html|article-cms-link/);
   assert.doesNotMatch(curriculum, /cms\.html|ensureLessonDocument/);
+  for (const source of [academy, dashboard, reminders, benefits]) {
+    assert.doesNotMatch(source, /cms-block-renderer|content_blocks|\/api\/cms/);
+  }
 
   for (const filename of (await readdir('public')).filter(file => file.endsWith('.html'))) {
     const source = await readFile(`public/${filename}`, 'utf8');
-    assert.doesNotMatch(source, /Editor CMS|cms\.html/, filename);
+    assert.doesNotMatch(source, /Editor CMS|cms\.html|css\/cms\.css/, filename);
   }
 
-  assert.equal(existsSync('public/js/cms-block-renderer.js'), true);
-  assert.equal(existsSync('public/css/cms.css'), true);
+  assert.doesNotMatch(await readFile('docs/design/academy-frontend-preview.html', 'utf8'), /css\/cms\.css/);
+
+  assert.equal(existsSync('public/js/cms-block-renderer.js'), false);
+  assert.equal(existsSync('public/css/cms.css'), false);
 });

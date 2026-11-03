@@ -358,28 +358,6 @@ test('validated body projection never falls back to legacy text for managed cont
   assert.equal(publishedBodyText({ content: 'Legacy body' }), 'Legacy body');
 });
 
-test.skip('legacy CMS area mappings', async () => {
-  const routeFiles = {
-    knowledge: 'api/routes/knowledge.js',
-    academy: 'api/academy/catalog.js',
-    benefit: 'api/routes/benefits.js',
-    reminder: 'api/routes/reminders.js',
-  };
-  for (const [contentType, file] of Object.entries(routeFiles)) {
-    const source = await readFile(file, 'utf8');
-    assert.match(source, new RegExp(`addPublishedBlocks\\(pool, [^,]+, ['"]${contentType}['"]\\)`), contentType);
-    assert.match(source, /content_blocks|addPublishedBlocks/, contentType);
-  }
-  const reader = await readFile('api/cms/reader.js', 'utf8');
-  assert.match(reader, /getPublishedBlocksBatch/);
-  assert.match(reader, /getPublishedBlocksBatch\(pool, contentType, rows\.map/);
-  assert.doesNotMatch(reader, /getPublishedBlocks\(pool/);
-  assert.doesNotMatch(reader, /Promise\.all\(rows\.map/);
-  const legacy = { id: 'legacy', title: 'Legacy' };
-  const fallbackPool = poolFor();
-  assert.deepEqual(await addPublishedBlocks(fallbackPool, [legacy], 'knowledge'), [legacy]);
-});
-
 test('published profile assets require image MIME and the effective 50 MiB bound', async () => {
   const id = '550e8400-e29b-41d4-a716-446655440000';
   for (const [mime, size, valid] of [['image/png', 1, true], ['application/pdf', 1, false], ['image/png', 52428801, false]]) {

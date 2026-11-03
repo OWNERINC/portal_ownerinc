@@ -74,7 +74,7 @@ export function parseFixture(html) {
   return doc;
 }
 
-// Mount the complete production module, UI helpers, renderer and lifecycle.
+// Mount the complete production module, UI helpers and lifecycle.
 // Only browser DOM and external transports/timers are doubled. Transports
 // deliberately ignore abort so tests exercise the lifecycle's late-result guard.
 export async function createMountedHarness(name = 'reminders', {
@@ -108,7 +108,7 @@ export async function createMountedHarness(name = 'reminders', {
     },
     FormData: class { constructor() { this.parts = []; } append(...part) { this.parts.push(part); } },
     can: (profile, permission) => !!(profile.permissions?.superAdmin || profile.permissions?.[permission]),
-    fetchAPI: request('api'), fetchAPIPage: request('list'), fetchAPIAsset: request('asset'),
+    fetchAPI: request('api'), fetchAPIPage: request('list'),
     showToast() {},
   });
   let confirms = 0;
@@ -119,7 +119,6 @@ export async function createMountedHarness(name = 'reminders', {
   }
   await loadModule('public/js/ui.js', ['clear', 'element', 'showState', 'safeHttpUrl', 'openDialog', 'closeDialog', 'setDialogCloseGuard', 'protectForm', 'canLeavePageUI']);
   await loadModule('public/js/page-lifecycle.js', ['createPageLifecycle']);
-  if (!forbidEditorial) await loadModule('public/js/cms-block-renderer.js', ['renderBlocks', 'cleanupRenderedBlocks', 'validateBlocks', 'BLOCK_TYPES']);
   await loadModule(`public/js/${name}.js`, ['mount']);
   const page = context.createPageLifecycle({ user });
   page.location = location;

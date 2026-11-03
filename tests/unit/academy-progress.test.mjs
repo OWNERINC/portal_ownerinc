@@ -229,7 +229,7 @@ test('progress authorization locks the own hierarchy and preserves CAS semantics
 
 test('progress validates input, current media and active audience before persistence', async t => {
   const f = service();
-  const { request } = await createAcademyHttp(t, f.pool, f.users, undefined, { forbidEditorial: true });
+  const { request } = await createAcademyHttp(t, f.pool, f.users);
   const put = data => request.put(`/api/academy/lessons/${f.lesson.id}/progress`).set('x-fixture-user', 'denied').send(data);
   for (const body of [{ ...input, user_uid: 'other' }, { ...input, position_seconds: 86401 },
     { ...input, position_seconds: 1.5 }, { ...input, expected_version: -1 }, { ...input, completed: null },

@@ -281,32 +281,6 @@ test('a UID change during resource preparation cannot mount the previously valid
   assert.equal(h.mounts.length, 1);
 });
 
-test('the CMS renderer aborts assets and revokes late blobs when the page signal ends', async () => {
-  const h = await createRouterHarness();
-  const pending = deferred(), revoked = [];
-  const host = new Node('div', h.doc); h.doc.getElementById('main-content').append(host);
-  let requestedSignal;
-  const source = (await readFile('public/js/cms-block-renderer.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
-  const context = vm.createContext({
-    document: h.doc, AbortController, TextEncoder,
-    URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
-    MutationObserver: class { observe() {} disconnect() {} },
-    clear(node) { node.replaceChildren(); return node; },
-    element(tag, options = {}, children = []) { const node = new Node(tag, h.doc, options); node.append(...children); return node; },
-    safeHttpUrl: value => value,
-    fetchAPIAsset(path, { signal }) { requestedSignal = signal; return pending.promise; },
-  });
-  vm.runInContext(source, context);
-  const page = new AbortController();
-  context.renderBlocks(host, [{ type: 'image', asset_id: '550e8400-e29b-41d4-a716-446655440000', alt: 'Cover' }], { signal: page.signal });
-  const image = host.children[0];
-  page.abort();
-  assert.equal(requestedSignal.aborted, true);
-  pending.resolve('blob:late-cms'); await drain();
-  assert.deepEqual(revoked, ['blob:late-cms']);
-  assert.equal(image.src, undefined);
-});
-
 test('Admin reconciles identical tabs by node identity, activates before secondary feature discovery', async () => {
   const h = await createRouterHarness();
   const source = await readFile('public/js/admin.js', 'utf8');
