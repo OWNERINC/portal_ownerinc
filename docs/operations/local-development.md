@@ -84,11 +84,18 @@ preservando enquetes/opções. Excluir uma enquete diretamente no banco remove
 suas opções e votos; excluir isoladamente uma opção votada é bloqueado pela FK.
 Esse schema não oferece uma rota de exclusão.
 
-Em banco **local descartável**, configure `MIGRATION_DATABASE_URL`,
-`MIGRATION_TEST_DISPOSABLE=true` e as senhas das roles; execute
-`npm run test:migrations` e `node scripts/test-owner-news-integration.mjs`.
-Os checks cobrem grants de API/cron, constraints reais, exclusões e operações
-com `SET LOCAL ROLE portal_api` em transação revertida. Fixtures são sintéticas.
+O comando histórico `node scripts/test-owner-news-integration.mjs` existia na
+linha arquivada de verificação da publicação editorial. O arquivo foi removido
+na OWN-40 e **não deve ser executado nesta branch**; não há instrução operacional
+vigente para substituí-lo ou recriar o fluxo Owner News.
+
+Se for necessário validar somente o ledger, migrations e constraints históricas
+preservadas, `npm run test:migrations` continua sendo uma verificação válida em
+banco **local descartável**: configure `MIGRATION_DATABASE_URL`,
+`MIGRATION_TEST_DISPOSABLE=true` e as senhas das roles. Esse comando não publica,
+lê ou vota Owner News e não substitui uma homologação de runtime. Os checks
+cobrem grants de API/cron, constraints reais, exclusões e operações com
+`SET LOCAL ROLE portal_api` em transação revertida. Fixtures são sintéticas.
 
 Resultados de homologação e aceites das correções de setembro estão no
 [registro da sessão principal](../reviews/2026-09-29-portal-corrections-acceptance.md).
