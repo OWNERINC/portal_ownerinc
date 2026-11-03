@@ -31,7 +31,6 @@ export function createCourseEditor({ root, page, course = null, onSaved = () => 
   audience.append(element('option', { value: 'all', text: 'Todos' }), element('option', { value: 'job_titles', text: 'Cargos selecionados' }));
   add('Grupo visual', 'select', course?.learning_group || 'initial').append(element('option', { value: 'initial', text: 'Formação inicial' }), element('option', { value: 'role', text: 'Formação por cargo' }));
   add('Ícone', 'select', course?.icon_key || 'icon-01').append(...Array.from({ length: 6 }, (_, index) => element('option', { value: `icon-0${index + 1}`, text: `Ícone ${index + 1}` })));
-  form.append(element('p', { className: 'academy-manager-help', text: 'A capa da apresentação é a primeira imagem publicada no CMS do curso.' }));
   add('Instrutor', 'text', course?.instructor_name, { maxlength: '120' });
   add('Ordem', 'number', course?.order ?? 0, { min: '-100000', max: '100000' });
   add('URL externa', 'url', course?.url, { maxlength: '2048' });

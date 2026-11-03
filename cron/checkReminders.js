@@ -1,7 +1,4 @@
 const pool = require('./db');
-const { blocksToText, promoteDueScheduled } = require('../api/cms/reader');
-const { lockCmsAssets } = require('../api/cms/locks');
-const { reminderContentPath } = require('../api/cms/blocks');
 const { sendEmail } = require('./sendEmail');
 const {
   dueDateKeys, reminderIsEligibleForDate, reminderMatchesDate, resolveTargets,
@@ -16,13 +13,7 @@ const INTERRUPTED_SENDING_AFTER = "NOW() - INTERVAL '1 hour'";
 const DEFAULT_PORTAL_PUBLIC_URL = 'https://portal.ownerinc.com.br';
 
 function reminderForDelivery(reminder) {
-  if (reminder.cms_document_id === null || reminder.cms_document_id === undefined) {
-    if (reminder.cms_blocks === null || reminder.cms_blocks === undefined) return reminder;
-    const description = blocksToText(reminder.cms_blocks);
-    return description.trim() ? { ...reminder, description } : reminder;
-  }
-  const description = blocksToText(reminder.cms_blocks);
-  return description.trim() ? { ...reminder, description } : null;
+  return reminder;
 }
 
 function channelsFor(channel) {
@@ -49,8 +40,6 @@ function isRetryableUnsent(error) {
 }
 
 function reminderContentUrl(reminderId, env = process.env) {
-  const path = reminderContentPath(reminderId);
-  if (!path) return null;
   const base = String(env.PORTAL_PUBLIC_URL || DEFAULT_PORTAL_PUBLIC_URL).replace(/\/+$/, '');
   const baseUrl = new URL(base);
   if (!['http:', 'https:'].includes(baseUrl.protocol)
@@ -58,7 +47,7 @@ function reminderContentUrl(reminderId, env = process.env) {
     || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) {
     throw new Error('Invalid PORTAL_PUBLIC_URL');
   }
-  return new URL(path, `${base}/`).toString();
+  return new URL(`/reminders.html#reminder-${encodeURIComponent(reminderId)}`, `${base}/`).toString();
 }
 
 function reminderPageUrl(env = process.env) {
@@ -131,15 +120,11 @@ async function withTransaction(db, operation) {
 }
 
 async function currentDeliveryForDelivery(db, reminderId, user, scheduledDate, channel) {
-  await lockCmsAssets(db);
   const { rows } = await db.query(
     `SELECT reminder.id, reminder.title, reminder.description, reminder.active,
              reminder.trigger_day, reminder.target_users, reminder.channel,
-             reminder.created_at,
-             document.id AS cms_document_id, document.published_revision_id
+             reminder.created_at
        FROM reminders reminder
-       LEFT JOIN cms_documents document
-         ON document.content_type = 'reminder' AND document.source_id = reminder.id
       WHERE reminder.id = $1
       FOR UPDATE OF reminder`,
     [reminderId],
@@ -152,21 +137,6 @@ async function currentDeliveryForDelivery(db, reminderId, user, scheduledDate, c
     return skippedDelivery('reminder_created_after_scheduled_date');
   }
   if (!channelsFor(reminder.channel).includes(channel)) return skippedDelivery('channel_not_available');
-  let deliveryReminder = reminder;
-  if (reminder.cms_document_id) {
-    const published = await db.query(
-      `SELECT document.id AS cms_document_id, revision.blocks AS cms_blocks
-         FROM cms_documents document
-         JOIN cms_revisions revision
-           ON revision.id = document.published_revision_id AND revision.status = 'published'
-        WHERE document.id = $1 AND document.content_type = 'reminder'
-        FOR UPDATE OF document, revision`,
-      [reminder.cms_document_id],
-    );
-    if (!published.rows[0]) return skippedDelivery('content_not_published');
-    deliveryReminder = { ...reminder, ...published.rows[0] };
-  }
-
   // Keep the recipient row locked until the caller commits the send decision.
   const { rows: [currentUser] } = await db.query(
     `SELECT uid, email, name, contract_type, is_pj, phone, permissions, firebase_enable_pending
@@ -184,7 +154,7 @@ async function currentDeliveryForDelivery(db, reminderId, user, scheduledDate, c
   if (!email) return skippedDelivery('recipient_missing_email');
   if (!resolveTargets(reminder.target_users, [currentUser])
     .some(target => target.uid === currentUser.uid)) return skippedDelivery('recipient_not_in_audience');
-  return { reminder: deliveryReminder, user: { ...currentUser, email } };
+  return { reminder, user: { ...currentUser, email } };
 }
 
 async function currentReminderForDelivery(db, reminderId, user, scheduledDate, channel) {
@@ -285,16 +255,9 @@ async function processOccurrence(db, reminder, user, scheduledDate, channel) {
 async function processDate(db, scheduledDate) {
   const [{ rows: reminders }, { rows: users }] = await Promise.all([
     db.query(`SELECT reminder.id, reminder.title, reminder.description, reminder.trigger_day,
-                     reminder.target_users, reminder.channel, reminder.created_at,
-                     document.id AS cms_document_id,
-                     revision.blocks AS cms_blocks
+                     reminder.target_users, reminder.channel, reminder.created_at
                 FROM reminders reminder
-                LEFT JOIN cms_documents document
-                  ON document.content_type = 'reminder' AND document.source_id = reminder.id
-                LEFT JOIN cms_revisions revision
-                  ON revision.id = document.published_revision_id AND revision.status = 'published'
-               WHERE reminder.active = true
-                 AND (document.id IS NULL OR revision.id IS NOT NULL)`),
+               WHERE reminder.active = true`),
     db.query(`SELECT uid, email, name, contract_type, is_pj, phone, permissions, firebase_enable_pending
       FROM users
       WHERE COALESCE(permissions->>'accountDisabled', '') <> 'true'
@@ -305,7 +268,6 @@ async function processDate(db, scheduledDate) {
   for (const reminder of reminders.filter((item) => reminderMatchesDate(item.trigger_day, scheduledDate)
     && reminderIsEligibleForDate(item.created_at, scheduledDate))) {
     const deliveryReminder = reminderForDelivery(reminder);
-    if (!deliveryReminder) continue;
     for (const user of resolveTargets(reminder.target_users, users)) {
       for (const channel of channelsFor(reminder.channel)) {
         const status = await processOccurrence(db, deliveryReminder, user, scheduledDate, channel);
@@ -316,18 +278,6 @@ async function processDate(db, scheduledDate) {
     }
   }
   return counts;
-}
-
-async function promoteScheduledRevisions(db, now) {
-  await db.query('BEGIN');
-  try {
-    const promoted = await promoteDueScheduled(db, now);
-    await db.query('COMMIT');
-    return promoted;
-  } catch (error) {
-    await db.query('ROLLBACK').catch(() => {});
-    throw error;
-  }
 }
 
 async function recoverInterruptedDeliveries(db) {
@@ -375,7 +325,7 @@ async function touchHeartbeat(db) {
 
 async function checkReminders(now = new Date(), overrides = {}) {
   const runtime = {
-    pool, processDate, promoteScheduledRevisions, recoverInterruptedDeliveries, touchHeartbeat,
+    pool, processDate, recoverInterruptedDeliveries, touchHeartbeat,
     ...overrides,
   };
   const db = await runtime.pool.connect();
@@ -395,7 +345,6 @@ async function checkReminders(now = new Date(), overrides = {}) {
     );
     const recovered = await runtime.recoverInterruptedDeliveries(db) || {};
     for (const key of Object.keys(totals)) totals[key] += Number(recovered[key]) || 0;
-    await runtime.promoteScheduledRevisions(db, now);
 
     const { rows: [status] } = await db.query(
       'SELECT last_scheduled_date::text AS last_scheduled_date FROM cron_status WHERE name = $1',
@@ -440,6 +389,6 @@ async function checkReminders(now = new Date(), overrides = {}) {
 
 module.exports = {
   checkReminders, channelsFor, currentReminderForDelivery, deliverEmail, isRetryableUnsent,
-  processDate, processOccurrence, promoteScheduledRevisions, recoverInterruptedDeliveries,
+  processDate, processOccurrence, recoverInterruptedDeliveries,
   reminderContentUrl, reminderForDelivery, touchHeartbeat,
 };

@@ -1,5 +1,4 @@
 import { element } from '../js/ui.js';
-import { renderBlocks } from '../js/cms-block-renderer.js';
 import { heading, cover, curriculum, routeLink, externalLink, hydrateBrandAssets } from './view-utils.js';
 
 export function courseView({ root, page, navigate, CourseView, preview = false, catalogParams = {} }) {
@@ -7,8 +6,7 @@ export function courseView({ root, page, navigate, CourseView, preview = false, 
   const copy = element('div', { className: 'academy-course-copy' });
   copy.append(heading(course.title));
   if (course.instructor_name) copy.append(element('p', { text: `Com ${course.instructor_name}` }));
-  const content = element('div', { className: 'cms-public-content' });
-  renderBlocks(content, CourseView.content_blocks, { fallbackText: course.description || '', signal: page.signal });
+  const content = element('div', { className: 'academy-course-description', text: course.description || 'Descrição não informada.' });
   copy.append(content);
   if (course.delivery_mode === 'external') copy.append(element('p', { text: 'Este curso acontece em uma plataforma externa.' }), externalLink(course));
   else {

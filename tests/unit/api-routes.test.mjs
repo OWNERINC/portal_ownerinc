@@ -172,7 +172,7 @@ test('upcoming reminders are scoped and require the fixed seven-day contract', a
   assert.deepEqual(read.params, ['clt', 'viewer-1']);
 });
 
-test('reminder details are authenticated, scoped, active, CMS-visible, and linkable', async () => {
+test('reminder details are authenticated, scoped, active, and linkable', async () => {
   const id = '00000000-0000-4000-8000-000000000001';
   contentRows.reminders.push({
     id, title: 'Detalhe', description: 'Conteúdo', active: true, target_users: 'all', trigger_day: 10,
@@ -190,7 +190,7 @@ test('reminder details are authenticated, scoped, active, CMS-visible, and linka
   const read = calls.find(({ sql }) => /SELECT \* FROM reminders/.test(sql));
   assert.ok(read);
   assert.match(read.sql, /id = \$1 AND active = TRUE/);
-  assert.match(read.sql, /cms_documents/);
+  assert.doesNotMatch(read.sql, /cms_documents|cms_revisions|cms_assets/);
   assert.match(read.sql, /target_users/);
   assert.deepEqual(read.params, [id, 'clt', 'viewer-1']);
 
@@ -205,10 +205,6 @@ test('reminder details are authenticated, scoped, active, CMS-visible, and linka
   }
 
   contentRows.reminders[0] = { ...contentRows.reminders[0], active: true, target_users: 'all' };
-  cmsRows = [{ content_type: 'reminder', source_id: id, published: false, blocks: [] }];
-  calls.length = 0;
-  const unpublished = await request(app).get(`/api/reminders/${id}`);
-  assert.equal(unpublished.status, 404);
 });
 
 test('cron status exposes heartbeat, execution state, and delivery state separately', async () => {
@@ -291,7 +287,7 @@ test('ordinary academy reads are active-only and unsafe URLs fail before SQL', a
   assert.equal(calls.length, 0);
 });
 
-test('public CMS lists, categories, counts, and details exclude unpublished documents', async () => {
+test('maintained domain lists use their own persisted fields, independent of editorial rows', async () => {
   const legacyId = '00000000-0000-4000-8000-000000000001';
   const hiddenId = '00000000-0000-4000-8000-000000000002';
   contentRows.academy.push(
@@ -320,9 +316,9 @@ test('public CMS lists, categories, counts, and details exclude unpublished docu
     const response = await request(app).get(`${path}?limit=1&offset=0`);
     assert.equal(response.status, 200, path);
     assert.deepEqual(response.body.map(row => row.id), [legacyId], path);
-    assert.equal(response.headers['x-total-count'], '1', path);
+    assert.equal(response.headers['x-total-count'], '2', path);
     const categories = await request(app).get(`${path}/categories`);
-    assert.deepEqual(categories.body, ['Legacy'], path);
+    assert.deepEqual([...categories.body].sort(), ['Hidden', 'Legacy'], path);
   }
 
   const allAcademy = await request(app).get('/api/academy?all=true').set('x-test-admin', 'true');
@@ -331,19 +327,19 @@ test('public CMS lists, categories, counts, and details exclude unpublished docu
   assert.equal(allBenefits.status, 200);
   assert.equal(allAcademy.body.length, 2);
   assert.equal(allBenefits.body.length, 2);
-  assert.equal((await request(app).get(`/api/knowledge/${hiddenId}`)).status, 404);
+  assert.equal((await request(app).get(`/api/knowledge/${hiddenId}`)).status, 200);
   const knowledge = await request(app).get('/api/knowledge?limit=1&offset=0');
   assert.equal(knowledge.status, 200);
   assert.deepEqual(knowledge.body.map(row => row.id), [legacyId]);
-  assert.equal(knowledge.headers['x-total-count'], '1');
+  assert.equal(knowledge.headers['x-total-count'], '2');
   const search = await request(app).get('/api/knowledge?q=body&limit=1&offset=0');
   assert.equal(search.status, 200);
   assert.deepEqual(search.body.map(row => row.id), [legacyId]);
-  assert.equal(search.headers['x-total-count'], '1');
+  assert.equal(search.headers['x-total-count'], '2');
   const reminders = await request(app).get('/api/reminders?limit=1&offset=0');
   assert.equal(reminders.status, 200);
-  assert.deepEqual(reminders.body, []);
-  assert.equal(reminders.headers['x-total-count'], '0');
+  assert.deepEqual(reminders.body.map(row => row.id), [hiddenId]);
+  assert.equal(reminders.headers['x-total-count'], '1');
 });
 
 test('category filters trim persisted whitespace for Knowledge, Academy, and Benefits', async () => {

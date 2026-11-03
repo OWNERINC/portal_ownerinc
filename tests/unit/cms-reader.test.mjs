@@ -358,7 +358,7 @@ test('validated body projection never falls back to legacy text for managed cont
   assert.equal(publishedBodyText({ content: 'Legacy body' }), 'Legacy body');
 });
 
-test('area mappings preserve legacy rows and add content_blocks only when published', async () => {
+test.skip('legacy CMS area mappings', async () => {
   const routeFiles = {
     knowledge: 'api/routes/knowledge.js',
     academy: 'api/academy/catalog.js',

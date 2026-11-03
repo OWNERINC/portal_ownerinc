@@ -1,5 +1,4 @@
 import { element, safeHttpUrl } from '../js/ui.js';
-import { fetchAPIAsset } from '../js/auth.js';
 import { createBrandIcon } from './brand.js';
 
 export const unavailable = 'Este conteúdo não está disponível para seu perfil.';
@@ -32,17 +31,11 @@ export function errorState(root, error, retry) {
 }
 export function cover(course, page, assets = null) {
   const key = /^icon-0[1-6]$/.test(course.icon_key) ? course.icon_key : 'symbol';
-  const image = assets && !course.cover_asset_id ? createBrandIcon(assets, key) : element('img', {
+  const image = assets ? createBrandIcon(assets, key) : element('img', {
     className: 'academy-cover', src: `./assets/academy/${key}.svg`, alt: '', width: '640', height: '360', loading: 'lazy',
-    ...(course.cover_asset_id ? { 'data-authoritative-cover': 'true' } : { 'data-brand-fallback': 'true' }),
+    'data-brand-fallback': 'true',
   });
   image.className = 'academy-cover';
-  if (course.cover_asset_id) {
-    const { fetchAPIAsset: asset } = page.bindAPI({ fetchAPIAsset });
-    asset(`/api/cms/assets/${encodeURIComponent(course.cover_asset_id)}`).then(url => {
-      if (page.active) { image.src = url; image.classList.add('academy-cover-photo'); }
-    }).catch(() => {});
-  }
   return image;
 }
 export function hydrateBrandAssets(root, assets) {

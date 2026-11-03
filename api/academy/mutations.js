@@ -1,21 +1,17 @@
-const { lockCmsAssets } = require('../cms/locks');
 const { can } = require('../middleware/policy');
 const { boolean, integer, text, uuid, validBody } = require('../route-utils');
 const { AcademyError } = require('./errors');
 const { hasOnlyFields, normalizeMedia, validateCourseInput, validateLessonInput } = require('./validation');
-const { hasPublication } = require('./authorization');
-const { promoteDueScheduled } = require('../cms/reader');
 
 const fail = (reason = 'invalid_input') => { throw new AcademyError(400, reason); };
 const moduleSchema = { title: text(200, true), order: integer(-100000, 100000), active: boolean };
 const courseFields = ['title', 'category', 'description', 'url', 'order', 'active', 'delivery_mode',
   'audience', 'learning_group', 'icon_key', 'instructor_name'];
 
-// Caller owns the transaction. Every writer, including deletion, enters the same
-// CMS -> course -> module -> lesson protocol used by readers and asset serving.
+// Caller owns the transaction. Every writer locks the course tree before
+// changing a course, module, or lesson.
 async function lockTree(db, kind, id) {
   if (!uuid(id)) fail();
-  await lockCmsAssets(db);
   let courseId = id;
   let moduleId;
   if (kind !== 'course') {
@@ -51,16 +47,10 @@ function storedMedia(lesson) {
 async function canActivate(db, courseId) {
   const { rows: modules } = await db.query('SELECT * FROM academy_modules WHERE course_id=$1 ORDER BY id FOR UPDATE', [courseId]);
   const { rows: lessons } = await db.query('SELECT * FROM academy_lessons WHERE module_id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [modules.map(row => row.id)]);
-  // Match public readers: reconcile due schedules on this already locked client,
-  // retaining CMS validation/invalid-schedule retirement and atomic audit rollback.
-  const now = new Date();
-  await promoteDueScheduled(db, now, 'academy', [courseId]);
-  await promoteDueScheduled(db, now, 'academy_lesson', lessons.map(row => row.id));
-  if (!await hasPublication(db, 'academy', courseId)) return false;
   const activeModules = new Set(modules.filter(row => row.active).map(row => row.id));
   for (const lesson of lessons) {
     if (lesson.active && activeModules.has(lesson.module_id) && normalizeMedia(storedMedia(lesson))
-      && await hasPublication(db, 'academy_lesson', lesson.id)) return true;
+      ) return true;
   }
   return false;
 }
@@ -68,12 +58,12 @@ async function canActivate(db, courseId) {
 async function saveCourse(db, user, courseId, input) {
   if (!can(user, 'manageAcademy')) throw new AcademyError(403, 'forbidden');
   if (courseId != null && !uuid(courseId)) fail();
-  const tree = courseId ? await lockTree(db, 'course', courseId) : (await lockCmsAssets(db), {});
+  const tree = courseId ? await lockTree(db, 'course', courseId) : {};
   if (!tree) return null;
   const { rows: audience } = courseId ? await db.query(
     'SELECT job_title_id FROM academy_course_job_titles WHERE course_id=$1', [courseId]) : { rows: [] };
   const previousIds = audience.map(row => row.job_title_id);
-  // Explicit conversion preserves source identity/CMS, but discards the old link.
+  // Explicit conversion preserves the source identity while discarding the old link.
   const converting = tree.course?.delivery_mode === 'external' && input?.delivery_mode === 'internal';
   const course = validateCourseInput(converting ? { ...input, url: null } : input,
     tree.course ? { ...tree.course, job_title_ids: previousIds } : undefined);
@@ -179,9 +169,7 @@ async function deleteTree(db, kind, id) {
     lessonIds = (await db.query('SELECT id FROM academy_lessons WHERE module_id=ANY($1::uuid[]) ORDER BY id FOR UPDATE',
       [modules.map(row => row.id)])).rows.map(row => row.id);
   }
-  await db.query("DELETE FROM cms_documents WHERE content_type='academy_lesson' AND source_id=ANY($1::uuid[])", [lessonIds]);
-  if (kind === 'course') await db.query("DELETE FROM cms_documents WHERE content_type='academy' AND source_id=$1", [id]);
-  // Cascades remove curriculum/progress/revisions. Asset retention owns files.
+  // Cascades remove curriculum and progress; historical editorial rows remain untouched.
   const table = { course: 'academy', module: 'academy_modules', lesson: 'academy_lessons' }[kind];
   return (await db.query(`DELETE FROM ${table} WHERE id=$1 RETURNING id`, [id])).rows[0];
 }

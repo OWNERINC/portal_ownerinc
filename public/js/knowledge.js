@@ -1,18 +1,15 @@
 import { can, fetchAPI, fetchAPIPage } from './auth.js';
 import { canCloseDialog, clear, closeDialog, element, openDialog, setBusy, setDialogCloseGuard, showState } from './ui.js';
 import { readOffset, renderPagination, setPaginationBusy } from './pagination.js';
-import { blocksToText, renderBlocks } from './cms-block-renderer.js';
 
 const requests = { fetchAPI, fetchAPIPage };
-const renderContent = renderBlocks;
 export function mount(page) {
 const user = page.user;
 const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
 const showToast = page.toast;
-const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
 const history = page.history;
 const location = page.location;
-page.cleanup(() => { ++articlesRequest; ++articleRequest; ++articleDeleteRequest; ++pdfUploadRequest; });
+page.cleanup(() => { ++articlesRequest; ++articleRequest; ++articleDeleteRequest; });
 page.beforeLeave(() => !articleDeleteInFlight && !articleSaveInFlight && !pdfUploadPromise && !pdfCleanupPromise);
 const canManage = can(user, 'manageKnowledge');
 if (canManage) {
@@ -202,14 +199,8 @@ function prepareArticleNavigation() {
   return true;
 }
 
-function pdfBlock(article) {
-  return Array.isArray(article?.content_blocks)
-    ? article.content_blocks.find(block => block.type === 'pdf') || null
-    : null;
-}
-
 function articleBody(article) {
-  return Array.isArray(article?.content_blocks) ? blocksToText(article.content_blocks) : article?.content || '';
+  return article?.content || '';
 }
 
 function visiblePdfFocusTarget(node) {
@@ -254,26 +245,7 @@ function syncPdfState() {
 }
 
 async function deletePdfAsset(assetId) {
-  try {
-    const result = await fetchAPI(`/api/cms/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE' });
-    if (result?.reason === 'pending' || result?.reason === 'already_deleting') {
-      pdfStatus.textContent = 'A remoção do PDF ainda está pendente. Tente novamente em instantes.';
-      return false;
-    }
-    return true;
-  } catch (error) {
-    if (error?.status === 404) return true;
-    if (error?.status === 409 && error?.reason === 'referenced') {
-      pdfStatus.textContent = 'O PDF já está referenciado e foi preservado.';
-      return true;
-    }
-    if (error?.status === 409 && error?.reason === 'already_deleting') {
-      pdfStatus.textContent = 'A remoção do PDF já está em andamento. Tente novamente em instantes.';
-      return false;
-    }
-    pdfStatus.textContent = `Não foi possível remover o PDF: ${error.message}`;
-    return false;
-  }
+  return Boolean(assetId);
 }
 
 function pdfAssetTitle(asset) {
@@ -405,45 +377,7 @@ function invalidatePdfUpload(message = '', requestToken = ++pdfUploadRequest) {
 }
 
 async function uploadPdf(file) {
-  const request = ++pdfUploadRequest;
-  if (file.type !== 'application/pdf') {
-    invalidatePdfUpload('Selecione um arquivo PDF válido.', request);
-    return;
-  }
-  if (file.size > 100 * 1024 * 1024) {
-    invalidatePdfUpload('O PDF deve ter no máximo 100 MB.', request);
-    return;
-  }
-  const previousPdfId = selectedPdf?.id;
-  const previousPdfWasCreated = createdPdfAssets.has(previousPdfId);
-  const body = new FormData();
-  body.append('asset', file);
-  setArticleEditorBusy(true);
-  pdfStatus.textContent = 'Enviando PDF…';
-  try {
-    const asset = await fetchAPI('/api/cms/assets', { method: 'POST', body });
-    if (request !== pdfUploadRequest) {
-      await cleanupStalePdfAsset(asset);
-      return;
-    }
-    if (previousPdfWasCreated) {
-      await cleanupCreatedPdfAssets({ onlyIds: [previousPdfId] });
-    }
-    const tracked = trackCreatedPdfAsset(asset);
-    selectedPdf = { ...tracked };
-    pdfChanged = true;
-    pdfInput.value = '';
-    updatePdfField();
-  } catch (error) {
-    if (request === pdfUploadRequest) {
-      pdfInput.value = '';
-      pdfStatus.textContent = `Não foi possível enviar o PDF: ${error.message}`;
-    }
-  } finally {
-    if (request === pdfUploadRequest) {
-      setArticleEditorBusy(false);
-    }
-  }
+  invalidatePdfUpload('PDF não está disponível nesta linha do Portal.');
 }
 
 function resetPdfField() {
@@ -533,8 +467,7 @@ async function openArticle(id, push = true) {
   if (!push) updateUrl({ article: article.id });
   articleTitle.textContent = article.title;
   document.getElementById('article-category').textContent = article.category || 'Geral';
-  const blocks = Array.isArray(article.content_blocks) ? article.content_blocks : [];
-  renderBlocks(articleContent, blocks, { fallbackText: article.cms_managed ? '' : article.content || '' });
+  articleContent.textContent = article.content || '';
   const adminBar = clear(document.getElementById('article-admin-bar'));
   adminBar.hidden = !canManage;
   if (canManage) {
@@ -562,10 +495,8 @@ function render(requestToken = articlesRequest) {
   if (articles.length) {
     clear(listNode);
     articles.forEach(article => {
-      const pdf = pdfBlock(article);
       const metadata = [
         element('span', { className: 'badge badge-gold', text: article.category || 'Geral' }),
-        ...(pdf ? [element('span', { className: 'badge badge-gray', text: 'PDF' })] : []),
       ];
       const button = element('button', { className: 'card article-card', type: 'button', on: { click: () => openArticle(article.id) } }, [
         element('span', { className: 'article-card-heading' }, [
@@ -573,7 +504,7 @@ function render(requestToken = articlesRequest) {
           element('span', { className: 'article-card-arrow', 'aria-hidden': 'true', text: '→' }),
         ]),
         element('span', { className: 'article-card-meta' }, metadata),
-         element('span', { className: 'article-excerpt', text: articleBody(article).slice(0, 140) || (pdf ? 'Material em PDF disponível para leitura.' : 'Consulte este artigo para ver os detalhes.') }),
+          element('span', { className: 'article-excerpt', text: articleBody(article).slice(0, 140) || 'Consulte este artigo para ver os detalhes.' }),
       ]);
       listNode.append(button);
     });
@@ -644,10 +575,9 @@ function newArticle() {
 
 function editArticle(article) {
   editingId = article.id;
-  editingCmsManaged = article.cms_managed === true;
+  editingCmsManaged = false;
   resetPdfField();
-  const pdf = pdfBlock(article);
-  currentPdf = pdf ? { id: pdf.asset_id, title: pdf.title } : null;
+  currentPdf = null;
   document.getElementById('modal-article-title').textContent = 'Editar Artigo';
   document.getElementById('f-title').value = article.title || '';
   document.getElementById('f-category').value = article.category || '';
@@ -689,14 +619,6 @@ form.addEventListener('submit', async event => {
     category: document.getElementById('f-category').value.trim(),
     ...(editingCmsManaged ? {} : { content: legacyContentInput.value.trim() }),
   };
-  if (pdfChanged) {
-    if (selectedPdf) {
-      data.pdf_asset_id = selectedPdf.id;
-      data.pdf_title = selectedPdf.title;
-    } else if (editingId) {
-      data.pdf_asset_id = null;
-    }
-  }
   const save = document.getElementById('modal-article-save');
   save.textContent = 'Salvando…';
   articleSaveInFlight = true;

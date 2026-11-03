@@ -2,9 +2,6 @@ const { can } = require('../middleware/policy');
 const { canReadCourse } = require('./access');
 const { AcademyError } = require('./errors');
 const { summarizeProgress, readProgress } = require('./progress');
-const { readPublishedSources } = require('./authorization');
-const { addPublishedBlocks, isPublicCmsRow } = require('../cms/reader');
-const { lockCmsAssets } = require('../cms/locks');
 
 function checkPreview(user, preview) {
   if (preview && !can(user, 'manageAcademy')) throw new AcademyError(403, 'forbidden');
@@ -30,8 +27,7 @@ async function candidates(pool, user, query = {}) {
     WHERE course_id=a.id ORDER BY job_title_id) AS allowed_job_title_ids
     FROM academy a ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY a."order", a.id`, values);
   const eligible = rows.filter(row => canReadCourse(user, row, row.allowed_job_title_ids, { preview }));
-  const enriched = await addPublishedBlocks(pool, eligible, 'academy');
-  return preview ? enriched.filter(Boolean) : enriched.filter(isPublicCmsRow);
+  return eligible;
 }
 
 async function curriculum(pool, user, courses, preview = false) {
@@ -41,9 +37,8 @@ async function curriculum(pool, user, courses, preview = false) {
   const db = await pool.connect();
   try {
     await db.query('BEGIN');
-    await lockCmsAssets(db);
-    // Read current hierarchy only after acquiring CMS, then lock each level in
-    // parent-first order. Missing sources must never become legacy snapshots.
+    // Read the hierarchy in one transaction so progress and eligibility share a
+    // consistent snapshot without consulting editorial tables.
     const { rows: current } = await db.query(`SELECT * FROM academy
       WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE`, [ids]);
     const { rows: audience } = await db.query(`SELECT course_id, job_title_id
@@ -51,18 +46,15 @@ async function curriculum(pool, user, courses, preview = false) {
     const eligible = current.map(course => ({ ...course, allowed_job_title_ids: audience
       .filter(row => row.course_id === course.id).map(row => row.job_title_id) }))
       .filter(course => canReadCourse(user, course, course.allowed_job_title_ids, { preview }));
-    const published = await readPublishedSources(db, 'academy', eligible);
-    const visible = preview ? published : published.filter(isPublicCmsRow);
-    const currentById = new Map(visible.map(course => [course.id, course]));
+    const currentById = new Map(eligible.map(course => [course.id, course]));
     const checkedCourses = courses.flatMap(course => ids.includes(course.id)
       ? (currentById.has(course.id) ? [currentById.get(course.id)] : []) : [course]);
-    const internalIds = visible.filter(course => course.delivery_mode === 'internal').map(course => course.id);
+    const internalIds = checkedCourses.filter(course => course.delivery_mode === 'internal').map(course => course.id);
     const { rows: modules } = await db.query(`SELECT * FROM academy_modules
       WHERE course_id=ANY($1::uuid[]) ${preview ? '' : 'AND active = TRUE'} ORDER BY "order", id FOR UPDATE`, [internalIds]);
     const { rows } = await db.query(`SELECT * FROM academy_lessons WHERE module_id=ANY($1::uuid[])
       ${preview ? '' : 'AND active = TRUE'} ORDER BY "order", id FOR UPDATE`, [modules.map(module => module.id)]);
-    const publishedLessons = await readPublishedSources(db, 'academy_lesson', rows);
-    const lessons = preview ? publishedLessons : publishedLessons.filter(isPublicCmsRow);
+    const lessons = rows;
     const { rows: progress } = lessons.length ? await db.query(`SELECT * FROM academy_lesson_progress
       WHERE user_uid=$1 AND lesson_id=ANY($2::uuid[])`, [user.uid, lessons.map(lesson => lesson.id)]) : { rows: [] };
     await db.query('COMMIT');
@@ -75,14 +67,13 @@ async function curriculum(pool, user, courses, preview = false) {
 
 function courseLessons(course, data, publicOnly = false) {
   return data.modules.filter(module => module.course_id === course.id && (!publicOnly || module.active === true))
-    .flatMap(module => data.lessons.filter(lesson => lesson.module_id === module.id && (!publicOnly || isPublicCmsRow(lesson))));
+    .flatMap(module => data.lessons.filter(lesson => lesson.module_id === module.id && (!publicOnly || lesson.active === true)));
 }
 
 function summary(course, data, preview) {
   const { allowed_job_title_ids, ...fields } = course;
   return { ...fields, ...(preview ? { allowed_job_title_ids } : {}),
-    cover_asset_id: course.content_blocks?.find(block => block.type === 'image' && block.asset_id)?.asset_id || null,
-    ...summarizeProgress(course.active === true && isPublicCmsRow(course) ? courseLessons(course, data, true) : [], data.progress) };
+    ...summarizeProgress(course.active === true ? courseLessons(course, data, true) : [], data.progress) };
 }
 
 function lessonSummary(lesson, progress) {
@@ -109,7 +100,7 @@ async function getCourseView(pool, user, courseId, { preview = false } = {}) {
   const data = await curriculum(pool, user, candidatesForId, preview);
   const [course] = data.courses;
   if (!course) return null;
-  return { course: summary(course, data, preview), content_blocks: course.content_blocks || null,
+  return { course: summary(course, data, preview),
     ...(preview ? { allowed_job_title_ids: course.allowed_job_title_ids } : {}),
     modules: data.modules.map(module => ({ ...module, lessons: data.lessons
       .filter(lesson => lesson.module_id === module.id).map(lesson => lessonSummary(lesson, data.progress)) })) };
@@ -129,7 +120,7 @@ async function getLessonView(pool, user, lessonId, { preview = false } = {}) {
   if (index < 0) return null;
   const lesson = ordered[index];
   return { course_id: course.id, module_id: lesson.module_id, lesson: lessonSummary(lesson, data.progress),
-    description: lesson.description, content_blocks: lesson.content_blocks || null,
+    description: lesson.description,
     media: lesson.media_type === 'youtube' ? { type: 'youtube', video_id: lesson.youtube_video_id } : { type: 'file', url: lesson.media_url },
     previous_lesson_id: ordered[index - 1]?.id || null, next_lesson_id: ordered[index + 1]?.id || null,
     progress: await readProgress(pool, user.uid, lesson.id, lesson.media_version) };
