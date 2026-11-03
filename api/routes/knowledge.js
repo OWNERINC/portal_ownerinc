@@ -78,8 +78,8 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
 });
 
 router.post('/', authMiddleware, async (req, res, next) => {
-  if (hasLegacyPdfFields(req.body)) return invalid(req, res);
   if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
+  if (hasLegacyPdfFields(req.body)) return invalid(req, res);
   if (!validBody(req.body, schema, ['title'])) return invalid(req, res);
   try {
     const { title, category = '', content = '' } = req.body;
@@ -96,8 +96,8 @@ router.post('/', authMiddleware, async (req, res, next) => {
 });
 
 router.put('/:id', authMiddleware, async (req, res, next) => {
-  if (hasLegacyPdfFields(req.body)) return invalid(req, res);
   if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
+  if (hasLegacyPdfFields(req.body)) return invalid(req, res);
   if (!uuid(req.params.id) || !validBody(req.body, schema, ['title', 'category'])) return invalid(req, res);
   try {
     const result = await withAudit(pool, req, 'knowledge.update', 'knowledge', async (db) => {

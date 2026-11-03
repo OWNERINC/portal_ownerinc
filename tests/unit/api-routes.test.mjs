@@ -51,6 +51,15 @@ const pool = {
         .map(row => ({ source_id: row.source_id, blocks: row.published ? row.blocks : null })) };
     }
     if (/FROM cron_status/.test(sql)) return { rows: cronStatus ? [cronStatus] : [] };
+    if (/INSERT INTO reminders/.test(sql)) return { rows: [{
+      id: '00000000-0000-4000-8000-000000000003', title: params[0], description: params[1],
+      trigger_day: params[2], target_users: JSON.parse(params[3]), channel: params[4],
+      active: params[5], created_by: params[6],
+    }] };
+    if (/UPDATE reminders/.test(sql)) return { rows: [{
+      id: params[0], title: params[1], description: params[2], trigger_day: params[3],
+      target_users: JSON.parse(params[4]), channel: params[5], active: params[6],
+    }] };
     const tableNames = { academy: 'academy', benefits: 'benefits', knowledge: 'knowledge_base', reminders: 'reminders' };
     const table = Object.entries(tableNames).find(([, tableName]) => new RegExp(`FROM ${tableName}\\b`).test(sql))?.[0];
     if (/^\s*SELECT/i.test(sql) && table && !/COUNT\(\*\)/.test(sql)) {
@@ -63,10 +72,16 @@ const pool = {
           && (params.length < 3 || row.target_users === 'all' || row.target_users === audience
             || (Array.isArray(row.target_users) && row.target_users.includes(uid))));
       }
+      if (table === 'reminders' && /LIMIT \$/.test(sql)) {
+        const limit = params.at(-2);
+        const offset = params.at(-1);
+        rows = rows.slice(offset, offset + limit);
+      }
       return { rows };
     }
     if (/COUNT\(\*\)/.test(sql)) {
-      return { rows: [{ count: /FROM notifications_log/.test(sql) ? deliveryCount : 0 }] };
+      return { rows: [{ count: /FROM notifications_log/.test(sql)
+        ? deliveryCount : /FROM reminders/.test(sql) ? contentRows.reminders.length : 0 }] };
     }
     if (/SELECT notifications_log\.id/.test(sql)) return { rows: deliveryRows };
     return { rows: [] };
@@ -170,6 +185,49 @@ test('upcoming reminders are scoped and require the fixed seven-day contract', a
   assert.match(read.sql, /active = TRUE/);
   assert.match(read.sql, /target_users/);
   assert.deepEqual(read.params, ['clt', 'viewer-1']);
+});
+
+test('reminder lists and upcoming expose UUID links consistently, with pagination totals', async () => {
+  const firstId = '00000000-0000-4000-8000-000000000001';
+  const secondId = '00000000-0000-4000-8000-000000000002';
+  const today = Number(new Intl.DateTimeFormat('en', {
+    timeZone: 'America/Sao_Paulo', day: 'numeric', month: 'numeric', year: 'numeric',
+  }).formatToParts(new Date()).find(part => part.type === 'day').value);
+  contentRows.reminders.push(
+    { id: firstId, title: 'Primeiro', description: '', active: true, target_users: 'all', trigger_day: today },
+    { id: secondId, title: 'Segundo', description: '', active: true, target_users: 'all', trigger_day: today },
+  );
+
+  const viewer = await request(app).get('/api/reminders?limit=1&offset=1');
+  assert.equal(viewer.status, 200);
+  assert.equal(viewer.headers['x-total-count'], '2');
+  assert.equal(viewer.body.length, 1);
+  assert.equal(viewer.body[0].content_url, `/reminders.html#reminder-${secondId}`);
+
+  const manager = await request(app).get('/api/reminders?all=true&limit=1&offset=1').set('x-test-admin', 'true');
+  assert.equal(manager.status, 200);
+  assert.equal(manager.headers['x-total-count'], '2');
+  assert.equal(manager.body.length, 1);
+  assert.equal(manager.body[0].content_url, `/reminders.html#reminder-${secondId}`);
+
+  const upcoming = await request(app).get('/api/reminders/upcoming?days=7');
+  assert.equal(upcoming.status, 200);
+  assert.deepEqual(upcoming.body.map(row => row.content_url), [
+    `/reminders.html#reminder-${firstId}`,
+    `/reminders.html#reminder-${secondId}`,
+  ]);
+
+  const created = await request(app).post('/api/reminders').set('x-test-admin', 'true').send({
+    title: 'Criado', description: 'Descrição', trigger_day: 10, target_users: 'all', channel: 'email', active: true,
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.content_url, `/reminders.html#reminder-${created.body.id}`);
+
+  const updated = await request(app).put(`/api/reminders/${created.body.id}`).set('x-test-admin', 'true').send({
+    title: 'Atualizado', description: 'Descrição', trigger_day: 11, target_users: 'all', channel: 'email', active: true,
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.content_url, `/reminders.html#reminder-${created.body.id}`);
 });
 
 test('reminder details are authenticated, scoped, active, and linkable', async () => {

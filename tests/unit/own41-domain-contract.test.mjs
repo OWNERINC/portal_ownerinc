@@ -105,3 +105,35 @@ test('OWN-41: Knowledge rejeita campos PDF antes de SQL e preserva histórico', 
   assert.deepEqual(harness.state.history, historical);
   assertNoEditorialAccess(harness.state);
 });
+
+test('OWN-41: Knowledge aplica auth, permissão e PDF legado nessa ordem', async t => {
+  const unauthenticated = await createDependencyHarness(t, { forbidEditorial: true });
+  const unauthenticatedResponse = await unauthenticated.request.post('/api/knowledge').send({
+    title: 'Não revelar', pdf_asset_id: 'legacy',
+  });
+  assert.equal(unauthenticatedResponse.status, 401);
+  assert.equal(unauthenticated.state.sql.some(({ sql }) => /knowledge_base|BEGIN|audit_log/i.test(sql)), false);
+  assert.doesNotMatch(JSON.stringify(unauthenticatedResponse.body), /pdf|legacy/i);
+
+  const reader = await createDependencyHarness(t, { forbidEditorial: true });
+  const forbiddenResponse = await reader.request.post('/api/knowledge').set('Authorization', 'Bearer reader').send({
+    title: 'Não revelar', pdf_asset_id: 'legacy',
+  });
+  assert.equal(forbiddenResponse.status, 403);
+  assert.equal(reader.state.sql.some(({ sql }) => /knowledge_base|BEGIN|audit_log/i.test(sql)), false);
+  assert.doesNotMatch(JSON.stringify(forbiddenResponse.body), /pdf|legacy/i);
+
+  const manager = await createDependencyHarness(t, { forbidEditorial: true });
+  const articleId = '00000000-0000-4000-8000-000000000001';
+  for (const [method, route] of [
+    ['post', '/api/knowledge'], ['put', `/api/knowledge/${articleId}`],
+  ]) {
+    const before = manager.state.sql.length;
+    const response = await manager.request[method](route).set('Authorization', 'Bearer manager').send({
+      title: 'Inválido', category: 'Operação', content: 'Texto', pdf_asset_id: 'legacy',
+    });
+    assert.equal(response.status, 400, `${method} must reject legacy PDF fields`);
+    const sql = manager.state.sql.slice(before).map(call => call.sql).join('\n');
+    assert.doesNotMatch(sql, /knowledge_base|BEGIN|audit_log|INSERT INTO|UPDATE |DELETE FROM/i);
+  }
+});

@@ -142,7 +142,10 @@ router.get('/upcoming', authMiddleware, async (req, res, next) => {
       .map(reminder => ({ ...reminder, next_occurrence: nextOccurrence(reminder.trigger_day, start) }))
       .filter(reminder => reminder.next_occurrence && reminder.next_occurrence <= end)
       .sort((left, right) => left.next_occurrence - right.next_occurrence || String(left.id).localeCompare(String(right.id)))
-      .map(reminder => ({ ...reminder, next_occurrence: reminder.next_occurrence.toISOString().slice(0, 10) }));
+      .map(reminder => ({ ...reminder,
+        next_occurrence: reminder.next_occurrence.toISOString().slice(0, 10),
+        content_url: reminderContentUrl(reminder.id),
+      }));
     res.json(upcoming);
   } catch (error) {
     next(error);
@@ -168,7 +171,8 @@ router.get('/', authMiddleware, async (req, res, next) => {
         params,
       );
       return res.set('X-Total-Count', String(rows.length))
-        .json(rows.slice(page.offset, page.offset + page.limit));
+        .json(rows.slice(page.offset, page.offset + page.limit)
+          .map(row => ({ ...row, content_url: reminderContentUrl(row.id) })));
     }
     const countResult = await pool.query(`SELECT COUNT(*)::integer AS count FROM reminders ${where}`, params);
     const listParams = [...params, page.limit, page.offset];
@@ -178,7 +182,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
       listParams
     );
     res.set('X-Total-Count', String(countResult.rows[0].count))
-      .json(rows);
+      .json(rows.map(row => ({ ...row, content_url: reminderContentUrl(row.id) })));
   } catch (error) {
     next(error);
   }
