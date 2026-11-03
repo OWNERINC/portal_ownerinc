@@ -5,6 +5,7 @@
     "bootstrap": "npm --prefix api ci && npm --prefix cron ci",
     "db:migrate": "node api/db/migrate.js",
     "db:provision": "node api/db/provision.js",
+    "test:migration-readiness": "node scripts/test-migration-readiness.mjs",
     "admin:bootstrap": "node api/db/bootstrap-admin.js",
     "doctor": "node scripts/doctor.mjs",
     "lint": "node scripts/verify.mjs syntax",

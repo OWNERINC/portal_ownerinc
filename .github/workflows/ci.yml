@@ -47,10 +47,12 @@ jobs:
         run: |
           psql --host=127.0.0.1 --username=portal_admin --dbname=portal_test --set=ON_ERROR_STOP=1 --command="CREATE DATABASE portal_test_upgrade OWNER portal_admin"
           psql --host=127.0.0.1 --username=portal_admin --dbname=portal_test --set=ON_ERROR_STOP=1 --command="CREATE DATABASE portal_test_bootstrap OWNER portal_admin"
+          psql --host=127.0.0.1 --username=portal_admin --dbname=portal_test --set=ON_ERROR_STOP=1 --command="CREATE DATABASE portal_test_readiness OWNER portal_admin"
       - name: Test migrations against PostgreSQL
         env:
           NODE_ENV: test
           MIGRATION_TEST_DISPOSABLE: "true"
+          MIGRATION_TEST_SETUP: bootstrap
           MIGRATION_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
           PORTAL_API_DB_PASSWORD: integration-test-api-password
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
@@ -73,6 +75,14 @@ jobs:
           PORTAL_API_DB_PASSWORD: integration-test-api-password
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
         run: npm run test:migrations
+      - name: Test migration readiness without editorial relations
+        env:
+          NODE_ENV: test
+          MIGRATION_TEST_DISPOSABLE: "true"
+          MIGRATION_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test_readiness
+          PORTAL_API_DB_PASSWORD: integration-test-api-password
+          PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
+        run: npm run test:migration-readiness
       - name: Test Academy integration against PostgreSQL
         env:
           NODE_ENV: test

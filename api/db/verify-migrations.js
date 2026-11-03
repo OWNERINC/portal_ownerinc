@@ -35,7 +35,39 @@ const expectedVersions = [
   '033_academy_learning',
   '034_owner_news_editorial',
   '035_owner_news_polls',
+  '038_disable_legacy_editorial_writes',
 ];
+
+const editorialTables = [
+  'cms_documents',
+  'cms_revisions',
+  'cms_assets',
+  'owner_news_home',
+  'owner_news_polls',
+  'owner_news_poll_options',
+  'owner_news_poll_votes',
+];
+const editorialPrivileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'];
+const editorialColumnPrivileges = ['SELECT', 'INSERT', 'UPDATE'];
+
+async function editorialPrivilegesDenied(pool, role) {
+  const { rows } = await pool.query(`SELECT c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])`, [editorialTables]);
+
+  for (const { relname } of rows) {
+    const result = await pool.query(`SELECT
+      (SELECT bool_and(NOT COALESCE(has_table_privilege($1, $2, privilege), FALSE))
+       FROM unnest($3::text[]) AS table_privileges(privilege)) AS table_denied,
+      (SELECT bool_and(NOT COALESCE(has_any_column_privilege($1, $2, privilege), FALSE))
+       FROM unnest($4::text[]) AS column_privileges(privilege)) AS column_denied`, [
+      role, `public.${relname}`, editorialPrivileges, editorialColumnPrivileges,
+    ]);
+    if (result.rows[0]?.table_denied !== true || result.rows[0]?.column_denied !== true) return false;
+  }
+  return true;
+}
 
 async function verifyMigrations() {
   const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
@@ -317,7 +349,14 @@ async function verifyMigrations() {
       || result.rows[0].cron_cms_privileges_denied !== true
       || result.rows[0].cron_owner_news_privileges_denied !== true
         || result.rows[0].cron_audit_privileges !== true) {
-        throw new Error('Migration ledger or Ombudsman removal schema/runtime checks are incomplete; verify DHO, registrations, media and denied editorial privileges');
+      throw new Error('Migration ledger or Ombudsman removal schema/runtime checks are incomplete; verify DHO, registrations, media and denied editorial privileges');
+    }
+    const [apiEditorialPrivilegesDenied, cronEditorialPrivilegesDenied] = await Promise.all([
+      editorialPrivilegesDenied(pool, 'portal_api'),
+      editorialPrivilegesDenied(pool, 'portal_cron'),
+    ]);
+    if (!apiEditorialPrivilegesDenied || !cronEditorialPrivilegesDenied) {
+      throw new Error('Effective editorial privileges remain through a direct grant, PUBLIC, role membership or column grant');
     }
     const academyTables = ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress'];
     for (const table of academyTables) {
@@ -356,4 +395,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { verifyMigrations };
+module.exports = { expectedVersions, verifyMigrations };

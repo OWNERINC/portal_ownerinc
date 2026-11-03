@@ -93,4 +93,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { grantRuntimeAccess, MIGRATION_LOCK, provisionRoles };
+module.exports = { grantRuntimeAccess, MIGRATION_LOCK, provision, provisionRoles };

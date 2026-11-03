@@ -2,10 +2,18 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
+import { assertEmptyMigrationDatabase } from './migration-test-guards.mjs';
 
 const require = createRequire(new URL('../api/package.json', import.meta.url));
 require('dotenv').config({ path: new URL('../.env', import.meta.url) });
 if (process.env.NODE_ENV === 'production') throw new Error('Migration integration test cannot run with NODE_ENV=production');
+const setupMode = process.env.MIGRATION_TEST_SETUP;
+if (!setupMode) {
+  throw new Error('MIGRATION_TEST_SETUP is required: use bootstrap or upgrade');
+}
+if (!['upgrade', 'bootstrap'].includes(setupMode)) {
+  throw new Error('MIGRATION_TEST_SETUP must be bootstrap or upgrade');
+}
 if (process.env.MIGRATION_TEST_DISPOSABLE !== 'true') throw new Error('MIGRATION_TEST_DISPOSABLE=true is required');
 if (!process.env.MIGRATION_DATABASE_URL) throw new Error('MIGRATION_DATABASE_URL is required');
 const { Pool } = require('pg');
@@ -46,14 +54,8 @@ const expectedVersions = [
   '033_academy_learning',
   '034_owner_news_editorial',
   '035_owner_news_polls',
+  '038_disable_legacy_editorial_writes',
 ];
-
-// Explicit setup modes exercise both installation paths without dropping data.
-// Each requires its own empty, approved disposable database.
-const setupMode = process.env.MIGRATION_TEST_SETUP;
-if (setupMode && !['upgrade', 'bootstrap'].includes(setupMode)) {
-  throw new Error('MIGRATION_TEST_SETUP must be upgrade or bootstrap');
-}
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
 const client = await pool.connect();
@@ -63,8 +65,17 @@ let legacyCourseId;
 let legacyObjectsCreated = false;
 try {
   if (setupMode) {
-    const existing = await client.query(`SELECT tablename FROM pg_tables WHERE schemaname = 'public'`);
-    assert.equal(existing.rowCount, 0, 'Setup modes require an empty disposable database; no tables are dropped');
+    const existing = await client.query(`SELECT n.nspname AS schema_name, c.relname AS object_name, c.relkind AS object_kind
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+        AND left(n.nspname, 3) <> 'pg_'
+      UNION ALL
+      SELECT nspname AS schema_name, NULL AS object_name, 'schema' AS object_kind
+      FROM pg_namespace
+      WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'public')
+        AND left(nspname, 3) <> 'pg_'`);
+    assertEmptyMigrationDatabase(existing.rows);
     await client.query('BEGIN');
     try {
       if (setupMode === 'bootstrap') {
@@ -347,13 +358,23 @@ try {
     vote_identity: true, vote_composite_fk: true, one_open_poll_index: true,
     publication_index: true, home_columns: true, home_singleton_default: true,
     home_version_default: true, home_singleton_row: true }]);
-  const homePrivileges = await pool.query(`SELECT
-    (has_table_privilege('portal_api', 'owner_news_home', 'SELECT')
-      AND has_table_privilege('portal_api', 'owner_news_home', 'INSERT')
-      AND has_table_privilege('portal_api', 'owner_news_home', 'UPDATE')) AS api,
-    has_table_privilege('portal_api', 'owner_news_home', 'DELETE') AS api_delete,
-    has_table_privilege('portal_cron', 'owner_news_home', 'SELECT, INSERT, UPDATE, DELETE') AS cron`);
-  assert.deepEqual(homePrivileges.rows, [{ api: true, api_delete: false, cron: false }]);
+  const editorialPrivileges = await pool.query(`SELECT role_name, table_name, privilege,
+    has_table_privilege(role_name, 'public.' || table_name, privilege) AS table_allowed,
+    CASE WHEN privilege IN ('SELECT', 'INSERT', 'UPDATE')
+      THEN has_any_column_privilege(role_name, 'public.' || table_name, privilege)
+      ELSE FALSE END AS column_allowed
+    FROM (VALUES
+      ('portal_api', 'cms_documents'), ('portal_api', 'cms_revisions'), ('portal_api', 'cms_assets'),
+      ('portal_api', 'owner_news_home'), ('portal_api', 'owner_news_polls'),
+      ('portal_api', 'owner_news_poll_options'), ('portal_api', 'owner_news_poll_votes'),
+      ('portal_cron', 'cms_documents'), ('portal_cron', 'cms_revisions'), ('portal_cron', 'cms_assets'),
+      ('portal_cron', 'owner_news_home'), ('portal_cron', 'owner_news_polls'),
+      ('portal_cron', 'owner_news_poll_options'), ('portal_cron', 'owner_news_poll_votes')
+    ) AS relations(role_name, table_name)
+    CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) AS privileges(privilege)`);
+  assert.ok(editorialPrivileges.rows.every(({ table_allowed, column_allowed }) => (
+    table_allowed === false && column_allowed === false
+  )), 'runtime roles must have no effective table or column privilege on historical editorial relations');
   for (const table of ['owner_news_polls', 'owner_news_poll_options', 'owner_news_poll_votes']) {
     for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
       const { rows } = await pool.query(`SELECT
@@ -664,29 +685,29 @@ try {
         AND has_table_privilege('portal_api', 'public.autocard_media', 'INSERT')
         AND has_table_privilege('portal_api', 'public.autocard_media', 'UPDATE')
         AND has_table_privilege('portal_api', 'public.autocard_media', 'DELETE')) AS api_autocard_media,
-      (has_table_privilege('portal_api', 'public.cms_documents', 'SELECT')
-        AND has_table_privilege('portal_api', 'public.cms_documents', 'INSERT')
-        AND has_table_privilege('portal_api', 'public.cms_documents', 'UPDATE')
-        AND has_table_privilege('portal_api', 'public.cms_documents', 'DELETE')) AS api_cms_documents,
-      (has_table_privilege('portal_api', 'public.cms_revisions', 'SELECT')
-        AND has_table_privilege('portal_api', 'public.cms_revisions', 'INSERT')
-        AND has_table_privilege('portal_api', 'public.cms_revisions', 'UPDATE')
-        AND has_table_privilege('portal_api', 'public.cms_revisions', 'DELETE')) AS api_cms_revisions,
-      (has_table_privilege('portal_api', 'public.cms_assets', 'SELECT')
-        AND has_table_privilege('portal_api', 'public.cms_assets', 'INSERT')
-        AND has_table_privilege('portal_api', 'public.cms_assets', 'UPDATE')
-        AND has_table_privilege('portal_api', 'public.cms_assets', 'DELETE')) AS api_cms_assets,
+       (NOT has_table_privilege('portal_api', 'public.cms_documents', 'SELECT')
+         AND NOT has_table_privilege('portal_api', 'public.cms_documents', 'INSERT')
+         AND NOT has_table_privilege('portal_api', 'public.cms_documents', 'UPDATE')
+         AND NOT has_table_privilege('portal_api', 'public.cms_documents', 'DELETE')) AS api_cms_documents_denied,
+       (NOT has_table_privilege('portal_api', 'public.cms_revisions', 'SELECT')
+         AND NOT has_table_privilege('portal_api', 'public.cms_revisions', 'INSERT')
+         AND NOT has_table_privilege('portal_api', 'public.cms_revisions', 'UPDATE')
+         AND NOT has_table_privilege('portal_api', 'public.cms_revisions', 'DELETE')) AS api_cms_revisions_denied,
+       (NOT has_table_privilege('portal_api', 'public.cms_assets', 'SELECT')
+         AND NOT has_table_privilege('portal_api', 'public.cms_assets', 'INSERT')
+         AND NOT has_table_privilege('portal_api', 'public.cms_assets', 'UPDATE')
+         AND NOT has_table_privilege('portal_api', 'public.cms_assets', 'DELETE')) AS api_cms_assets_denied,
       (has_table_privilege('portal_api', 'public.pending_registrations', 'SELECT')
         AND has_table_privilege('portal_api', 'public.pending_registrations', 'INSERT')
         AND has_table_privilege('portal_api', 'public.pending_registrations', 'UPDATE')
         AND has_table_privilege('portal_api', 'public.pending_registrations', 'DELETE')) AS api_pending_registrations,
-      (has_table_privilege('portal_cron', 'public.cms_documents', 'SELECT')
-        AND has_table_privilege('portal_cron', 'public.cms_documents', 'UPDATE')) AS cron_cms_documents,
-      (has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT')
-        AND has_table_privilege('portal_cron', 'public.cms_revisions', 'UPDATE')) AS cron_cms_revisions,
-      (has_table_privilege('portal_cron', 'public.cms_assets', 'SELECT')
-         AND has_table_privilege('portal_cron', 'public.cms_assets', 'UPDATE')
-         AND has_table_privilege('portal_cron', 'public.cms_assets', 'DELETE')) AS cron_cms_assets,
+       (NOT has_table_privilege('portal_cron', 'public.cms_documents', 'SELECT')
+         AND NOT has_table_privilege('portal_cron', 'public.cms_documents', 'UPDATE')) AS cron_cms_documents_denied,
+       (NOT has_table_privilege('portal_cron', 'public.cms_revisions', 'SELECT')
+         AND NOT has_table_privilege('portal_cron', 'public.cms_revisions', 'UPDATE')) AS cron_cms_revisions_denied,
+       (NOT has_table_privilege('portal_cron', 'public.cms_assets', 'SELECT')
+          AND NOT has_table_privilege('portal_cron', 'public.cms_assets', 'UPDATE')
+          AND NOT has_table_privilege('portal_cron', 'public.cms_assets', 'DELETE')) AS cron_cms_assets_denied,
       (has_table_privilege('portal_api', 'public.pos_cards', 'SELECT')
         AND has_table_privilege('portal_api', 'public.pos_cards', 'INSERT')
         AND has_table_privilege('portal_api', 'public.pos_cards', 'UPDATE')
@@ -713,13 +734,13 @@ try {
   assert.equal(privileges.rows[0].cron_reminders_lock, true);
   assert.equal(privileges.rows[0].api_autocard_cards, true);
   assert.equal(privileges.rows[0].api_autocard_media, true);
-  assert.equal(privileges.rows[0].api_cms_documents, true);
-  assert.equal(privileges.rows[0].api_cms_revisions, true);
-  assert.equal(privileges.rows[0].api_cms_assets, true);
+  assert.equal(privileges.rows[0].api_cms_documents_denied, true);
+  assert.equal(privileges.rows[0].api_cms_revisions_denied, true);
+  assert.equal(privileges.rows[0].api_cms_assets_denied, true);
   assert.equal(privileges.rows[0].api_pending_registrations, true);
-  assert.equal(privileges.rows[0].cron_cms_documents, true);
-  assert.equal(privileges.rows[0].cron_cms_revisions, true);
-  assert.equal(privileges.rows[0].cron_cms_assets, true);
+  assert.equal(privileges.rows[0].cron_cms_documents_denied, true);
+  assert.equal(privileges.rows[0].cron_cms_revisions_denied, true);
+  assert.equal(privileges.rows[0].cron_cms_assets_denied, true);
   assert.equal(privileges.rows[0].api_pos_cards, true);
   assert.equal(privileges.rows[0].api_pos_card_media, true);
   assert.equal(privileges.rows[0].cron_pos_cards, true);

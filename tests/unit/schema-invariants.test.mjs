@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
+import { assertEmptyMigrationDatabase } from '../../scripts/migration-test-guards.mjs';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql', '034_owner_news_editorial.sql', '035_owner_news_polls.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql', '034_owner_news_editorial.sql', '035_owner_news_polls.sql', '038_disable_legacy_editorial_writes.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -21,12 +22,13 @@ test('migrations are numbered, ordered, and tracked by a ledger', async () => {
 });
 
 test('Academy schema preserves legacy delivery and API-only learning storage', async () => {
-  const [schema, migration, provision, verification, integration] = await Promise.all([
+  const [schema, migration, provision, verification, integration, guard] = await Promise.all([
     readFile('api/db/schema.sql', 'utf8'),
     readFile('api/db/migrations/033_academy_learning.sql', 'utf8'),
     readFile('api/db/provision.js', 'utf8'),
     readFile('api/db/verify-migrations.js', 'utf8'),
     readFile('scripts/test-migrations.mjs', 'utf8'),
+    readFile('scripts/migration-test-guards.mjs', 'utf8'),
   ]);
   for (const source of [schema, migration]) {
     for (const table of ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress']) {
@@ -61,8 +63,61 @@ test('Academy schema preserves legacy delivery and API-only learning storage', a
     assert.match(source, /academyTables/);
     assert.match(source, /has_table_privilege\('portal_cron', \$1, \$2\)/);
   }
-  assert.match(integration, /Setup modes require an empty disposable database/);
+  assert.match(guard, /Migration setup requires an empty disposable database/);
   assert.match(integration, /ledgerAfterRepeat.rows, ledgerBeforeRepeat.rows/);
+});
+
+test('migration gate requires explicit disposable setup and protects legacy editorial writes', async () => {
+  const [integration, migration, readiness] = await Promise.all([
+    readFile('scripts/test-migrations.mjs', 'utf8'),
+    readFile('api/db/migrations/038_disable_legacy_editorial_writes.sql', 'utf8').catch(() => ''),
+    readFile('scripts/test-migration-readiness.mjs', 'utf8'),
+  ]);
+  assert.match(integration, /MIGRATION_TEST_SETUP.*required/);
+  assert.match(integration, /MIGRATION_TEST_SETUP must be bootstrap or upgrade/);
+  assert.match(migration, /to_regclass\('public\.cms_documents'\)/);
+  assert.match(migration, /REVOKE INSERT, UPDATE, DELETE ON TABLE public\.cms_documents FROM portal_api, portal_cron/);
+  assert.match(migration, /cms_revisions/);
+  assert.match(migration, /cms_assets/);
+  assert.match(integration, /left\(n\.nspname, 3\) <> 'pg_'/);
+  assert.match(readiness, /left\(n\.nspname, 3\) <> 'pg_'/);
+  assert.match(readiness, /'030_dho_job_title_catalog'/);
+  assert.doesNotMatch(readiness, /\bawait migrate\(/);
+});
+
+test('migration harness rejects missing and invalid setup before opening a database pool', () => {
+  const baseEnv = {
+    ...process.env,
+    NODE_ENV: 'test',
+    MIGRATION_TEST_DISPOSABLE: 'true',
+    MIGRATION_DATABASE_URL: 'postgresql://not-used@example.invalid/never-connect',
+  };
+  delete baseEnv.MIGRATION_TEST_SETUP;
+  const missing = spawnSync(process.execPath, ['scripts/test-migrations.mjs'], {
+    env: baseEnv,
+    encoding: 'utf8',
+  });
+  assert.equal(missing.status, 1);
+  assert.match(`${missing.stdout}\n${missing.stderr}`, /MIGRATION_TEST_SETUP is required/);
+
+  const invalid = spawnSync(process.execPath, ['scripts/test-migrations.mjs'], {
+    env: { ...baseEnv, MIGRATION_TEST_SETUP: 'unexpected' },
+    encoding: 'utf8',
+  });
+  assert.equal(invalid.status, 1);
+  assert.match(`${invalid.stdout}\n${invalid.stderr}`, /MIGRATION_TEST_SETUP must be bootstrap or upgrade/);
+});
+
+test('migration harness rejects occupied disposable databases without dropping objects', () => {
+  assert.doesNotThrow(() => assertEmptyMigrationDatabase([]));
+  assert.throws(
+    () => assertEmptyMigrationDatabase([{ schema_name: 'public', object_name: 'users', object_kind: 'r' }]),
+    /requires an empty disposable database; no database objects are dropped/,
+  );
+  assert.throws(
+    () => assertEmptyMigrationDatabase([{ schema_name: 'pgdata', object_name: 'only_view', object_kind: 'v' }]),
+    /requires an empty disposable database; no database objects are dropped/,
+  );
 });
 
 test('Owner News migrations remain historical without runtime grants or readiness coupling', async () => {

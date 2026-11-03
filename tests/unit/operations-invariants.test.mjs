@@ -20,14 +20,16 @@ test('compose limits exposure and waits for API readiness', async () => {
   assert.match(compose, /nginx:alpine@sha256:/);
 });
 
-test('CI exercises default, upgrade, and bootstrap migration databases', async () => {
+test('CI exercises fresh, upgrade, bootstrap, and readiness migration databases', async () => {
   const ci = await read('.github/workflows/ci.yml');
   assert.match(ci, /PGPASSWORD: integration-test-admin-password/);
   assert.match(ci, /CREATE DATABASE portal_test_upgrade OWNER portal_admin/);
   assert.match(ci, /CREATE DATABASE portal_test_bootstrap OWNER portal_admin/);
+  assert.match(ci, /CREATE DATABASE portal_test_readiness OWNER portal_admin/);
   assert.match(ci, /MIGRATION_TEST_SETUP: upgrade[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test_upgrade[\s\S]*run: npm run test:migrations/);
   assert.match(ci, /MIGRATION_TEST_SETUP: bootstrap[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test_bootstrap[\s\S]*run: npm run test:migrations/);
-  assert.match(ci, /MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test[\s\S]*run: npm run test:migrations/);
+  assert.match(ci, /MIGRATION_TEST_SETUP: bootstrap[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test[\s\S]*run: npm run test:migrations/);
+  assert.match(ci, /name: Test migration readiness without editorial relations[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test_readiness[\s\S]*run: npm run test:migration-readiness/);
   assert.match(ci, /run: node scripts\/test-academy\.mjs/);
 });
 
@@ -111,6 +113,8 @@ test('runtime roles receive no CMS privileges while historical tables remain opt
   assert.match(verification, /api_cms_privileges_denied/);
   assert.match(verification, /cron_cms_privileges_denied/);
   assert.match(verification, /to_regclass\('public\.cms_assets'\)/);
+  assert.match(verification, /has_any_column_privilege/);
+  assert.match(verification, /PUBLIC, role membership or column grant/);
 });
 
 test('cron grants row-lock privileges only for user and reminder rechecks', async () => {
