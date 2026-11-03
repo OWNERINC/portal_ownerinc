@@ -8,7 +8,7 @@ export const editor = { uid: 'user-1', role: 'admin', permissions: { manageKnowl
 
 // Parse the actual HTML and run the whole Knowledge module, UI and
 // router/lifecycle with DOM/form/auth/transport doubles.
-export async function createKnowledgeEditorialHarness(t, { user = editor, forbidEditorial = false } = {}) {
+export async function createKnowledgeEditorialHarness(t, { user = editor } = {}) {
   const h = await createRouterHarness({ initialURL: 'https://portal.test/knowledge.html', user, autoStart: false, realUI: true });
   const { doc, context } = h;
   const html = await readFile('public/knowledge.html', 'utf8');
@@ -30,7 +30,7 @@ export async function createKnowledgeEditorialHarness(t, { user = editor, forbid
   doc.documentElement.dataset.authSnapshot = 'true';
   const requests = [], confirms = [], errors = [];
   const transport = kind => (path, options = {}) => {
-    if (forbidEditorial && /\/api\/cms/i.test(path)) throw new Error(`Forbidden editorial request: ${path}`);
+    if (/\/api\/cms/i.test(path)) throw new Error(`Forbidden Knowledge editorial request: ${path}`);
     const call = { kind, path, options, ...deferred() }; requests.push(call); return call.promise;
   };
   Object.assign(context, {

@@ -78,7 +78,7 @@ export function parseFixture(html) {
 // Only browser DOM and external transports/timers are doubled. Transports
 // deliberately ignore abort so tests exercise the lifecycle's late-result guard.
 export async function createMountedHarness(name = 'reminders', {
-  user = { permissions: { superAdmin: true } }, forbidEditorial = false,
+  user = { permissions: { superAdmin: true } },
 } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = parseFixture(html);
@@ -88,7 +88,7 @@ export async function createMountedHarness(name = 'reminders', {
   const location = new URL(`https://portal.test/${name}.html`);
   window.history = {};
   const request = kind => (path, options = {}) => {
-    if (forbidEditorial && /\/api\/cms/i.test(path)) throw new Error(`Forbidden editorial request: ${path}`);
+    if (/\/api\/cms/i.test(path)) throw new Error(`Forbidden maintained-domain request: ${path}`);
     const pending = { kind, path, options, ...deferred() };
     requests.push(pending);
     return pending.promise;

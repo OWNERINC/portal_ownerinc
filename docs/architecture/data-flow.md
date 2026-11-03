@@ -77,8 +77,8 @@
 6. O Resend SMTP envia o email com um link absoluto para a âncora pública do
    lembrete, derivada de um UUID validado. O histórico administrativo expõe
    lembrete, destinatário, motivo e tentativas com paginação.
-7. `GET /api/reminders/:id` aplica autenticação, `active`, publicação CMS e
-   audiência. A página de lembretes lê o fragmento, busca esse detalhe
+7. `GET /api/reminders/:id` aplica autenticação, `active` e audiência. A página
+   de lembretes lê o fragmento, busca esse detalhe
    autoritativo e o renderiza/focaliza sem alterar ou duplicar a página atual.
 8. `heartbeat_at` mede liveness; `last_error`/`last_success_at` representam o
    resultado da execução do worker, enquanto os contadores e o ledger
@@ -98,50 +98,27 @@
    ou idempotência do provedor seria necessário para essa garantia e não faz parte
    desta arquitetura.
 
-## Conteúdo CMS
+## Domínios mantidos e CMS histórico
 
-1. O editor cria uma revisão `draft` validada; cada nova gravação recebe uma
-   versão imutável e atualiza somente o ponteiro do draft.
-2. Publicar ou agendar adquire o lock de assets antes do documento, confirma
-   que a revisão selecionada ainda é o draft atual e valida novamente os
-   assets referenciados. Uma seleção concorrente retorna `409` sem alterar a
-   publicação.
-3. O leitor promove scheduled vencido com a mesma ordem de lock somente depois
-   de validar blocos e assets. Revisão inválida é arquivada e auditada sem
-   substituir a publicação anterior. A leitura consulta somente `published` e
-   descarta revisão inválida; busca, resumo, detalhes e lembretes usam
-   `blocksToText`/blocos validados; texto legado só existe como fallback quando
-   não há documento CMS.
-4. Unschedule arquiva o scheduled quando já existe draft mais novo;
-   unpublish arquiva published e scheduled, deixando o draft independente.
-   Assim, um lembrete despublicado não é enviado pelo fallback legado.
-5. Exclusão de uma fonte remove seu `cms_document` e revisões, tornando os
-   assets inacessíveis até a retenção remover arquivos sem referências.
-
-6. A edição legacy de PDF altera somente o único bloco PDF sem ambiguidade.
-    Quando há múltiplos blocos PDF, a operação é rejeitada porque a interface
-    atual não oferece uma entrada editorial para escolher o bloco correto; a
-    retomada desse fluxo fica para a próxima etapa do CMS.
-7. No editor simples da Base de Conhecimento, título/categoria/anexo permanecem
-   editáveis. Sem documento CMS, o texto simples continua no payload; com
-   `cms_managed=true`, o campo corpo fica desabilitado e `content` é omitido.
-   A edição de metadados preserva os blocos e ponteiros de publicação; a troca
-   de PDF segue a sincronização específica acima, sem substituir parágrafos.
-    A Base de Conhecimento não oferece uma entrada visual para o editor CMS
-    nesta etapa. Não há parâmetro de documento/deep link nem bypass dos guards
-    do router para edição não salva, gravação, upload ou descarte de PDF
-    temporário.
-8. A tradução fica no DOM: `knowledge` → Base de Conhecimento, painel →
-   Configuração e publicação, estados `draft`/`published`/`scheduled`/`archived`
-   → Rascunho/Publicado/Agendado/Arquivado. Estados desconhecidos permanecem texto
-   seguro. Enums, endpoints, filtros, payloads e classes não são traduzidos;
-   salvar rascunho (inclusive autosave) não equivale a publicar. Publicação e
-   agendamento continuam seguindo as ações e validações dos itens 1–4.
-
-**Limite conhecido do PDF na edição simples:** upload e interface aceitam até
-100 MiB, mas `api/cms/knowledge.js` valida a associação do asset até 50 MiB.
-Essa divergência preexistente foi identificada pela leitura do código; o lote
-de linguagem não muda esse contrato nem comprova arquivos grandes por HTTP.
+1. Knowledge, Benefits, Reminders e Academy consultam apenas suas próprias
+   tabelas e rotas. Seus transportes não chamam `/api/cms`; seus harnesses
+   rejeitam SQL para `cms_documents`, `cms_revisions`, `cms_assets` e o lock
+   `7193029`, além de exigirem uma chamada positiva ao domínio sob teste.
+2. Knowledge aceita somente `title`, `category` e `content`; campos PDF legados
+   retornam `400` antes de autorização, SQL, transação ou auditoria. A edição e
+   a leitura usam texto simples seguro. PDF ativo retirado por ausência de rota
+   própria.
+3. Benefits e Reminders projetam `description`/`instructions` próprias; a
+   delivery sem reminder mantém `content_url = null`. Academy usa a hierarquia
+   `academy` → `academy_modules` → `academy_lessons`, locks de linha, audiência
+   por cargo, mídia própria e progresso por UID/media version.
+4. As migrations e tabelas CMS permanecem no repositório para preservar dados,
+   uploads, documentos, revisões, assets e bytes históricos. O runtime editorial
+   remanescente continua coberto por seus próprios testes, mas não é uma
+   dependência dos quatro domínios mantidos.
+5. Alterações e exclusões nos domínios mantidos não removem nem atualizam
+   `cms_documents`, `cms_revisions` ou `cms_assets`. Fixtures de rollback e
+   exclusão verificam as linhas históricas, bytes e linhas não relacionadas.
 
 ## Evidência e ambiente
 

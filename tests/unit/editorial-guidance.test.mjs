@@ -7,7 +7,7 @@ const managedArticle = { ...legacyArticle, cms_managed: true, content: 'Texto pr
 const compactText = node => node.textContent.replace(/\s+/g, ' ').trim();
 
 test('Knowledge editor exposes only simple text guidance and no PDF controls', async t => {
-  const h = await createKnowledgeEditorialHarness(t, { forbidEditorial: true });
+  const h = await createKnowledgeEditorialHarness(t);
   await h.showArticle(legacyArticle);
   assert.equal(h.node('modal-article').classList.contains('hidden'), false);
   assert.equal(h.node('f-content').disabled, false);
@@ -31,7 +31,7 @@ test('Knowledge editor exposes only simple text guidance and no PDF controls', a
 });
 
 test('Knowledge keeps text editable regardless of legacy editorial markers', async t => {
-  const h = await createKnowledgeEditorialHarness(t, { forbidEditorial: true });
+  const h = await createKnowledgeEditorialHarness(t);
   await h.showArticle(managedArticle);
   assert.equal(h.node('f-content').disabled, false);
   assert.equal(h.node('f-content').required, true);
@@ -42,7 +42,7 @@ test('Knowledge keeps text editable regardless of legacy editorial markers', asy
 });
 
 test('Knowledge draft navigation keeps unsaved text protected', async t => {
-  const h = await createKnowledgeEditorialHarness(t, { forbidEditorial: true });
+  const h = await createKnowledgeEditorialHarness(t);
   await h.showArticle(managedArticle);
   h.input('f-title', 'Título não salvo');
   h.context.confirmResult = false;
@@ -55,7 +55,7 @@ test('Knowledge draft navigation keeps unsaved text protected', async t => {
 });
 
 test('Knowledge save protects navigation and preserves failed edits', async t => {
-  const h = await createKnowledgeEditorialHarness(t, { forbidEditorial: true });
+  const h = await createKnowledgeEditorialHarness(t);
   await h.showArticle(managedArticle);
   h.input('f-title', 'Título editado'); await h.submit();
   const save = h.latest('/api/knowledge/article-a');

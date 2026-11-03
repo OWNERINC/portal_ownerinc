@@ -5,6 +5,16 @@
 **Resultado:** **DONE_WITH_CONCERNS** — evidência local PASS; homologação de
 serviços e navegador autenticado PENDENTE.
 
+## Atualização OWN-41 — 3 de novembro de 2026
+
+Esta revisão histórica continua registrando os limites da homologação de 1º de
+outubro. Na implementação atual, a Academy foi desacoplada do CMS: catálogo,
+gestão, autorização, player e progresso usam apenas `academy`,
+`academy_modules`, `academy_lessons` e `academy_lesson_progress`. Documentos,
+revisões, assets, uploads e bytes CMS históricos permanecem preservados e não
+são apagados por mutações Academy. PDF ativo retirado por ausência de rota
+própria.
+
 ## Limite de execução
 
 O usuário escolheu seguir sem subir serviços. Não foram iniciados Docker,
@@ -21,11 +31,11 @@ composição/código, não substitutos dessas verificações.
 | --- | --- | --- |
 | Contratos de domínio | Validação de audiência, limites, URLs, versão de mídia, CAS e erros tipados coberta por testes locais. | `api/academy/`, `tests/unit/academy-*.test.mjs`, reports Tasks 2–7 |
 | Catálogo | Grupos inicial/cargo e continuidade independentes; autorização precede total/categorias/paginação; deep links e lifecycle têm cobertura. | Task 9 report; `tests/unit/academy-frontend.test.mjs` |
-| Gestão/CMS | `manageAcademy`, cargos reais, CRUD, ordenação, `academy_lesson`, publicação e descarte tardio cobertos localmente. | Task 10 report; `tests/unit/academy-management.test.mjs`, `cms-frontend.test.mjs` |
+| Gestão Academy | `manageAcademy`, cargos reais, CRUD, ordenação, árvore própria e descarte tardio cobertos localmente, sem publicação CMS. | `tests/unit/academy-management.test.mjs`, `academy-mutations.test.mjs`, `cms-removal-contract.test.mjs` |
 | Progresso | UID autenticado é a fonte, posição não conclui, conclusão manual exige ACK, 409 interrompe writes e troca de mídia cria nova versão. | Task 7 report; `tests/unit/academy-progress.test.mjs` |
 | Player/lifecycle | YouTube/HTML5 adapters reais no harness, sem autoplay, retry limitado, erros 101/150/2, abort e destroy idempotente. | Task 8 report; `tests/unit/academy-player.test.mjs` |
 | Marca/acessibilidade estrutural | SVG allowlist, namespace CSS Academy, reduced motion, alvos/labels e estados renderizados foram inspecionados localmente. | Task 11 report; brand/motion tests; prancha documental |
-| Compatibilidade | Shell persistente, Dashboard com links Academy, legado externo e integração CMS preservados por testes existentes. | Tasks 9–11; `persistent-navigation.test.mjs`, `cms-contracts.test.mjs` |
+| Compatibilidade | Shell persistente, Dashboard com links Academy e legado externo preservados; contratos CMS históricos permanecem separados. | `persistent-navigation.test.mjs`, `cms-removal-contract.test.mjs` |
 | Checks reproduzíveis | Baseline anterior: `npm run verify` 917/917; os resultados desta onda, incluindo o novo total, estão no relatório de correção final; `node scripts/generate-public-shell.mjs --check` e `git diff --check` permanecem exigidos. | Task 11 report, logs SDD e `final-fix-report.md` |
 
 ## Matriz de cenários
@@ -33,7 +43,7 @@ composição/código, não substitutos dessas verificações.
 | Cenário/requisito | Status | Observação de aceite |
 | --- | --- | --- |
 | Primeiro acesso: formação inicial + curso A | PENDENTE | Regra e testes locais existem; exige API/DB/Auth reais com fixtures. |
-| Abrir curso/aula/PDF B por URL | PENDENTE | Autorização server-side coberta por doubles; falta sessão e asset real. |
+| Abrir curso/aula/mídia B por URL | PENDENTE | Autorização server-side coberta por doubles; falta sessão e mídia real. PDF não é uma rota Academy ativa. |
 | Sem cargo vê apenas `all` | PENDENTE | Política local PASS; confirmação ponta a ponta requer banco. |
 | Cargo inativo não deriva acesso | PENDENTE | Regra local PASS; cenário real pendente. |
 | Gestor com preview sem personificar aluno | PENDENTE | Gate e ausência de progresso na prévia cobertos localmente; falta auth real. |
@@ -43,7 +53,7 @@ composição/código, não substitutos dessas verificações.
 | Duas abas com versão antiga retornam 409 | PENDENTE | CAS e tratamento cobertos localmente; corrida PostgreSQL pendente. |
 | Reordenar preserva progresso por ID | PENDENTE | Implementação/testes locais PASS; banco real pendente. |
 | Substituir vídeo reseta nova versão | PENDENTE | Contrato/testes locais PASS; persistência real pendente. |
-| Desativar/despublicar bloqueia catálogo/aula/asset | PENDENTE | Regras e fixtures locais PASS; leitura autorizada real pendente. |
+| Desativar ancestral bloqueia catálogo/aula | PENDENTE | Regras, locks e fixtures locais PASS; leitura autorizada real pendente. |
 | YouTube 101/150/2 e script bloqueado | PENDENTE | Adapters/doubles locais cobrem 101/150/2; não há double local para 100/153 nesta entrega, e provider/CSP/Nginx reais não foram exercitados. |
 | Back/Forward sem player órfão | PASS local / PENDENTE runtime | Router/lifecycle PASS em testes e prancha; navegador autenticado real pendente. |
 | Mobile, teclado, reduced motion | PASS estrutural / PENDENTE físico | Código, testes e inspeção local PASS; dispositivo/leitor de tela não validado. |
@@ -57,9 +67,9 @@ composição/código, não substitutos dessas verificações.
 - **Progresso:** dado por usuário/aula/versão, CAS e conclusão manual; não há
   relatório de gestor. Retenção e cascatas estão documentadas em
   `docs/product/privacy-retention.md`.
-- **CMS/publicação:** salvar, disponibilizar e publicar são estados diferentes;
-  documento sem publicação válida não reativa legacy; primeira imagem publicada
-  define capa. O manual está em `docs/operations/academy-content.md`.
+- **CMS histórico:** migrations, documentos, revisões e assets antigos permanecem
+  preservados, mas não são consultados pela Academy atual. O manual operacional
+  próprio está em `docs/operations/academy-content.md`.
 - **Mídia:** hosts/formats são allowlisted, sem probe server-side; player tem
   retry/cleanup. Reprodução real, Referer/origin, fullscreen e CSP efetiva são
   pendências, não PASS.

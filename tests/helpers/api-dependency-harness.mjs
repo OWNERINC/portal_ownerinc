@@ -65,6 +65,7 @@ export async function createDependencyHarness(t, { forbidEditorial = false } = {
       if (forbidEditorial && forbiddenEditorialSql.test(String(sql))) {
         throw new Error(`Forbidden editorial SQL: ${sql}`);
       }
+      if (/pg_advisory_xact_lock/.test(String(sql)) && !forbidEditorial) return { rows: [] };
       if (/FROM users u/.test(sql)) return { rows: Object.values(users).filter(user => user.uid === params[0]).map(user => structuredClone(user)) };
       if (/COUNT\(\*\)/.test(sql)) return { rows: [{ count: 0 }] };
       if (/FROM knowledge_base/.test(sql)) {

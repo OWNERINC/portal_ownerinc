@@ -41,7 +41,7 @@ test('cron health renders while the independent delivery history is stalled', as
 });
 
 test('reminder descriptions render as text without CMS requests', async t => {
-  const h = await createMountedHarness('reminders', { forbidEditorial: true });
+  const h = await createMountedHarness('reminders');
   t.after(() => h.page.dispose());
   h.requests.find(request => request.path.startsWith('/api/reminders?')).resolve({
     data: [{ id: UUID, title: 'Seguro', description: '<script>não executar</script>', trigger_day: 10,

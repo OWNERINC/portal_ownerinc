@@ -128,7 +128,6 @@ test('Knowledge frontend has no PDF or editorial controls', () => {
 test('Benefits renders own description as text without the CMS transport', async () => {
   const h = await createFeedbackHarness('benefits', {
     mount: false,
-    forbidEditorial: true,
     modules: [
       { path: 'public/js/pagination.js', exports: 'readOffset, renderPagination' },
       { path: 'public/js/benefits.js', exports: 'mount' },

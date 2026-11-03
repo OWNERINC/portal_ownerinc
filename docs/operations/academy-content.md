@@ -17,26 +17,22 @@ registra o que foi verificado e o que ainda depende de ambiente autorizado.
 4. O gestor usa prévia explícita (`all=true`) somente com `manageAcademy`. Isso
    não simula outro colaborador e não salva progresso.
 
-O backend aplica audiência, conta ativa, curso/módulo/aula ativos e publicação
-CMS antes de listar categorias, total, curso, aula, materiais ou asset. Não
-confie em ocultar cards: a API é a fronteira de autorização.
+O backend aplica audiência, conta ativa e curso/módulo/aula ativos antes de listar
+categorias, total, curso ou aula. Não confie em ocultar cards: a API é a fronteira
+de autorização.
 
-## 2. Ciclo editorial
+## 2. Ciclo de gestão
 
-- **Salvar** mantém os metadados ou rascunho no CMS; não torna o conteúdo público.
-- **Disponibilizar** ativa curso, módulo ou aula na árvore, desde que os pré-
-  requisitos editoriais sejam satisfeitos.
-- **Publicar** promove a revisão CMS e torna descrição/materiais elegíveis para
-  leitura pública. Um documento existente sem revisão publicada válida não cai
-  de volta para a descrição legada.
-- Despublicar, desativar ou retirar um ancestral remove o item do catálogo e
-  bloqueia novo GET de aula/material/asset para alunos. Gestores continuam com
-  prévia explícita quando autorizado.
+- **Salvar** mantém os metadados e a descrição/mídia próprias da árvore Academy.
+- **Ativar** curso, módulo ou aula torna o item elegível, desde que a audiência,
+  os ancestrais e a mídia válida permitam a leitura.
+- **Desativar** um item ou retirar um ancestral remove o item do catálogo e
+  bloqueia novo GET de aula para alunos. Gestores continuam com prévia explícita
+  quando autorizado.
 
-Ative um curso interno somente depois de ter módulo e aula ativos, mídia
-reproduzível e publicação válida quando houver documento CMS. Concorrência é
-serializada pelo lock CMS e as falhas de auditoria/validação revertem a
-transação.
+Ative um curso interno somente depois de ter módulo e aula ativos e mídia
+reproduzível. Concorrência é serializada pelos locks da árvore própria e as
+falhas de auditoria/validação revertem a transação.
 
 ## 3. Estrutura, capa e materiais
 
@@ -44,11 +40,10 @@ Um curso contém módulos e aulas; reordene usando a lista completa de IDs. O
 progresso acompanha o ID da aula, não sua posição. Cada aula tem título,
 descrição simples e uma mídia primária: YouTube ou arquivo HTTPS MP4/WebM.
 
-No CMS, use o tipo `academy_lesson` para descrição e materiais da aula. Para a
-apresentação do curso, a primeira imagem publicada é a capa (`cover_asset_id`);
-sem imagem publicada, a interface usa o vetor original da Academy. Referências
-de assets permanecem nas revisões para a retenção reconhecer arquivos ainda
-necessários.
+A aula usa a descrição simples persistida em `academy_lessons` e uma mídia
+primária YouTube ou arquivo HTTPS MP4/WebM. Para a apresentação do curso, a
+interface usa `icon_key` e o vetor original da Academy; não há capa ou material
+CMS no fluxo mantido.
 
 ## 4. URLs de mídia
 
@@ -77,10 +72,10 @@ não confirmado, mas não inventa conclusão.
 
 ## 6. Curso legado e retirada
 
-Cursos externos/legados permanecem acessíveis até conversão editorial explícita.
-Converter preserva o ID e o documento CMS, limpa a URL externa e exige currículo
-interno elegível antes da ativação. Não converter automaticamente nem inferir
-cargos reais a partir de exemplos comerciais.
+Cursos externos/legados permanecem acessíveis até conversão explícita. Converter
+preserva o ID, limpa a URL externa e exige currículo interno elegível antes da
+ativação. Não converter automaticamente nem inferir cargos reais a partir de
+exemplos comerciais.
 
 ## 7. Segurança e privacidade editorial
 
@@ -97,11 +92,11 @@ cargo não apaga o histórico, mas muda a elegibilidade corrente.
 ## 8. Checklist de publicação
 
 - [ ] audiência, formação visual e cargos ativos conferidos;
-- [ ] curso, módulo e aula com estado editorial correto;
+- [ ] curso, módulo e aula com estado ativo/inativo correto;
 - [ ] URL de mídia validada e título acessível;
-- [ ] descrição/material salvo no `academy_lesson` correto;
-- [ ] assets publicados e autorizados, com capa escolhida pela primeira imagem;
-- [ ] publicação explícita confirmada, sem depender de fallback legado;
+- [ ] descrição e mídia salvas na aula Academy correta;
+- [ ] ícone/fallback visual próprio conferido;
+- [ ] não há dependência de publicação, documento ou asset CMS;
 - [ ] curso interno testado por uma conta elegível e uma conta inelegível em
       ambiente autorizado;
 - [ ] retirada/despublicação registrada quando conteúdo deixa de ser público.

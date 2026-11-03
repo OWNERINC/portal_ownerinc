@@ -25,6 +25,23 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 - O frontend continua estático enquanto essa solução atender ao produto.
 - Serviços só devem ser separados ou reescritos quando existir pressão real.
 
+## Domínios mantidos sem CMS (OWN-41)
+
+Knowledge, Benefits, Reminders e Academy usam suas próprias tabelas, payloads,
+rotas e projeções. Esses domínios não consultam `cms_documents`,
+`cms_revisions` ou `cms_assets`, não usam o lock editorial `7193029` e não
+chamam `/api/cms`. O CMS, suas migrations, uploads, documentos, revisões e
+assets históricos continuam preservados para os fluxos editoriais que ainda os
+utilizam; a separação é de runtime, não uma limpeza destrutiva de dados.
+
+Knowledge permanece como texto simples (`title`, `category`, `content`) e rejeita
+campos PDF legados antes de autorização, SQL, transação ou auditoria. PDF ativo
+retirado por ausência de rota própria. Benefits e Reminders renderizam e
+entregam `description`/`instructions` próprias com texto seguro. Academy usa a
+árvore `academy` → `academy_modules` → `academy_lessons`, audiência por cargo,
+mídia própria, progresso por UID/media version e fallback visual da própria
+marca; não existe publicação, capa ou material CMS no fluxo mantido.
+
 ## Players de aulas da Academy
 
 `public/academy/player.js` exporta
@@ -64,7 +81,7 @@ controller de progresso; os adapters não montam a interface da sala.
 `academy-root`, sem reconstruir o shell. `createAcademyAPI(page)` expõe
 `list(query)`, `categories()`, `continueCourses()`, `course(id, preview)` e
 `lesson(id, preview)`; leituras usam `page.bindAPI`. Cada transição cria um
-lifecycle descartável. Aula acrescenta escopo filho para CMS, player e progresso.
+lifecycle descartável. Aula acrescenta escopo filho para player e progresso.
 
 O catálogo consulta `group=initial` e `group=role` separadamente, cada um com
 limite 20, categoria e offset. `initial_category`, `initial_offset`,
@@ -131,7 +148,9 @@ exigindo URL HTTP(S). A formação visual (`initial`/`role`) é independente do 
 - `academy_lesson_progress`: chave `(user_uid, lesson_id, media_version)`, posição
   de 0 a 86400 segundos e conclusão com timestamp consistente. Exclusão do usuário
   ou da aula remove o progresso; exclusão do curso remove a árvore por cascata.
-- `cms_documents` aceita `academy_lesson`, além dos tipos anteriores.
+- A migration histórica mantém `cms_documents` compatível com `academy_lesson`
+  para dados e revisões antigos; o runtime atual da Academy não lê nem grava
+  essa tabela.
 
 Somente `portal_api` recebe CRUD nas quatro novas tabelas. O cron mantém seu
 acesso às revisões CMS para retenção, sem acesso ao progresso. O `schema.sql`
@@ -142,7 +161,7 @@ As regras editoriais, elegibilidade e atualização de versão de mídia pertenc
 
 ### Políticas, validação e leitura de progresso
 
-O catálogo em `api/academy/catalog.js` aplica audiência e publicação válida antes
+O catálogo em `api/academy/catalog.js` aplica audiência e atividade válida antes
 de total, categorias e paginação. `GET /api/academy` mantém array e
 `X-Total-Count`, aceita `group=initial|role` e acrescenta capa/contagens/progresso
 sem remover os campos legados. Metadados do currículo e progresso são carregados
@@ -150,24 +169,20 @@ em lote para a página selecionada. Formação inicial e por cargo não possuem
 pré-requisitos entre si. Categorias refletem o mesmo conjunto público autorizado.
 
 `GET /api/academy/:id` entrega curso e currículo; `GET /api/academy/lessons/:id`
-entrega mídia, descrição/material publicado, progresso da versão atual e vizinhos
-do currículo visível. Curso, módulo e aula precisam estar ativos; documento CMS
-existente sem publicação válida impede fallback legado. `all=true` é preview
+entrega mídia, descrição própria, progresso da versão atual e vizinhos do
+currículo visível. Curso, módulo e aula precisam estar ativos. `all=true` é preview
 explícito com `manageAcademy`, inclusive nas categorias. A lista de fontes
 `GET /api/academy/lessons?all=true` é exclusiva de gestores e inclui aulas inativas
-para edição CMS. O tipo `academy_lesson` está registrado nas permissões, fontes,
-rotas e leitor do CMS, com `manageAcademy` e origem `academy_lessons`. O leitor
-genérico considera a atividade da aula, do módulo e do curso nas duas projeções;
-o catálogo continua validando a publicação e audiência do curso no client bloqueado.
+para gestão da própria árvore. A autorização considera a atividade da aula, do
+módulo e do curso; não há projeção editorial ou fallback CMS.
 
 `authorizeLessonInTransaction(db,user,lessonId)` usa somente o client recebido,
-com lock CMS `7193029` seguido de curso → módulo → aula, rechecando ancestrais,
-audiência e blocos publicados. Nunca chama leitores que abrem conexões do pool.
-O currículo também lê e bloqueia a hierarquia em lote nessa ordem, dentro da fase
-protegida pelo CMS: revalida cursos/audiência/publicação e busca módulos/aulas
+com locks de linha curso → módulo → aula, rechecando ancestrais e audiência.
+Nunca chama leitores que abrem conexões do pool. O currículo também lê e bloqueia
+a hierarquia em lote nessa ordem: revalida cursos/audiência/atividade e busca módulos/aulas
 atuais antes de projetar mídia, vizinhos ou contagens. Somente fontes existentes
-e autorizadas sem documento podem usar descrição legada; snapshots anteriores ao
-lock não são convertidos em conteúdo legado após exclusão ou mudança de vínculo.
+e autorizadas retornam descrição e mídia próprias; snapshots anteriores ao lock
+não são convertidos em conteúdo após exclusão ou mudança de vínculo.
 
 O harness `tests/helpers/academy-integration.mjs` monta as rotas reais e substitui
 apenas pool/autenticação externa, sem alterar cache global. Para integração real,
@@ -194,7 +209,7 @@ metadados atuais e `job_title_ids` carregados da associação; campos omitidos s
 preservados. Novos cursos são inativos. Internos usam URL nula; externos exigem
 HTTP(S), mantendo compatibilidade com URLs legadas. Conversão explícita para
 interno limpa a URL externa anterior na mutação, inclusive quando o editor reenviar
-o link antigo; preserva ID e documento CMS.
+o link antigo; preserva o ID e os dados próprios da árvore.
 
 O payload de aula aceita `title`, `description`, `order`, `active` e
 `media: { type: 'youtube'|'file', url }`; título e mídia são obrigatórios.
@@ -217,16 +232,11 @@ dependem de banco/catálogo e não são inferidas pelo validator puro.
 ### Gestão transacional de cursos e currículo
 
 `api/academy/mutations.js` recebe exclusivamente o client de `withAudit`, sem abrir
-conexões ou transações aninhadas. Todas as escritas entram pelo lock CMS `7193029`
-e bloqueiam curso → módulo → aula, nessa ordem. Contagens incluem inativos e são
-checadas sob lock do curso; cargos novos exigem existência/atividade com `FOR SHARE`.
-A ativação de curso interno exige módulo e aula ativos, mídia válida e publicação
-válida do curso e da aula (incluindo assets); sem documento CMS, vale o conteúdo
-simples legado. Agendamentos vencidos do curso e das aulas são processados pelo
-promotor CMS no mesmo client antes da checagem, inclusive retirada de agendamentos
-inválidos sem substituir uma publicação anterior válida. Rascunhos não são
-publicados automaticamente. Rejeição da ativação ou falha de auditoria reverte
-toda a transação, inclusive promoções/retiradas realizadas durante a checagem.
+conexões ou transações aninhadas. Todas as escritas bloqueiam a árvore própria
+curso → módulo → aula, nessa ordem, sem advisory lock editorial. Contagens incluem
+inativos e são checadas sob lock do curso; cargos novos exigem existência/atividade
+com `FOR SHARE`. A ativação de curso interno exige módulo e aula ativos e mídia
+válida. Rejeição da ativação ou falha de auditoria reverte toda a transação.
 
 POST/PUT/DELETE de cursos e as rotas abaixo exigem `manageAcademy` e registram
 auditoria na mesma transação; falha de auditoria reverte a mutação inteira:
@@ -242,12 +252,10 @@ Reordenação exige conjunto completo do pai sem duplicatas; falha retorna
 Mudar a origem normalizada do vídeo incrementa `media_version`; editar título,
 ordem ou outra representação do mesmo ID YouTube não incrementa.
 
-Exclusão remove primeiro os documentos CMS das aulas descendentes e, no caso do
-curso, sua apresentação, antes da origem. Cascatas removem revisões/currículo/
-progresso. Arquivos e assets compartilhados ficam com a retenção existente.
-`deleteCmsSource` encaminha Academy/aulas para essas mesmas operações completas.
-Os testes locais executam domínio e HTTP reais com seams de DB; o script de
-integração inclui corridas nos limites, ordenação, rollback e arquivos compartilhados.
+Exclusão remove somente a árvore própria; cascatas removem currículo e progresso,
+sem tocar documentos, revisões, assets ou bytes históricos do CMS. Os testes locais
+executam domínio e HTTP reais com seams de DB e incluem corridas nos limites,
+ordenação, rollback e preservação de linhas históricas.
 
 `api/academy/progress.js` contém `readProgress`, `summarizeProgress` e `saveProgress`.
 A leitura parametriza usuário autenticado, aula e versão; ausência retorna
@@ -262,14 +270,14 @@ tipado para as rotas HTTP de leitura e gestão.
 
 `PUT /api/academy/lessons/:id/progress` aceita somente `media_version`,
 `expected_version`, `position_seconds` (inteiro 0..86400) e `completed` opcional.
-UID vem da autenticação. Uma única conexão transacional autoriza com locks
-CMS → curso → módulo → aula antes da escrita compare-and-swap. Primeira escrita
+UID vem da autenticação. Uma única conexão transacional autoriza com locks de linha
+curso → módulo → aula antes da escrita compare-and-swap. Primeira escrita
 usa versão esperada zero; colisões retornam `409 progress_conflict`, mídia antiga
 retorna `409 media_changed`. Omissão de `completed` preserva conclusão/data;
 `false` explícito limpa a data. Nunca há conclusão automática pelo tempo assistido.
 `GET /api/academy/continue?limit=3` lista cursos iniciados e incompletos por última
 atividade autorizada da mídia atual, independente da primeira página do catálogo.
-O limite aceita 1..100. Curso/aula sem publicação válida não entra no cálculo.
+O limite aceita 1..100. Curso, módulo ou aula inativo não entra no cálculo.
 Somente o PUT no pathname exato de progresso tem limite 120/15 min/UID; demais
 mutações mantêm 60/15 min e limites globais continuam vigentes.
 

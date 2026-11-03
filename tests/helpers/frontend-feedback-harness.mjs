@@ -85,7 +85,7 @@ export class FixtureNode extends Node {
 // Only DOM, browser rendering/export libraries and external transports are doubles.
 export async function createFeedbackHarness(name, {
   expose = '', fonts = Promise.resolve(), mount = true, modules = [],
-  url = `https://portal.test/${name}.html`, forbidEditorial = false,
+  url = `https://portal.test/${name}.html`,
 } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
@@ -118,7 +118,7 @@ export async function createFeedbackHarness(name, {
   const requests = [], revoked = [], frames = new Map(), timers = new Map(), observers = [], captures = [];
   let resourceId = 0;
   const transport = kind => (path, options = {}) => {
-    if (forbidEditorial && /\/api\/cms/i.test(path)) throw new Error(`Forbidden editorial request: ${path}`);
+    if (/\/api\/cms/i.test(path)) throw new Error(`Forbidden maintained-domain request: ${path}`);
     const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise;
   };
   const context = vm.createContext({
