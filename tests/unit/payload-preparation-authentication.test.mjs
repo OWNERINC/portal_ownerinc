@@ -1184,32 +1184,28 @@ test('apply runtime inherits the receiver group, has cleanup reserve, and no sup
 test('inherited runtime-like group leaves no nested child after timeout or output overflow', {
   skip: process.platform !== 'linux',
 }, () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'payload-inherited-group-'));
-  try {
-    for (const scenario of ['timeout', 'overflow']) {
-      const pidfile = path.join(root, `${scenario}.pid`);
-      const script = String.raw`
-import importlib.util,os,subprocess,sys,time
-spec=importlib.util.spec_from_file_location('bounded_inherited',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-mode,pidfile=sys.argv[2:]
-code='import os,subprocess,sys,time; p=subprocess.Popen([sys.executable,"-I","-S","-c","import time;time.sleep(60)"]); open(sys.argv[1],"w").write(str(p.pid)); time.sleep(.1); ' + ('time.sleep(60)' if mode=='timeout' else '[(os.write(1,b"x"*8192)) for _ in iter(int,1)]')
-m.run_bounded_subprocess([sys.executable,'-I','-S','-c',code,pidfile],1024,1,group_mode='inherit')
-`;
-      const result = spawnSync(python, ['-I', '-S', '-B', '-c', script,
-        path.join(repo, 'ops', 'prepare-cms-authenticated.py'), scenario, pidfile],
-      { encoding: 'utf8', timeout: 15000, detached: true });
-      assert.notEqual(result.status, 0, `${scenario} unexpectedly returned normally`);
-      const child = Number(readFileSync(pidfile, 'utf8'));
-      let alive = true;
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        try { process.kill(child, 0); } catch { alive = false; break; }
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  const outcomes = [];
+  for (const scenario of ['timeout', 'overflow']) {
+    let passed = false;
+    try {
+      const result = spawnSync(python, ['-I', '-S', '-B',
+        path.join(repo, 'tests/fixtures/payload-preparation-inherited-group.py'), scenario],
+      { encoding: 'utf8', timeout: 15000, maxBuffer: 1024 });
+      if (!result.error && result.signal === null && result.status === 0 && result.stderr === ''
+        && typeof result.stdout === 'string' && Buffer.byteLength(result.stdout, 'utf8') <= 1024) {
+        const value = JSON.parse(result.stdout);
+        const expected = { kind: 'preparation-inherited-reaper-v1', scenario, passed: true,
+          cleanupVerified: true, workloadObserved: true, leaderSignaled: true,
+          descendantsReaped: true, rescueUsed: false };
+        passed = value !== null && typeof value === 'object' && !Array.isArray(value)
+          && Object.keys(value).length === Object.keys(expected).length
+          && Object.entries(expected).every(([key, item]) => Object.hasOwn(value, key) && value[key] === item)
+          && result.stdout === JSON.stringify(value) + '\n';
       }
-      assert.equal(alive, false, `${scenario} left nested child ${child}`);
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+    } catch { /* Keep child diagnostics private and still attempt the other workload. */ }
+    outcomes.push(passed);
   }
+  assert.deepEqual(outcomes, [true, true], 'inherited-group proof failed (private diagnostics withheld)');
 });
 
 test('authenticated preparation supervisor kills and reaps the Linux child process group', {
