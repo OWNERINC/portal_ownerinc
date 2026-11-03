@@ -98,7 +98,7 @@ test('CMS management permission mapping stays area-scoped', () => {
     permissions: { manageKnowledge: true, manageAcademy: false, manageBenefits: true, manageReminders: false },
   };
   assert.equal(canManageCms(user, 'knowledge'), true);
-  assert.equal(canManageCms(user, 'announcement'), true);
+  assert.equal(canManageCms(user, 'announcement'), false);
   assert.equal(canManageCms(user, 'academy'), false);
   assert.equal(canManageCms(user, 'benefit'), true);
   assert.equal(canManageCms(user, 'reminder'), false);

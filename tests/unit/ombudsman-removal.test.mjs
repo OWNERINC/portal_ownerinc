@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +35,8 @@ const isGeneratedArtifact = (file) => /(^|\/)\.worktrees(\/|$)/.test(file);
 
 const isCurrentSurfaceFile = (file) => !explicitlyExcluded.has(file)
   && !isDatedHistoricalDocument(file)
-  && !isGeneratedArtifact(file);
+  && !isGeneratedArtifact(file)
+  && existsSync(`${repositoryRoot}/${file}`);
 
 const trackedCurrentSurface = async () => {
   // git ls-files limits this to tracked files, so untracked artifacts cannot enter the scan.

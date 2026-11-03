@@ -5,8 +5,8 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const {
-  addPublishedBlocks, getPublishedAnnouncement, getPublishedBlocksBatch,
-  isPublicCmsRow, listPublishedAnnouncements, publishedBodyText,
+  addPublishedBlocks, getPublishedBlocksBatch, isPublicCmsRow,
+  promoteDueScheduled, publishedBodyText, validatePublishedBlocks,
 } = require('../../api/cms/reader');
 
 function poolFor({ document, blocks = [], assets = [], sourceExists = true, sourceActive = true,
@@ -96,6 +96,35 @@ function poolFor({ document, blocks = [], assets = [], sourceExists = true, sour
     },
   };
 }
+
+test('default scheduled promotion only considers active CMS content types', async () => {
+  const calls = [];
+  const db = {
+    async query(sql, params = []) {
+      calls.push({ sql, params });
+      return { rows: [] };
+    },
+  };
+
+  await promoteDueScheduled(db, new Date('2026-09-14T12:00:00Z'));
+  const promotion = calls.find(({ sql }) => /SELECT d\.id, d\.published_revision_id/.test(sql));
+  assert.deepEqual(promotion.params[1], ['knowledge', 'academy', 'academy_lesson', 'benefit', 'reminder']);
+  assert.match(promotion.sql, /d\.content_type = ANY\(\$2::text\[\]\)/);
+  assert.doesNotMatch(promotion.sql, /announcement/i);
+});
+
+test('scheduled promotion refuses retired content types before acquiring locks', async () => {
+  const calls = [];
+  const db = {
+    async query(sql, params = []) {
+      calls.push({ sql, params });
+      return { rows: [] };
+    },
+  };
+
+  assert.equal(await promoteDueScheduled(db, new Date('2026-09-14T12:00:00Z'), 'announcement'), 0);
+  assert.deepEqual(calls, []);
+});
 
 test('reader returns only a published revision and normalizes its blocks', async () => {
   const pool = poolFor({
@@ -351,124 +380,11 @@ test('area mappings preserve legacy rows and add content_blocks only when publis
   assert.deepEqual(await addPublishedBlocks(fallbackPool, [legacy], 'knowledge'), [legacy]);
 });
 
-test('announcements require authentication and query published revisions only', async () => {
-  const [route, index] = await Promise.all([
-    readFile('api/routes/announcements.js', 'utf8'),
-    readFile('api/index.js', 'utf8'),
-  ]);
-  assert.match(route, /router\.get\('\/', authMiddleware/);
-  assert.match(route, /listPublishedAnnouncements/);
-  assert.match(index, /app\.use\('\/api\/announcements', require\('\.\/routes\/announcements'\)\)/);
-
-  const pool = poolFor({
-    document: {
-      id: 'announcement-1', title: 'Visible', published_revision_id: 'published-1',
-      published_revision_status: 'published',
-    },
-    blocks: [{ type: 'heading', text: '  Visible  ' }],
-  });
-  const result = await listPublishedAnnouncements(pool, 50, 0);
-  assert.equal(result.rows[0].id, 'announcement-1');
-  assert.deepEqual(result.rows[0].content_blocks, [{ type: 'heading', text: 'Visible', level: 2 }]);
-  assert.ok(pool.calls.some(({ sql }) => /r\.status = 'published'/.test(sql)));
-  assert.ok(pool.calls.some(({ sql }) => /d\.content_type = 'announcement'/.test(sql)));
-});
-
-test('announcement detail is authenticated and published-only', async () => {
-  const route = await readFile('api/routes/announcements.js', 'utf8');
-  const reader = await readFile('api/cms/reader.js', 'utf8');
-  assert.match(route, /router\.get\('\/:id', authMiddleware/);
-  assert.match(route, /uuid\(req\.params\.id\)/);
-  assert.match(route, /getPublishedAnnouncement/);
-  assert.match(reader, /JOIN cms_revisions r[\s\S]*ON r\.id = d\.published_revision_id AND r\.status = 'published'[\s\S]*WHERE d\.id = \$1 AND d\.content_type = 'announcement'/);
-  assert.doesNotMatch(reader, /getPublishedAnnouncement[\s\S]*draft_revision_id/);
-});
-
-test('announcement detail returns normalized published blocks', async () => {
-  const pool = poolFor({
-    document: {
-      id: 'announcement-1', title: 'Visible', published_revision_id: 'published-1',
-      published_revision_status: 'published',
-    },
-    blocks: [{ type: 'heading', text: '  Visible  ' }],
-  });
-  const result = await getPublishedAnnouncement(pool, 'announcement-1');
-  assert.deepEqual(result.content_blocks, [{ type: 'heading', text: 'Visible', level: 2 }]);
-});
-
-test('announcement list discards rows unpublished before the final locked recheck', async () => {
-  const pool = poolFor({
-    document: {
-      id: 'announcement-removed', title: 'Removed', published_revision_id: 'published-removed',
-      published_revision_status: 'published',
-    },
-    blocks: [{ type: 'paragraph', text: 'Must not return' }],
-    removeOnRecheck: true,
-  });
-  const result = await listPublishedAnnouncements(pool, 50, 0);
-  assert.deepEqual(result, { count: 0, rows: [] });
-  const recheckIndex = pool.calls.findIndex(({ sql }) => /FOR UPDATE OF d, r/.test(sql));
-  const lockIndex = pool.calls.findIndex(({ sql }) => /pg_advisory_xact_lock/.test(sql));
-  assert.ok(lockIndex >= 0 && lockIndex < recheckIndex);
-});
-
-test('announcement detail returns no row when unpublished before the final locked recheck', async () => {
-  const pool = poolFor({
-    document: {
-      id: 'announcement-removed', title: 'Removed', published_revision_id: 'published-removed',
-      published_revision_status: 'published',
-    },
-    blocks: [{ type: 'paragraph', text: 'Must not return' }],
-    removeOnRecheck: true,
-  });
-  assert.equal(await getPublishedAnnouncement(pool, 'announcement-removed'), null);
-  assert.ok(pool.calls.some(({ sql }) => /FOR UPDATE OF d, r/.test(sql)));
-});
-
-test('announcement detail discards a response when its published revision changes', async () => {
-  const pool = poolFor({
-    document: {
-      id: 'announcement-revised', title: 'Revised', published_revision_id: 'published-old',
-      published_revision_status: 'published',
-    },
-    recheckDocument: {
-      id: 'announcement-revised', published_revision_id: 'published-new',
-      published_revision_status: 'published',
-    },
-    blocks: [{ type: 'paragraph', text: 'Old body' }],
-  });
-  assert.equal(await getPublishedAnnouncement(pool, 'announcement-revised'), null);
-});
-
-test('announcement readers return no row when the pointer is not published', async () => {
-  const pool = poolFor({
-    document: {
-      id: 'announcement-draft', title: 'Draft', published_revision_id: 'draft-1',
-      published_revision_status: 'draft',
-    },
-    blocks: [],
-  });
-  assert.deepEqual((await listPublishedAnnouncements(pool, 50, 0)).rows, []);
-  assert.equal(await getPublishedAnnouncement(pool, 'announcement-draft'), null);
-});
-
-test('invalid announcement editorial is excluded before pagination, count and detail', async () => {
-  const pool = poolFor({ document: { id: 'doc', published_revision_id: 'pub', editorial: { version: 99 } }, blocks: [{ type: 'paragraph', text: 'Texto' }] });
-  assert.deepEqual(await listPublishedAnnouncements(pool, 1, 0), { count: 0, rows: [] });
-  assert.equal(await getPublishedAnnouncement(pool, 'doc'), null);
-});
-
-test('invalid scheduled editorial retires the schedule without touching the later draft or publication', async () => {
-  const pool = poolFor({ document: { id: 'doc', content_type: 'announcement', published_revision_id: 'pub', draft_revision_id: 'later', scheduled_revision_id: 'scheduled', scheduled_at: new Date(Date.now() - 60000), scheduled_editorial: { version: 99 } }, blocks: [{ type: 'paragraph', text: 'Texto' }] });
-  await listPublishedAnnouncements(pool, 10, 0);
-  assert.ok(pool.calls.some(({ sql }) => sql.includes('cms.document.schedule_invalid')));
-  assert.equal(pool.calls.some(({ sql }) => sql.includes("SET status = 'published'") || sql.includes('draft_revision_id =')), false);
-});
-
 test('published profile assets require image MIME and the effective 50 MiB bound', async () => {
   const id = '550e8400-e29b-41d4-a716-446655440000';
   for (const [mime, size, valid] of [['image/png', 1, true], ['application/pdf', 1, false], ['image/png', 52428801, false]]) {
-    const pool = poolFor({ document: { id: 'doc', published_revision_id: 'pub' }, blocks: [{ type: 'profile', name: 'Pessoa', asset_id: id, alt: 'Retrato' }], assets: [{ id, mime_type: mime, storage_key: 'private', byte_size: size }] });
-    assert.equal(Boolean(await getPublishedAnnouncement(pool, 'doc')), valid);
+    const pool = poolFor({ assets: [{ id, mime_type: mime, storage_key: 'private', byte_size: size }] });
+    const result = await validatePublishedBlocks(await pool.connect(), [{ type: 'profile', name: 'Pessoa', asset_id: id, alt: 'Retrato' }]);
+    assert.equal(result.blocks !== null, valid);
   }
 });

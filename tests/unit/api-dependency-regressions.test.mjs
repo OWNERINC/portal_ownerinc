@@ -99,7 +99,7 @@ test('JSON size limits remain 100 KiB default, 1 MiB bulk and 6 MiB CMS', async 
   // A body just below CMS's own parser limit exceeds both smaller parsers.
   // The real route must reject title length rather than return a parser 413.
   const cms = await h.request.post('/api/cms/documents').set('Authorization', MANAGER)
-    .send({ type: 'announcement', title: 'x'.repeat(6 * 1024 * 1024 - 100) });
+    .send({ type: 'knowledge', title: 'x'.repeat(6 * 1024 * 1024 - 100) });
   boundedError(cms, 400, 'Invalid request.');
   assert.equal(businessQueries(h).length, 0);
 });

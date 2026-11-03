@@ -279,7 +279,7 @@ test('legacy metadata-only knowledge edits preserve a published CMS body', async
 test('canManageCms maps CMS areas to existing permissions', () => {
   const user = { role: 'admin', permissions: { manageKnowledge: true, manageBenefits: true } };
   assert.equal(canManageCms(user, 'knowledge'), true);
-  assert.equal(canManageCms(user, 'announcement'), true);
+  assert.equal(canManageCms(user, 'announcement'), false);
   assert.equal(canManageCms(user, 'benefit'), true);
   assert.equal(canManageCms(user, 'academy'), false);
   assert.equal(canManageCms(user, 'reminder'), false);

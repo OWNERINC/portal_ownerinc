@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { mountSource, activePageDouble } from '../helpers/page-mount.mjs';
-import { createFeedbackHarness, drain } from '../helpers/frontend-feedback-harness.mjs';
+import { drain } from '../helpers/frontend-feedback-harness.mjs';
 
-const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cmsCss, profile, dashboard, knowledge, academy, announcements, renderer, nginx] = await Promise.all([
+const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cmsCss, profile, dashboard, knowledge, academy, renderer, nginx] = await Promise.all([
   readFile('public/js/ui.js', 'utf8'),
   readFile('public/js/sidebar.js', 'utf8'),
   readFile('public/css/tokens.css', 'utf8'),
@@ -18,7 +18,6 @@ const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cms
   readFile('public/js/dashboard.js', 'utf8'),
   readFile('public/js/knowledge.js', 'utf8'),
   readFile('public/js/academy.js', 'utf8'),
-  readFile('public/js/announcements.js', 'utf8'),
   readFile('public/js/cms-block-renderer.js', 'utf8'),
   readFile('nginx/nginx.conf', 'utf8'),
 ]);
@@ -703,7 +702,7 @@ test('CSP-safe typography and contrast tokens do not depend on remote font loadi
 });
 
 test('requests keep current content pending and reject stale filtered responses', () => {
-  for (const [source, token] of [[dashboard, 'announcementsRequest'], [dashboard, 'remindersRequest'], [dashboard, 'academyRequest'], [knowledge, 'articlesRequest'], [announcements, 'announcementsRequest']]) {
+  for (const [source, token] of [[dashboard, 'remindersRequest'], [dashboard, 'academyRequest'], [knowledge, 'articlesRequest']]) {
     assert.match(source, new RegExp(`let ${token} = 0`));
     assert.match(source, /setBusy\(/);
     assert.match(source, /finally/);
@@ -711,7 +710,6 @@ test('requests keep current content pending and reject stale filtered responses'
   }
   assert.doesNotMatch(knowledge.slice(knowledge.indexOf('async function loadArticles'), knowledge.indexOf('\n\nfunction newArticle')), /showState\(listNode, 'Carregando artigos/);
   assert.match(knowledge, /if \(!articles\.length && offset > 0\)/);
-  assert.match(announcements, /if \(!announcements\.length && offset > 0\)/);
   assert.match(knowledge, /function normalizeCategories/);
   assert.match(academy, /mountAcademy\(page\)/);
   assert.match(profile, /const initialFocus = document\.activeElement/);
@@ -722,7 +720,7 @@ test('requests keep current content pending and reject stale filtered responses'
 });
 
 test('focus fallback helpers reject inert targets and inert ancestors', () => {
-  for (const source of [knowledge, announcements]) {
+  for (const source of [knowledge]) {
     assert.match(source, /function hasInertAncestor/);
     assert.match(source, /!node\.inert && !hasInertAncestor\(node\)/);
   }
@@ -740,7 +738,7 @@ test('catalog cards and dashboard stories never put CMS links inside another anc
 });
 
 test('mobile shell retains zoom, reflow, keyboard focus, and reduced-motion invariants', async () => {
-  const pages = await Promise.all(['dashboard', 'knowledge', 'academy', 'announcements', 'profile'].map(page => readFile(`public/${page}.html`, 'utf8')));
+  const pages = await Promise.all(['dashboard', 'knowledge', 'academy', 'reminders', 'profile'].map(page => readFile(`public/${page}.html`, 'utf8')));
   for (const html of pages) {
     assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1\.0">/);
     assert.doesNotMatch(html, /user-scalable\s*=\s*no|maximum-scale\s*=\s*1/i);
@@ -808,38 +806,6 @@ test('Academy initial/repeated error focuses usable retry, then successful retry
   await h.resolve('group=initial', { data: [course()], total: 1 });
   assert.equal(h.doc.activeElement, h.doc.getElementById('academy-filter-initial'));
   h.page.dispose();
-});
-
-test('Announcements preserves pagination focus and boundary buttons after a deferred page load', async t => {
-  const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
-  h.requests.find(r => r.kind === 'list').resolve({
-    data: [{ id: 'announcement-1', title: 'Primeiro', category: 'Geral', content_blocks: [] }],
-    total: 48,
-  });
-  await drain();
-  const pagination = h.node('announcements-pagination');
-  const oldNext = pagination.querySelectorAll('button')[1];
-  oldNext.focus();
-  oldNext.click();
-  assert.match(h.page.location.href, /offset=24/);
-  assert.equal(h.requests.filter(r => r.kind === 'list').length, 2);
-  h.requests.filter(r => r.kind === 'list').at(-1).resolve({
-    data: [{ id: 'announcement-2', title: 'Segundo', category: 'Geral', content_blocks: [] }], total: 30,
-  }); await drain();
-  assert.match(h.doc.activeElement.textContent, /Segundo/);
-  assert.deepEqual(pagination.querySelectorAll('button').map(button => button.disabled), [false, true]);
-});
-
-test('Announcements restores pagination focus to the list or empty state when controls disappear', async t => {
-  for (const empty of [false, true]) {
-    const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
-    h.requests.find(r => r.kind === 'list').resolve({ data: [{ id: 'one', title: 'Primeiro', content_blocks: [] }], total: 48 }); await drain();
-    h.node('announcements-pagination').querySelectorAll('button').find(button => !button.disabled).focus();
-    h.popstate('/announcements.html?category=Outra', null);
-    h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: empty ? [] : [{ id: 'last', title: 'Último', content_blocks: [] }], total: empty ? 0 : 1 }); await drain();
-    assert.match(h.doc.activeElement.textContent, empty ? /Nenhuma publicação nesta editoria/ : /Último/);
-    if (!empty) assert.equal(h.doc.activeElement.tagName, 'A');
-  }
 });
 
 test('Knowledge preserves legacy fallback, hides list pagination in detail, and does not steal moved focus', async () => {

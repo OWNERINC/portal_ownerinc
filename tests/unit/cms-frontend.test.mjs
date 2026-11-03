@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const [renderer, css, knowledgeCss, knowledgeHtml, knowledge, academy, academyLesson, benefits, reminders, dashboard, announcements, announcementsHtml] = await Promise.all([
+const [renderer, css, knowledgeCss, knowledgeHtml, knowledge, academy, academyLesson, benefits, reminders, dashboard] = await Promise.all([
   readFile('public/js/cms-block-renderer.js', 'utf8'),
   readFile('public/css/cms.css', 'utf8'),
   readFile('public/css/knowledge.css', 'utf8'),
@@ -14,8 +14,6 @@ const [renderer, css, knowledgeCss, knowledgeHtml, knowledge, academy, academyLe
   readFile('public/js/benefits.js', 'utf8'),
   readFile('public/js/reminders.js', 'utf8'),
   readFile('public/js/dashboard.js', 'utf8'),
-  readFile('public/js/announcements.js', 'utf8'),
-  readFile('public/announcements.html', 'utf8'),
 ]);
 
 function deferred() {
@@ -119,12 +117,12 @@ test('safe renderer validates the allowlist and never uses raw HTML sinks', () =
 });
 
 test('optional pagination containers stay null-safe on list and detail pages', async () => {
-  const [pagination, announcementsSource] = await Promise.all([
+  const [pagination, remindersSource] = await Promise.all([
     readFile('public/js/pagination.js', 'utf8'),
-    readFile('public/js/announcements.js', 'utf8'),
+    readFile('public/js/reminders.js', 'utf8'),
   ]);
   assert.match(pagination, /if \(!node\) return/);
-  assert.match(announcementsSource, /pagination\?\.replaceChildren\(\)/);
+  assert.match(remindersSource, /if \(!remindersPagination\) return/);
 });
 
 test('Knowledge articles retain private PDF attachment controls and safe text fallbacks', () => {
@@ -153,8 +151,7 @@ test('maintained domains keep CMS block rendering and their own text fallbacks d
   assert.match(reminders, /fallbackText: reminder\.description/);
   assert.match(dashboard, /renderBlocks\(copy, blocks/);
   assert.match(dashboard, /fallbackText: description/);
-  assert.match(announcements, /renderNewsArticle\(reader, article/);
-  assert.match(announcementsHtml, /id="main-content"/);
+  assert.match(reminders, /renderBlocks/);
 });
 
 test('private preview URLs are revoked and media reserve intrinsic layout space', () => {

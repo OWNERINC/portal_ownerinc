@@ -320,7 +320,7 @@ test('Knowledge detail reads the authoritative article and stale pages recover',
   assert.match(reminders, /return loadReminders\(\)/);
 });
 
-test('V1 dashboard keeps scoped data while using the editorial home composition', async () => {
+test('Dashboard keeps scoped areas and maintained previews without Owner News', async () => {
   const [html, script, reminders, homeCss] = await Promise.all([
     readFile('public/dashboard.html', 'utf8'),
     readFile('public/js/dashboard.js', 'utf8'),
@@ -331,11 +331,12 @@ test('V1 dashboard keeps scoped data while using the editorial home composition'
   assert.doesNotMatch(html, /solides-card/);
   assert.match(script, /\/api\/reminders\/upcoming\?days=7/);
   assert.doesNotMatch(script, /pj-card|solides-card|app\.solides\.com\.br/);
-  assert.match(html, /class="dashboard-hero"/);
-  assert.match(html, /id="announcements-preview" class="dashboard-story-rail"/);
+  assert.match(html, /class="dashboard-intro"/);
+  assert.doesNotMatch(html, /dashboard-hero|announcements-preview|Owner News|announcements/i);
   assert.match(html, /id="quick-links" class="dashboard-areas-grid"/);
-  assert.match(script, /renderHero\(announcements\[0\]\)/);
-  assert.match(homeCss, /\.dashboard-hero\s*\{/);
+  assert.doesNotMatch(script, /renderHero|announcements|owner-news/i);
+  assert.match(homeCss, /\.dashboard-section\s*\{/);
+  assert.doesNotMatch(homeCss, /dashboard-hero|announcements|owner-news/i);
   assert.match(homeCss, /@media \(max-width: 768px\)/);
   assert.match(homeCss, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(reminders, /individual-target-group/);
@@ -506,7 +507,7 @@ test('authenticated shell is generated from one static build source', async () =
   assert.match(generator, /id="btn-new"/);
   assert.match(generator, /id="btn-new-reminder"/);
   assert.doesNotMatch(generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '', /benefits|solides/i);
-  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'autocard', 'cards-pos', 'solides']) {
+  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'profile', 'admin', 'autocard', 'cards-pos', 'solides']) {
     const html = await readFile(`public/${page}.html`, 'utf8');
     assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);
     const brands = html.match(/<a\b[^>]*\bclass="sidebar-brand"[^>]*>/g) || [];

@@ -133,15 +133,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState, openDialog, closeDialog, setDialogCloseGuard');
-  if (name === 'announcements' && mount) {
-    await load('public/js/pagination.js', 'readOffset, renderPagination, setPaginationBusy');
-    await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
-    await load('public/js/owner-news/model.js', 'getNewsPresentation, normalizeEditorial, estimateNewsReadTime');
-    await load('public/js/owner-news/catalog.js', 'renderNewsCard, composeNewsFeed, renderNewsCategories, renderNewsOpening');
-    await load('public/js/owner-news/poll.js', 'createNewsPoll');
-    await load('public/js/owner-news/reader-view.js', 'renderNewsArticle');
-    await load('public/js/owner-news/navigation.js', 'createNewsNavigation');
-  }
+  if (name === 'reminders' && mount) await load('public/js/pagination.js', 'readOffset, renderPagination, setPaginationBusy');
   if (name === 'dashboard') await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   if (name === 'autocard') {
     await load('public/autocard/crop.js', 'DEFAULT_MEDIA_CROP, cropRenderStyle, cropStyle, dragMediaCrop, normalizeMediaCrop');
@@ -158,7 +150,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   }
   for (const module of modules) await load(module.path, module.exports);
   if (mount) {
-    const path = ['dashboard', 'announcements'].includes(name) ? `public/js/${name}.js` : `public/${name}/app.js`;
+    const path = ['dashboard', 'reminders'].includes(name) ? `public/js/${name}.js` : `public/${name}/app.js`;
     let source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
     const end = source.lastIndexOf('}');
     source = `${source.slice(0, end)}\n${expose}\n${source.slice(end)}`;
