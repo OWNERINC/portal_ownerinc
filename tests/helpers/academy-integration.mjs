@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
+import {
+  assertApprovedMigrationCluster, requireDisposableMigrationEnvironment,
+} from '../../scripts/migration-test-guards.mjs';
 
 const require = createRequire(new URL('../../api/package.json', import.meta.url));
 const express = require('express');
@@ -43,9 +46,7 @@ export async function createAcademyHttp(t, pool, users) {
 }
 
 export function requireDisposableAcademyDatabase() {
-  if (process.env.NODE_ENV === 'production') throw new Error('Academy integration cannot run in production');
-  if (process.env.MIGRATION_TEST_DISPOSABLE !== 'true') throw new Error('MIGRATION_TEST_DISPOSABLE=true is required');
-  if (!process.env.MIGRATION_DATABASE_URL) throw new Error('MIGRATION_DATABASE_URL is required');
+  requireDisposableMigrationEnvironment();
 }
 
 async function historicalSnapshot(client) {
@@ -66,6 +67,7 @@ export async function createAcademyIntegration(t) {
   const { Pool } = require('pg');
   const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
   const client = await pool.connect();
+  await assertApprovedMigrationCluster(client);
   const ids = Object.fromEntries([
     'allCourse', 'closerCourse', 'captureCourse', 'closerLesson', 'captureLesson',
     'module', 'captureModule', 'closerJob', 'captureJob',

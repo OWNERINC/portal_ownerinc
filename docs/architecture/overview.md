@@ -309,8 +309,12 @@ não confirmado. Integração de player/views pertence à etapa seguinte.
 ### Verificação descartável
 
 `npm run test:migrations` mantém os requisitos `MIGRATION_TEST_DISPOSABLE=true`,
-`MIGRATION_DATABASE_URL` e as senhas dos papéis de teste (`PORTAL_API_DB_PASSWORD`
-e `PORTAL_CRON_DB_PASSWORD`, pelo menos 16 caracteres). Nunca apontar para produção.
+`MIGRATION_DATABASE_URL`, `MIGRATION_TEST_CLUSTER_ID` e as senhas dos papéis de
+teste (`PORTAL_API_DB_PASSWORD` e `PORTAL_CRON_DB_PASSWORD`, pelo menos 16
+caracteres). `MIGRATION_TEST_CLUSTER_ID` deve ser o `system_identifier` retornado
+por `SELECT system_identifier FROM pg_control_system()` no cluster descartável;
+o harness confere essa identidade antes de consultar ou mutar o ledger. Nunca
+apontar para produção.
 Para validar os dois caminhos, usar duas bases vazias descartáveis previamente
 autorizadas, uma para cada execução:
 
@@ -661,8 +665,9 @@ independentes e cleanup do reader. Escopo exclusivamente sintético/local;
   executa o runner duas vezes; `scripts/test-owner-news-integration.mjs` verifica
   handlers Express, publicação, SQL NULL, agendamento, perfil e constraints com
   fixtures sintéticas removidas em `finally`. Exigem `NODE_ENV=development`,
-  `MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_DATABASE_URL` e senhas dos papéis
-  pelo mecanismo privado local.
+  `MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_DATABASE_URL`,
+  `MIGRATION_TEST_CLUSTER_ID` e senhas dos papéis pelo mecanismo privado local;
+  a integração também verifica o marcador do cluster antes de inserir fixtures.
 
 ### Publicação e ciclo de vida existentes
 

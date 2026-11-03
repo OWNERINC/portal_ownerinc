@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
-import { assertEmptyMigrationDatabase } from './migration-test-guards.mjs';
+import {
+  assertApprovedMigrationCluster, assertEmptyMigrationDatabase, requireDisposableMigrationEnvironment,
+} from './migration-test-guards.mjs';
 
 const require = createRequire(new URL('../api/package.json', import.meta.url));
 require('dotenv').config({ path: new URL('../.env', import.meta.url) });
-if (process.env.NODE_ENV === 'production') throw new Error('Migration integration test cannot run with NODE_ENV=production');
 const setupMode = process.env.MIGRATION_TEST_SETUP;
 if (!setupMode) {
   throw new Error('MIGRATION_TEST_SETUP is required: use bootstrap or upgrade');
@@ -14,8 +15,7 @@ if (!setupMode) {
 if (!['upgrade', 'bootstrap'].includes(setupMode)) {
   throw new Error('MIGRATION_TEST_SETUP must be bootstrap or upgrade');
 }
-if (process.env.MIGRATION_TEST_DISPOSABLE !== 'true') throw new Error('MIGRATION_TEST_DISPOSABLE=true is required');
-if (!process.env.MIGRATION_DATABASE_URL) throw new Error('MIGRATION_DATABASE_URL is required');
+requireDisposableMigrationEnvironment();
 const { Pool } = require('pg');
 const { migrate } = require('../api/db/migrate');
 const { verifyMigrations } = require('../api/db/verify-migrations');
@@ -64,6 +64,7 @@ const fixtureTitleIds = [];
 let legacyCourseId;
 let legacyObjectsCreated = false;
 try {
+  await assertApprovedMigrationCluster(client);
   if (setupMode) {
     const existing = await client.query(`SELECT n.nspname AS schema_name, c.relname AS object_name, c.relkind AS object_kind
       FROM pg_class c

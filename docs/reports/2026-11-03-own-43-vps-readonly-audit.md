@@ -1,8 +1,10 @@
 # OWN-43 — Auditoria read-only da VPS
 
 Data: 2026-11-03
-Escopo: inspeção read-only via SSH `ownerinc`; nenhuma migration, fixture, criação
-de banco, alteração de role, `DROP`, `TRUNCATE` ou limpeza foi executada.
+Escopo da auditoria inicial: inspeção read-only via SSH `ownerinc`; nenhuma
+migration, fixture, criação de banco, alteração de role, `DROP`, `TRUNCATE` ou
+limpeza foi executada nessa auditoria. A execução mutável posterior está separada
+na seção da instância descartável e foi autorizada somente para esse alvo novo.
 
 ## Resultado
 
@@ -52,6 +54,9 @@ para o harness mutável da OWN-43:
   staging e pre-auth.
 - Bind: `127.0.0.1:25432:5432`; não há publicação em interface pública.
 - Restart policy: `no`; healthcheck observado como `healthy`.
+- Identidade do cluster: `7704035034504839201`, obtida por
+  `SELECT system_identifier FROM pg_control_system()` e exigida pelo harness via
+  `MIGRATION_TEST_CLUSTER_ID` antes de qualquer consulta de ledger ou mutação.
 - Database e roles administrativas/runtime possuem nomes, credenciais e escopo
   próprios da fixture; nenhum segredo foi registrado neste relatório.
 - Databases de cenário: `portal_own43_bootstrap`, `portal_own43_upgrade` e
@@ -74,8 +79,12 @@ qualquer volume histórico.
 - `npm run test:migrations` — fresh/bootstrap: PASS; upgrade: PASS; repetição
   idempotente incluída nos dois cenários.
 - `npm run test:migration-readiness` — PASS, sem relações editoriais.
+- `node scripts/test-academy.mjs` — 6 PASS no database bootstrap isolado.
 - `npm run verify` — 804 PASS, 2 skips esperados por plataforma.
 - `git diff --check` — PASS.
+- `git diff origin/rewrite/portal-sem-cms..HEAD --stat` e comparação nominal dos
+  arquivos alterados foram revisados; as migrations históricas não aparecem no
+  diff.
 - Checksums e bytes das migrations históricas `015`, `019`, `033`, `034` e `035`
   permanecem preservados; a alteração desta etapa ficou limitada às expectativas
   do harness e à exclusão explícita da fixture de readiness na varredura de

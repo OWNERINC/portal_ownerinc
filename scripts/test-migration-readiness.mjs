@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
-import { assertEmptyMigrationDatabase } from './migration-test-guards.mjs';
+import {
+  assertApprovedMigrationCluster, assertEmptyMigrationDatabase, requireDisposableMigrationEnvironment,
+} from './migration-test-guards.mjs';
 
 const require = createRequire(new URL('../api/package.json', import.meta.url));
 require('dotenv').config({ path: new URL('../.env', import.meta.url) });
-if (process.env.NODE_ENV === 'production') throw new Error('Migration readiness test cannot run with NODE_ENV=production');
-if (process.env.MIGRATION_TEST_DISPOSABLE !== 'true') throw new Error('MIGRATION_TEST_DISPOSABLE=true is required');
-if (!process.env.MIGRATION_DATABASE_URL) throw new Error('MIGRATION_DATABASE_URL is required');
+requireDisposableMigrationEnvironment();
 
 const { Pool } = require('pg');
 const { provision } = require('../api/db/provision');
@@ -58,6 +58,7 @@ const omittedEditorialVersions = [
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
 const client = await pool.connect();
 try {
+  await assertApprovedMigrationCluster(client);
   const existing = await client.query(`SELECT n.nspname AS schema_name, c.relname AS object_name, c.relkind AS object_kind
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace

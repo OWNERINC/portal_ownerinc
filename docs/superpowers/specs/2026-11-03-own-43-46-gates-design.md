@@ -91,11 +91,14 @@ roles compartilhadas ou domínios mantidos automaticamente.
   um upgrade real, não será usado pelo runner e nunca será aplicado a uma base real.
 
 O harness de integração deve exigir, antes de abrir pool ou chamar o runner,
-`MIGRATION_TEST_SETUP=bootstrap` ou `MIGRATION_TEST_SETUP=upgrade` e
-`MIGRATION_TEST_DISPOSABLE=true`. A ausência do modo de setup, uma URL sem isolamento
-aprovado ou um banco não vazio devem falhar sem efeitos colaterais. A auditoria da
-produção será feita por consultas read-only separadas. O harness deve testar a
-rejeição de modo ausente/inválido e de banco não vazio, além dos cenários verdes.
+`MIGRATION_TEST_SETUP=bootstrap` ou `MIGRATION_TEST_SETUP=upgrade`,
+`MIGRATION_TEST_DISPOSABLE=true` e `MIGRATION_TEST_CLUSTER_ID` igual ao
+`system_identifier` do cluster PostgreSQL descartável aprovado. A ausência do modo
+de setup, uma URL sem isolamento aprovado, uma identidade de cluster divergente ou
+um banco não vazio devem falhar sem efeitos colaterais. A auditoria da produção
+será feita por consultas read-only separadas. O harness deve testar a rejeição de
+modo ausente/inválido, identidade ausente/divergente e banco não vazio, além dos
+cenários verdes.
 
 As expectativas antigas de grants CMS/Owner News no harness devem ser removidas e
 substituídas pela matriz negada acima. As fixtures que verificam estrutura histórica

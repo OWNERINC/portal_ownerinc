@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
-import { assertEmptyMigrationDatabase } from '../../scripts/migration-test-guards.mjs';
+import {
+  assertApprovedMigrationCluster, assertEmptyMigrationDatabase,
+} from '../../scripts/migration-test-guards.mjs';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
@@ -106,6 +108,38 @@ test('migration harness rejects missing and invalid setup before opening a datab
   });
   assert.equal(invalid.status, 1);
   assert.match(`${invalid.stdout}\n${invalid.stderr}`, /MIGRATION_TEST_SETUP must be bootstrap or upgrade/);
+});
+
+test('migration harness requires the approved disposable cluster marker before mutation', async () => {
+  const baseEnv = {
+    ...process.env,
+    NODE_ENV: 'test',
+    MIGRATION_TEST_DISPOSABLE: 'true',
+    MIGRATION_TEST_SETUP: 'bootstrap',
+    MIGRATION_DATABASE_URL: 'postgresql://not-used@example.invalid/never-connect',
+  };
+  const missing = { ...baseEnv };
+  delete missing.MIGRATION_TEST_CLUSTER_ID;
+  const missingResult = spawnSync(process.execPath, ['scripts/test-migrations.mjs'], {
+    env: missing,
+    encoding: 'utf8',
+  });
+  assert.equal(missingResult.status, 1);
+  assert.match(`${missingResult.stdout}\n${missingResult.stderr}`, /MIGRATION_TEST_CLUSTER_ID is required/);
+
+  const invalidResult = spawnSync(process.execPath, ['scripts/test-migrations.mjs'], {
+    env: { ...baseEnv, MIGRATION_TEST_CLUSTER_ID: 'unsafe-marker' },
+    encoding: 'utf8',
+  });
+  assert.equal(invalidResult.status, 1);
+  assert.match(`${invalidResult.stdout}\n${invalidResult.stderr}`, /MIGRATION_TEST_CLUSTER_ID must be the PostgreSQL system identifier/);
+
+  await assert.rejects(
+    () => assertApprovedMigrationCluster({
+      query: async () => ({ rows: [{ database_name: 'portal', cluster_id: null }] }),
+    }, 'approved-own43-cluster'),
+    /approved disposable cluster/,
+  );
 });
 
 test('migration harness rejects occupied disposable databases without dropping objects', () => {

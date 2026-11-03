@@ -23,7 +23,7 @@ test('Academy runner and helper load without a database and keep only Academy co
     'audit-rollback-and-historical-preservation',
   ]);
   assert.doesNotMatch(runnerSource, /cms_documents|cms_revisions|cms_assets|enforceCmsAssetRetention|\/api\/cms/);
-  assert.match(helperSource, /MIGRATION_TEST_DISPOSABLE !== 'true'/);
+  assert.match(helperSource, /requireDisposableMigrationEnvironment/);
   assert.match(helperSource, /MIGRATION_DATABASE_URL/);
   assert.match(helperSource, /app\.use\('\/api\/cms', \(req, res\) => res\.status\(404\)/);
 
