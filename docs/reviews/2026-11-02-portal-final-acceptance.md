@@ -215,6 +215,20 @@ fixtures recebeu **ship**. O delta posterior do primário seleciona o endpoint e
 proxy de saúde por fase, com **77 PASS / zero FAIL / zero SKIP**, e recebeu **ship**.
 Essa fixture observa listener/TLS/status; não qualifica os headers de descriptor.
 
+As três correções lifecycle foram entregues em 11 arquivos: deadline storage de
+2 s com single-flight e cleanup por identidade, logger finito antes do cold-start
+e binding das entradas sanitizadas realmente consumidas pelo adapter. O primário
+repetiu seis suítes com concorrência limitada: **63 PASS / zero FAIL / zero SKIP**,
+incluindo inicialização Payload/PG com somente o transporte dobrado. A revisão
+de retorno está em andamento; esse delta não pertence ao snapshot de CI abaixo.
+A revisão fechou storage/logging, mas encontrou um novo P2 no initializer: ele
+validava a config capturada, não a config real de `args.payload`. O primário
+adicionou a verificação de identidade antes do adapter e regressão pelo SDK real
+com config clonada e schema alterado. Repetição: **24 PASS / zero FAIL / zero SKIP**;
+revisão de retorno pendente. O wiring Compose/preview recebeu **ship** após corrigir
+duas assertions antigas de healthcheck; o primário repetiu cinco suítes:
+**78 PASS / zero FAIL / zero SKIP**.
+
 O CAS de coverage foi entregue em três arquivos, sem empacotamento ou admissão
 produtiva. O primário repetiu suas suítes e runtime-catalog: **218 PASS / zero FAIL /
 zero SKIP**. A revisão independente retornou **ship**; execução PostgreSQL pendente.
@@ -246,6 +260,21 @@ foi declarada PASS.
 A correção do build usa o contexto raiz existente no Compose e acrescenta
 `firebase.json`/`.firebaserc` aos paths do workflow. Repetição primária:
 **60 PASS / zero FAIL / zero SKIP**. Revisão fresca **ship**; publicação pendente.
+SMTP, contexto do emulador e este relatório foram congelados em seis arquivos,
+árvore `6a54e27d7657cfe679fe010f1e4d7975dcd7b38f`, para novo verify integral isolado.
+O manifesto `.openchamber/reviews/ci-fixture-fixes.json` identifica o checkout;
+as demais extensões permanecem fora dessa árvore.
+Esse verify passou: **2.222 PASS / 35 SKIP raiz e 533 PASS / 11 SKIP CMS, zero
+falhas**, incluindo sintaxe, typecheck, scanner e Compose. A árvore exata foi
+commitada e pushada como `c80825fa3086d08a538f3b2b87611ec30d55ce8a`.
+
+O diagnóstico do finalizer foi ampliado em um delta independente: enums finitos de
+phase/reason, SQLSTATE estrito, prioridade preservada do diagnóstico canônico,
+parser de linhas completas TAP e remoção do erro original da saída da fixture.
+Revisão **ship**, primário **30 PASS / zero FAIL / zero SKIP**. Somente os cinco
+hunks de diagnóstico do runner acompanham esse pacote; seletores lifecycle seguem
+em integração separada. A causa da falha PostgreSQL permanece desconhecida até
+nova execução CI com esse diagnóstico.
 
 Recuperação pré-floor e monitoramento OWN-34 seguem em implementação, fora desse
 snapshot. Lifecycle completo, ativação vazia e recuperação active/frozen ainda
@@ -281,6 +310,12 @@ Os planos de ativação e recuperação active/frozen foram emendados para admis
 boot-bound, revogação preservadora de sessões, separação entre autorização B e
 efeito A e terceiro lifecycle operacional. Permanecem **PROPOSED**, com todos os
 steps desmarcados, aguardando crítica independente e autorização de implementação.
+Na crítica de retorno, revogação de sessões, separação B/A e preparação privilegiada
+foram aceitas no nível de desenho; admissão/release recebeu **rethink**. Restam
+HIGHs por COMMIT efetivado após o deadline absoluto, avanço direto de sequences e
+exclusão física anterior ao COMMIT sem prova de órfão válida na execução. O autor
+reavalia os mecanismos; o prazo não foi relaxado e a implementação desse incremento
+continua sem autorização.
 
 O núcleo do monitoramento foi entregue com collector, units, runner não
 privilegiado, incident/outbox durável, SMTP e observação API. Testes focados do
@@ -344,6 +379,10 @@ A bridge privada CMS foi entregue e revisada **fix-first** por alias `/globals`
 antes do dispatcher, ausência da validação do adapter real e ocultação de drift
 quando uma leitura local falha. Registros na config/rota ainda pendem. O orçamento
 da resposta não comprova cessação de I/O nativo do catálogo dentro do agregado.
+As três correções foram entregues com **50 PASS** reportados pelo implementador,
+em revisão fresca. A extensão separada de cancelamento do catálogo recebeu
+**272 PASS** reportados pelo implementador e também está sob revisão; a bridge
+ainda não a utiliza.
 A integração de observação CMS, adapters de lifecycle/recovery/rota, instalação,
 SMTP nativo e entrega/ownership reais continuam pendentes. `contract_missing` e
 `unsupported_contract` não são convertidos em saúde ou aceite operacional.

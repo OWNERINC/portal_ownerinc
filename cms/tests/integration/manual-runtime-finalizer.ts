@@ -1,24 +1,31 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { runFinalizer } from '../../scripts/finalize-news-protocol.js'
+import { pathToFileURL } from 'node:url'
+import { runFinalizer, getFinalizerFailureDiagnostic, formatFinalizerFailureDiagnostic } from '../../scripts/finalize-news-protocol.js'
+import { serializeManualFinalizerDiagnostic } from '../../../scripts/integration/payload-manual-diagnostics.mjs'
 
-const marker = process.env.PAYLOAD_MANUAL_RUNTIME_MARKER
-const url = new URL(process.env.CMS_ADMIN_DATABASE_URL || 'http://invalid')
-if (!/^[0-9a-f]{32}$/u.test(marker || '') || url.hostname !== '127.0.0.1' ||
-  url.pathname !== '/ownerinc_cms' || decodeURIComponent(url.username) !== 'cms_admin' || !url.password) {
-  throw new Error('manual_runtime_finalizer_contract_invalid')
-}
-
-test('manual runtime installs the canonical protocol', async () => {
+export async function runManualRuntimeFinalizer(operation: () => Promise<unknown> = () => runFinalizer(process.env),
+  report: (line: string) => void = line => { process.stderr.write(`${line}\n`) }): Promise<void> {
   try {
-    const result = await runFinalizer(process.env)
+    const result = await operation()
     assert.deepEqual(result, { installed: true, ready: false, coverageVersion: 0 })
   } catch (error) {
-    let code: unknown
-    try { code = error && typeof error === 'object' ? Object.getOwnPropertyDescriptor(error, 'code')?.value : null } catch { code = null }
-    if (typeof code === 'string' && /^canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+$/u.test(code)) {
-      process.stderr.write(`MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=${code}\n`)
-    }
-    throw error
+    const line = serializeManualFinalizerDiagnostic(error, getFinalizerFailureDiagnostic(error), formatFinalizerFailureDiagnostic)
+    try { if (line) report(line) } catch { /* Reporting failure must still fail the fixture without raw error text. */ }
+    // node:test serializes thrown errors, including message/stack/cause and
+    // assertion actual/expected fields. Never rethrow the original object.
+    throw new Error('manual_runtime_finalizer_failed')
   }
-})
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  let valid = false
+  try {
+    const marker = process.env.PAYLOAD_MANUAL_RUNTIME_MARKER
+    const url = new URL(process.env.CMS_ADMIN_DATABASE_URL || 'http://invalid')
+    valid = /^[0-9a-f]{32}$/u.test(marker || '') && url.hostname === '127.0.0.1'
+      && url.pathname === '/ownerinc_cms' && decodeURIComponent(url.username) === 'cms_admin' && Boolean(url.password)
+  } catch { /* Malformed configuration is never printed by URL/URI errors. */ }
+  if (!valid) throw new Error('manual_runtime_finalizer_contract_invalid')
+  test('manual runtime installs the canonical protocol', () => runManualRuntimeFinalizer())
+}

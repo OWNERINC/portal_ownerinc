@@ -9,6 +9,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { extractManualFinalizerDiagnostic, isManualFinalizerDiagnostic, ownDiagnosticString } from './payload-manual-diagnostics.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const require = createRequire(path.join(root, 'api/package.json'));
@@ -35,7 +36,7 @@ const cleanEnvironment = () => Object.fromEntries(Object.entries(process.env).fi
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 async function command(program, args, { env = cleanEnvironment(), cwd = root, input, binary = false,
-  timeout = 300_000, safeStderrPattern } = {}) {
+  timeout = 300_000, safeStderrPattern, extractDiagnostic } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), stderrBytes = 0, timedOut = false;
@@ -46,14 +47,15 @@ async function command(program, args, { env = cleanEnvironment(), cwd = root, in
     });
     child.stderr.on('data', chunk => {
       stderrBytes += chunk.length;
-      if (safeStderrPattern && stderr.length + chunk.length <= 64 * 1024) stderr = Buffer.concat([stderr, chunk]);
+      if ((safeStderrPattern || extractDiagnostic) && stderr.length + chunk.length <= 64 * 1024) stderr = Buffer.concat([stderr, chunk]);
       if (stderrBytes > 4 * 1024 * 1024) child.kill('SIGKILL');
     });
     child.once('error', () => { clearTimeout(timer); reject(new Error('manual_runtime_process_unavailable')); });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
       if (timedOut || signal || code !== 0) {
-        const safe = safeStderrPattern ? `${stdout.toString('utf8')}\n${stderr.toString('utf8')}`.match(safeStderrPattern)?.[0] : undefined;
+        const safe = extractDiagnostic ? extractDiagnostic(stdout, stderrBytes <= 64 * 1024 ? stderr : Buffer.alloc(0))
+          : safeStderrPattern ? `${stdout.toString('utf8')}\n${stderr.toString('utf8')}`.match(safeStderrPattern)?.[0] : undefined;
         reject(new Error(timedOut ? 'manual_runtime_process_timeout' : safe || 'manual_runtime_process_failed'));
       }
       else resolve(binary ? stdout : stdout.toString('utf8').trim());
@@ -238,7 +240,7 @@ export async function main(env = process.env) {
       cwd: path.join(root, 'cms'), env: { ...cleanEnvironment(), PAYLOAD_MANUAL_RUNTIME_MARKER: marker,
         CMS_ADMIN_DATABASE_URL: url('cms_admin', passwords.admin, 'ownerinc_cms'),
         CMS_PORTAL_DATABASE_NAME: 'portal_manual_runtime' },
-      safeStderrPattern: /MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+/u });
+      extractDiagnostic: extractManualFinalizerDiagnostic });
     step('protocol-baseline');
     const qualify = await connect(url('cms_admin', passwords.admin, 'ownerinc_cms'));
     try {
@@ -462,8 +464,9 @@ export async function main(env = process.env) {
     if (portalServer) await new Promise(resolve => portalServer.close(resolve)).catch(() => {});
     if (created) await docker(['stop', '--time', '30', container], { timeout: 45_000 }).catch(() => {});
     if (targetCreated) await docker(['stop', '--time', '30', targetContainer], { timeout: 45_000 }).catch(() => {});
-    const diagnostic = error instanceof Error && /^(?:manual_runtime_[a-z0-9_]+|CMS news protocol diagnostic: phase=[a-z0-9-]+ reason=[a-z0-9_-]+ sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_PROVISION_DIAGNOSTIC reason=(?:unsafe_role|unsafe_runtime_grants|unsafe_protocol_grants|unsafe_function_grants|database_error) sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_PROTOCOL_DIAGNOSTIC action=(?:provision-observer|provision-observer-role|audit) stage=(?:connect|provision|audit) sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_CONTENT_DIAGNOSTIC action=(?:prepare|capture|verify) stage=(?:config|payload-init|readiness|preflight|editor-projection|capture|verify)|MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=canonical_function_mismatch:(?:[a-z0-9_]+:(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false)(?::(?:sig|sec|owner|config|source|return|strict|modes|names)=(?:true|false))*,?)+)$/u.test(error.message)
-      ? ` diagnostic=${error.message}` : '';
+    const message = ownDiagnosticString(error, 'message');
+    const diagnostic = message && (isManualFinalizerDiagnostic(message) || /^(?:manual_runtime_[a-z0-9_]+|MANUAL_RUNTIME_PROVISION_DIAGNOSTIC reason=(?:unsafe_role|unsafe_runtime_grants|unsafe_protocol_grants|unsafe_function_grants|database_error) sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_PROTOCOL_DIAGNOSTIC action=(?:provision-observer|provision-observer-role|audit) stage=(?:connect|provision|audit) sqlstate=(?:none|[0-9A-Z]{5})|MANUAL_RUNTIME_CONTENT_DIAGNOSTIC action=(?:prepare|capture|verify) stage=(?:config|payload-init|readiness|preflight|editor-projection|capture|verify))$/u.test(message))
+      ? ` diagnostic=${message}` : '';
     process.stderr.write(`payload-manual-runtime: FAIL stage=${stage}; owned services stopped; private evidence retained${diagnostic}\n`);
     return 1;
   } finally {
