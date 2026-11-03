@@ -174,6 +174,28 @@ test('reorder validates a complete set, normalizes UUIDs and remains transaction
   }
 });
 
+test('create and reorder serialize on the course lock and preserve lesson parents', async () => {
+  const f = mutationFixture();
+  const course = f.course();
+  const module = f.module(course.id);
+  const lesson = f.lesson(module.id);
+  const initial = [module.id];
+
+  const results = await Promise.allSettled([
+    run(f, mutations.createModule, course.id, { title: 'Concurrent module' }),
+    run(f, mutations.reorderModules, course.id, initial),
+  ]);
+  const created = results[0];
+  const reordered = results[1];
+  assert.equal(created.status, 'fulfilled');
+  assert.ok(reordered.status === 'fulfilled'
+    || (reordered.status === 'rejected' && reordered.reason.reason === 'invalid_order'));
+  assert.equal(f.state.modules.length, 2);
+  assert.equal(f.state.lessons.find(row => row.id === lesson.id).module_id, module.id);
+  assert.equal(f.state.courses.find(row => row.id === course.id).id, course.id);
+  assert.equal(f.calls.some(call => /pg_advisory_xact_lock|cms_documents|cms_revisions|cms_assets|7193029/.test(call.sql)), false);
+});
+
 test('deleting Academy trees removes only domain rows and preserves historical rows and bytes', async () => {
   const f = mutationFixture();
   const course = f.course();
