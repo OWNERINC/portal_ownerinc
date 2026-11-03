@@ -380,7 +380,7 @@ try {
       const { rows } = await pool.query(`SELECT
         has_table_privilege('portal_api', $1, $2) AS api,
         has_table_privilege('portal_cron', $1, $2) AS cron`, [table, privilege]);
-      assert.deepEqual(rows, [{ api: true, cron: false }], `${table}: ${privilege}`);
+      assert.deepEqual(rows, [{ api: false, cron: false }], `${table}: ${privilege}`);
     }
   }
   const canonicalNames = [

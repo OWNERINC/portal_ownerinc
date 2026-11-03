@@ -15,6 +15,7 @@ const explicitlyExcluded = new Map([
   ['api/db/migrations/016_remove_ombudsman.sql', 'intentional removal migration'],
   ['api/db/verify-migrations.js', 'intentional release-gate removal assertion'],
   ['scripts/test-migrations.mjs', 'intentional removal integration test'],
+  ['scripts/test-migration-readiness.mjs', 'synthetic readiness ledger fixture'],
   ['tests/unit/ombudsman-removal.test.mjs', 'the invariant being executed'],
   ['tests/unit/api-security.test.mjs', 'specific negative permission invariant'],
   ['tests/unit/frontend-invariants.test.mjs', 'specific negative frontend invariant'],
