@@ -5,6 +5,12 @@ homologação com serviços e infraestrutura reais. Marque cada item com data,
 responsável e evidência; não marque uma validação externa usando apenas
 `npm run verify`.
 
+> **Nota OWN-45:** o CMS/Owner News não faz parte do runtime atual. As seções
+> `CMS Drag and Drop` e `CMS Release Follow-up` abaixo são registros históricos
+> de validação e preservação; não são passos para reativar, publicar ou operar
+> editorial no Portal. Migrations, tabelas, uploads e relatórios históricos devem
+> permanecer preservados.
+
 > **Homologação de 30/09/2026:** consulte o
 > [relatório de entrega por critério](../reviews/2026-09-30-issue-delivery.md).
 > Ele registra os ensaios Linux de restore/rollback, uploads autenticados,
@@ -69,7 +75,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Nenhuma tela pública perde registros por limite silencioso de 50 itens.
 - [ ] Admin consegue navegar o histórico completo de auditoria.
 
-## CMS Drag and Drop
+## CMS Drag and Drop — registro histórico preservado
 
 - [x] Verificação estática cobre os cinco tipos de conteúdo CMS e o mapeamento de permissões.
 - [x] Contratos de rascunho, publicação, agendamento, fallback, assets protegidos, editor responsivo e renderer seguro passam em `npm run verify`.
@@ -227,7 +233,7 @@ S3 e restore off-host; e o relato #38 sem card/PDF e ambiente originais. Consult
 o [relatório consolidado de entrega](../reviews/2026-09-30-issue-delivery.md) e
 as issues para os hashes, request IDs sanitizados e limites de cada evidência.
 
-## CMS Release Follow-up
+## CMS Release Follow-up — registro histórico preservado
 
 - [x] Cron image build context includes the shared CMS reader and block validator
   at the import path used by `cron/checkReminders.js`.

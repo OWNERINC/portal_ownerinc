@@ -115,9 +115,9 @@
    `academy` → `academy_modules` → `academy_lessons`, locks de linha, audiência
    por cargo, mídia própria e progresso por UID/media version.
 4. As migrations e tabelas CMS permanecem no repositório para preservar dados,
-   uploads, documentos, revisões, assets e bytes históricos. O runtime editorial
-   remanescente continua coberto por seus próprios testes, mas não é uma
-   dependência dos quatro domínios mantidos.
+   uploads, documentos, revisões, assets e bytes históricos. Não há runtime
+   editorial remanescente; os testes de ausência e os contratos históricos apenas
+   impedem que os quatro domínios mantidos voltem a depender dele.
 5. Alterações e exclusões nos domínios mantidos não removem nem atualizam
    `cms_documents`, `cms_revisions` ou `cms_assets`. Fixtures de rollback e
    exclusão verificam as linhas históricas, bytes e linhas não relacionadas.

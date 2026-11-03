@@ -17,6 +17,9 @@ disponível como rota futura, fora da navegação inicial.
 - `public/`: páginas estáticas das áreas mantidas pelo Portal; a antiga URL
   `/announcements.html` não é mais uma página do produto e responde 404
   controlado.
+- O runtime atual não inclui CMS, Owner News, editor editorial, enquetes ou
+  Payload CMS. Migrations, tabelas, uploads e documentos editoriais antigos
+  permanecem preservados como histórico sem consumidores executáveis.
 - `api/`: API Express, autorização e persistência PostgreSQL.
 - `cron/`: processamento diário de lembretes e notificações.
 - `firebase-emulator/`: imagem do Auth Emulator usada apenas no perfil local.
@@ -84,6 +87,7 @@ HTML.
 - [Fluxo de dados](docs/architecture/data-flow.md)
 - [Histórico da importação privada da Owner News](docs/operations/owner-news-import.md)
   (fluxo removido do runtime; mantido apenas como registro)
+- [Arquitetura do Portal sem editorial](docs/architecture/portal-without-editorial.md)
 - [Deploy](docs/operations/deployment.md)
 - [Checklist de release V1](docs/operations/v1-release-checklist.md)
 - [Status final da V1](docs/operations/2026-08-12-v1-final-status.md)

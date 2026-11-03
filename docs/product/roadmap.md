@@ -1,6 +1,6 @@
 # Roadmap do Portal Ownerinc
 
-Atualizado em 1º de outubro de 2026.
+Atualizado em 3 de novembro de 2026.
 
 ## Status de Implementação
 
@@ -13,16 +13,20 @@ Atualizado em 1º de outubro de 2026.
 | Gate 4 - Governança | Concluído | Audit log, exportação, erasure e política de retenção |
 | Gate 5 - Produção recuperável | Concluído no código | Digests, backup consistente, restore transacional, smoke e rollback |
 | Gate 6 - Expansões condicionais | Não iniciado por decisão | Somente após demanda validada |
+| OWN-43 - Migrations isoladas | Aprovado | Cluster PostgreSQL descartável, ledger/readiness/grants, preservação histórica e auditoria read-only |
+| OWN-44 - Resíduos órfãos | Aprovado | Inventário nominal, remoção de um arquivo sem consumidor e renames de artefatos compartilhados |
+| OWN-45 - Documentação sem editorial | Aprovado | Escopo ativo e histórico preservado reconciliados; revisão Astra medium `ship` |
 
-Os checks locais passam. Testes com Firebase, SendGrid, VPS, restauração real,
+Os checks locais passam. Testes com Firebase, Resend SMTP, VPS, restauração real,
 NVDA e VoiceOver permanecem gates operacionais antes do lançamento, pois exigem
 credenciais, serviços ou dispositivos externos. A integração Sólides permanece
 em `off` até o Gate 0 externo.
 
-A Academy tem implementação local documentada, mas não está marcada como
-homologação full-stack: PostgreSQL/Firebase, sessão autenticada no Nginx,
-reprodução de mídia/provedor e headers efetivos continuam PENDENTES por
-decisão de não subir serviços.
+A Academy tem implementação local documentada e o ledger foi validado no cluster
+PostgreSQL descartável da OWN-43, mas não está marcada como homologação full-stack:
+PostgreSQL/Firebase oficiais, sessão autenticada no Nginx, reprodução de
+mídia/provedor e headers efetivos continuam PENDENTES por decisão de não subir a
+pilha de produção.
 
 ## Como Usar
 

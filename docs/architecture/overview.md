@@ -40,6 +40,21 @@ bytes históricos sejam servidos pelo mount genérico de uploads. O verificador 
 migrations tolera a ausência ou presença das tabelas editoriais e, quando elas
 existem, exige que `portal_api` e `portal_cron` não tenham privilégios nelas.
 
+### Contrato documental do runtime atual (OWN-45)
+
+O runtime ativo é composto por Knowledge, Academy, Benefits, Reminders, autenticação,
+administração, AutoCard, Cards Pós e integrações explicitamente habilitadas. Esses
+domínios usam rotas, payloads, projeções e tabelas próprias. CMS, Payload CMS, Owner
+News, enquetes, editor editorial, importadores e materiais editoriais não são
+dependências executáveis do Portal atual.
+
+As migrations `015`, `019`, `034` e `035`, suas tabelas e uploads editoriais
+históricos continuam versionados e podem existir em bancos antigos. A migration
+`033_academy_learning` e as tabelas próprias de aprendizagem continuam sendo parte
+do runtime Academy. A preservação editorial é para compatibilidade/auditoria, não
+um consumidor runtime. As URLs antigas recebem 404 controlado quando aplicável;
+nenhuma tabela ou byte histórico é apagado por este gate.
+
 Knowledge permanece como texto simples (`title`, `category`, `content`) e, após
 autenticação e autorização, rejeita campos PDF legados antes de SQL, transação ou
 auditoria. PDF ativo retirado por ausência de rota própria. Benefits e Reminders renderizam e
@@ -342,7 +357,7 @@ Academy são revertidos por transação. Nesta entrega, fresh/bootstrap, upgrade
   topbar, `.main-content` e o próprio `main#main-content`.
 - A preparação obtém o HTML, importa o módulo ES em cache e aguarda as folhas de
   estilo e bibliotecas necessárias. A API valida `/users/me` antes de montar;
-  Admin, CMS e ferramentas também verificam as permissões retornadas. Sólides
+  Admin e ferramentas também verificam as permissões retornadas. Sólides
   exige vínculo ativo. Snapshot visual nunca fornece o perfil usado na montagem.
   Falha de preparação conserva a página anterior e oferece retry.
 - Cada módulo de página exporta `mount(page)`, síncrono, com estado local novo
@@ -353,9 +368,10 @@ Academy são revertidos por transação. Nesta entrega, fresh/bootstrap, upgrade
 - `page.listen`, `timeout`, `frame`, `image`, `wait`, `objectURL` e `cleanup`
   registram recursos de vida limitada. `dispose()` aborta loaders, remove
   listeners, cancela timers/frames, desconecta observers registrados e revoga
-  blobs. `renderBlocks(..., { signal })` limpa mídia privada explicitamente;
-  seu observer também cobre substituições internas de conteúdo.
-- `page.beforeLeave()` protege CMS, ferramentas e enquadramento do perfil.
+  blobs. Os módulos mantidos limpam seus próprios recursos sem usar renderer
+  editorial ou mídia privada CMS.
+- `page.beforeLeave()` protege formulários mantidos, ferramentas e enquadramento
+  do perfil.
   Formulários e diálogos usam as guardas de `ui.js`. Mutações pendentes bloqueiam
   navegação/logout e submissões duplicadas da mesma operação; confirmar descarte
   não autoriza abandonar uma gravação ou upload em andamento.
@@ -410,7 +426,7 @@ política central de autorização, renderização segura, migrations SQL, ledge
 idempotente de notificações, least privilege, readiness e deploy recuperável.
 As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md).
 
-## CMS e conteúdo publicado — histórico (OWN-45)
+## CMS e conteúdo publicado — histórico preservado (OWN-45)
 
 > **Registro histórico — Owner News removido em 3 de novembro de 2026 (OWN-40).**
 > As seções editoriais abaixo documentam decisões, contratos e evidências de uma
