@@ -1,5 +1,10 @@
 # API editorial da Owner News
 
+> **Documento histórico — não é um contrato ativo.** Owner News foi removido do
+> runtime do Portal em 3 de novembro de 2026 (OWN-40). As rotas descritas abaixo
+> não são montadas pela API e retornam 404 controlado; migrations, dados e este
+> documento permanecem apenas para preservar histórico e rastreabilidade.
+
 Todas as rotas de leitura exigem sessão autenticada. Lista, categorias e
 navegação usam as mesmas publicações validadas (blocos, editorial e mídia), com
 rechecagem da revisão publicada antes da resposta. A ordem é publicação

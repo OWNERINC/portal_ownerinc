@@ -64,7 +64,12 @@ doubles não substituem migrations, persistência ou jornadas reais no navegador
 Para conferir o shell gerado sem escrever arquivos, use
 `node scripts/generate-public-shell.mjs --check`; confira também `git diff --check`.
 
-### Persistência de enquetes Owner News
+### Persistência histórica de enquetes Owner News
+
+Esta seção descreve somente o schema histórico preservado após a remoção do
+runtime Owner News (OWN-40). O Portal não oferece mais rotas ou scripts para
+criar, ler ou votar nessas enquetes; não execute operações destrutivas nem use
+este fluxo como parte do desenvolvimento atual.
 
 A migration `035_owner_news_polls` cria enquetes, opções e votos. A API recebe
 SELECT/INSERT/UPDATE/DELETE nas três tabelas após o REVOKE do provisionamento;

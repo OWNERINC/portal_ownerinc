@@ -361,7 +361,7 @@ dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
 Checks de comportamento: `tests/unit/persistent-navigation.test.mjs`,
 `tests/unit/navigation-review-regressions.test.mjs` e
 `tests/unit/auth-stability.test.mjs`, junto dos testes existentes de CMS, perfil,
-filtros, PDF, Owner News e AutoCard.
+filtros, PDF e AutoCard.
 
 ### Evidência local — 22/09/2026
 
@@ -370,8 +370,9 @@ filtros, PDF, Owner News e AutoCard.
   zero novas navegações de documento e identidade preservada de `document`,
   `.sidebar`, `.topbar` e `.main-content`.
 - Durante esse percurso, 447 frames observados e nenhum com Admin oculto.
-- Verificados detalhe/voltar da Owner News, abas administrativas, Back/Forward
-  entre áreas, resposta 503 na revalidação preservando a página/permissões e retry.
+- Verificados detalhe/voltar da publicação editorial histórica, abas administrativas,
+  Back/Forward entre áreas, resposta 503 na revalidação preservando a
+  página/permissões e retry.
 - Confirmados cancelamento e descarte de edições no Perfil, CMS e nos dois
   editores; cancelar Back no formulário novo do CMS conservou os campos.
 - Exportações reais PNG no AutoCard e PDF nos Cards Pós funcionaram após
@@ -387,6 +388,13 @@ idempotente de notificações, least privilege, readiness e deploy recuperável.
 As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md).
 
 ## CMS e conteúdo publicado
+
+> **Registro histórico — Owner News removido em 3 de novembro de 2026 (OWN-40).**
+> As seções editoriais abaixo documentam decisões, contratos e evidências de uma
+> capacidade anterior. Não descrevem rotas, módulos ou content types disponíveis
+> no runtime atual. O CMS genérico e o renderer de blocos permanecem para as áreas
+> mantidas; migrations, dados e histórico Owner News foram preservados sem
+> consumidores executáveis.
 
 ### Enquetes Owner News (P2)
 

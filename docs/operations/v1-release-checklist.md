@@ -247,8 +247,9 @@ as issues para os hashes, request IDs sanitizados e limites de cada evidência.
   separately limited to 50 MiB in the API and 51 MiB at Nginx for multipart
   overhead. Multer returns 400 for unexpected/multiple files and 413 for the
   file-size limit.
-- [x] Authenticated announcement detail returns only a published announcement
-  revision and the frontend links list entries to that detail request.
+- [x] Historical announcement detail contract was restricted to published
+  revisions before Owner News was removed in OWN-40; the current API no longer
+  mounts the route and returns a controlled 404.
 - [ ] PostgreSQL migration execution and authenticated/live acceptance still
   require the missing operational database URL and environment.
 

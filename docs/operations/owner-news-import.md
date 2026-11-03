@@ -1,5 +1,11 @@
 # Importação privada da Owner News
 
+> **Documento histórico — não executar.** O fluxo Owner News foi removido do
+> runtime em 3 de novembro de 2026 (OWN-40), e os scripts referenciados neste
+> arquivo não existem mais no checkout ativo. O texto é preservado somente para
+> rastreabilidade da importação histórica; não aponta para produção nem autoriza
+> alterar migrations, documentos, uploads ou outros dados.
+
 Para o fluxo editorial revisado e o inventário parcial A1, consulte
 [Preparação de pacotes privados](owner-news-bundles.md). O fluxo abaixo documenta
 primeiro a aplicação A2; a seção **Importador legado** mantém o fluxo anterior.
