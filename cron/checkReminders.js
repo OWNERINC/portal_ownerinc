@@ -177,7 +177,7 @@ async function deliverEmail(db, reminder, user, scheduledDate, logId, initialAtt
         return 'skipped';
       }
 
-      // Reminder/user row locks keep the send decision current; there is no CMS publish/unpublish step here.
+      // Recheck under reminder/user row locks before deciding whether to send; delivery uses only the reminder's own state.
       const message = {
         to: currentDelivery.user.email,
         subject: `Lembrete: ${current.title}`,
