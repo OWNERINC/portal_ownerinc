@@ -80,15 +80,22 @@ qualquer volume histórico.
   idempotente incluída nos dois cenários.
 - `npm run test:migration-readiness` — PASS, sem relações editoriais.
 - `node scripts/test-academy.mjs` — 6 PASS no database bootstrap isolado.
-- `npm run verify` — 804 PASS, 2 skips esperados por plataforma.
+- Cabeça testada: `dfea181` (`test: bind migration harness to disposable cluster`).
+- `npm run verify` — 805 PASS, 2 skips esperados por plataforma.
 - `git diff --check` — PASS.
+- Identidades read-only dos clusters na VPS: OWN-43 `7704035034504839201`,
+  produção `7667213608036888610`, staging `7665192068030894114`; são distintas.
 - `git diff origin/rewrite/portal-sem-cms..HEAD --stat` e comparação nominal dos
   arquivos alterados foram revisados; as migrations históricas não aparecem no
   diff.
-- Checksums e bytes das migrations históricas `015`, `019`, `033`, `034` e `035`
-  permanecem preservados; a alteração desta etapa ficou limitada às expectativas
-  do harness e à exclusão explícita da fixture de readiness na varredura de
-  superfície ativa.
+- Checksums SHA-256 atuais = referência `8746ce2`:
+  `015`=`a2731d126f67b57a38081079aa98fbeb8fa2584623374537218f53edf8405cfe`,
+  `019`=`0ac373aee43e9d09b825b6a68cdc76d849fe79d973c6904220cbfde5b45ca124`,
+  `033`=`46cf719a8cde90d2b42c39c6fd5f9201d3749967f545d38b0f117e8f2309162f`,
+  `034`=`449f8fba3547004da332a931c3b2d22b74be67fd4610128df751ca8fc44da25f`,
+  `035`=`af3370a383f25df1414af6133a2cb25f0e45f1cfd4007d6f1cc52f96aa4488a8`.
+- A alteração ficou limitada à proteção de identidade do harness, às expectativas
+  de grants, à exclusão explícita da fixture de readiness e à documentação.
 
 ## Decisão do gate
 
