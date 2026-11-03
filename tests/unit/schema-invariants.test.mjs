@@ -65,7 +65,7 @@ test('Academy schema preserves legacy delivery and API-only learning storage', a
   assert.match(integration, /ledgerAfterRepeat.rows, ledgerBeforeRepeat.rows/);
 });
 
-test('Owner News migration order, release gates, and compatibility guard stay aligned', async () => {
+test('Owner News migrations remain historical without runtime grants or readiness coupling', async () => {
   const [migration, provision, verification, migrationTest, runner] = await Promise.all([
     readFile('api/db/migrations/034_owner_news_editorial.sql', 'utf8'),
     readFile('api/db/provision.js', 'utf8'),
@@ -76,7 +76,6 @@ test('Owner News migration order, release gates, and compatibility guard stay al
   assert.match(verification, /'032_user_import_identity',[\s\S]*'033_academy_learning',[\s\S]*'034_owner_news_editorial',[\s\S]*'035_owner_news_polls'/);
   assert.match(migrationTest, /'032_user_import_identity',[\s\S]*'033_academy_learning',[\s\S]*'034_owner_news_editorial',[\s\S]*'035_owner_news_polls'/);
   for (const table of ['owner_news_home', 'owner_news_polls', 'owner_news_poll_options', 'owner_news_poll_votes']) {
-    assert.match(verification, new RegExp(`to_regclass\\('public\\.${table}'\\)`));
     assert.match(migrationTest, new RegExp(table));
   }
   for (const check of [
@@ -84,18 +83,14 @@ test('Owner News migration order, release gates, and compatibility guard stay al
     'owner_news_poll_votes_pkey', 'owner_news_one_open_poll',
     'owner_news_polls_publication_idx',
   ]) {
-    assert.match(verification, new RegExp(check));
     assert.match(migrationTest, new RegExp(check));
   }
-  assert.match(verification, /owner_news_poll_votes_composite_fk/);
   assert.match(migrationTest, /vote_composite_fk/);
   assert.match(migrationTest, /home_columns/);
-  assert.match(provision, /GRANT SELECT, INSERT, UPDATE ON owner_news_home TO portal_api/);
-  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON owner_news_polls, owner_news_poll_options, owner_news_poll_votes TO portal_api/);
-  for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
-    assert.match(verification, new RegExp(`has_table_privilege\\('portal_api', 'public\\.owner_news_poll_votes', '${privilege}'\\)`));
-    assert.match(verification, new RegExp(`NOT has_table_privilege\\('portal_cron', 'public\\.owner_news_poll_votes', '${privilege}'\\)`));
-  }
+  assert.doesNotMatch(provision, /GRANT[^;]*owner_news_/i);
+  assert.match(verification, /api_owner_news_privileges_denied/);
+  assert.match(verification, /cron_owner_news_privileges_denied/);
+  assert.doesNotMatch(verification, /owner_news_home_columns|owner_news_polls_status_check|owner_news_poll_votes_composite_fk/);
   assert.match(migration, /CREATE TABLE owner_news_home/);
   assert.match(migration, /INSERT INTO owner_news_home\(singleton\) VALUES \(TRUE\)/);
   assert.match(runner, /033_owner_news_editorial/);
@@ -203,7 +198,7 @@ test('AutoCard media, icon, crop, and fresh-install indexes stay aligned', async
   assert.match(migrationTest, /has_table_privilege\('portal_api', 'public\.autocard_media', 'SELECT'\)[\s\S]*has_table_privilege\('portal_api', 'public\.autocard_media', 'DELETE'\)/);
   assert.doesNotMatch(migrationTest, /has_table_privilege\([^\n]*'SELECT,INSERT|has_table_privilege\([^\n]*'SELECT,DELETE/);
   assert.match(verification, /'029_autocard_media_safety'/);
-  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'UPDATE'\)/);
+  assert.match(verification, /cron_cms_privileges_denied/);
 });
 
 test('profile photo crop schema is safe for fresh installs and upgrades', async () => {
@@ -429,7 +424,7 @@ test('DHO job title migration seeds, merges, and maps the approved names', async
   assert.doesNotMatch(canonical, /\bRH\b/i);
 });
 
-test('CMS migration is isolated, idempotent, and protects document revisions and assets', async () => {
+test('historical CMS migration remains byte-preserved while runtime privileges are denied', async () => {
   const [migration, verification, provision, migrate] = await Promise.all([
     readFile('api/db/migrations/015_cms_editor.sql', 'utf8'),
     readFile('api/db/verify-migrations.js', 'utf8'),
@@ -459,22 +454,17 @@ test('CMS migration is isolated, idempotent, and protects document revisions and
   assert.match(migration, /CREATE INDEX IF NOT EXISTS cms_revisions_status_idx/);
   assert.doesNotMatch(migration, /ALTER TABLE (?!cms_)/);
   assert.match(verification, /'015_cms_editor'/);
-  assert.match(verification, /cms_documents/);
-  assert.match(verification, /cms_revisions/);
-  assert.match(verification, /cms_assets/);
-  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON cms_documents, cms_revisions, cms_assets TO portal_api/);
-  assert.match(provision, /GRANT SELECT, UPDATE ON cms_documents, cms_revisions TO portal_cron/);
+  assert.match(verification, /api_cms_privileges_denied/);
+  assert.match(verification, /cron_cms_privileges_denied/);
+  assert.doesNotMatch(provision, /GRANT[^;]*cms_documents|GRANT[^;]*cms_revisions|GRANT[^;]*cms_assets/i);
   assert.ok(migrate.indexOf('await grantRuntimeAccess(client)') > migrate.indexOf('for (const file of files)'));
-  for (const privilege of ['api_cms_documents_privileges', 'api_cms_revisions_privileges', 'api_cms_assets_privileges', 'cron_cms_documents_privileges', 'cron_cms_revisions_privileges']) {
-    assert.match(verification, new RegExp(privilege));
-  }
 });
 
-test('CMS asset deletion reservations are applied and verified by migrations', async () => {
+test('historical CMS asset deletion state remains preserved but is not a readiness dependency', async () => {
   const [migration, verification] = await Promise.all([
     readFile('api/db/migrations/019_cms_asset_deletion_state.sql', 'utf8').catch(() => ''),
     readFile('api/db/verify-migrations.js', 'utf8'),
   ]);
   assert.match(migration, /deleting_at\s+TIMESTAMPTZ/);
-  assert.match(verification, /cms_asset_deleting_at/);
+  assert.doesNotMatch(verification, /cms_asset_deleting_at/);
 });

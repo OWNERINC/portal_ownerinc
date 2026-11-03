@@ -16,14 +16,12 @@ const pool = require('./db');
 const { checkReminders } = require('./checkReminders');
 const { enforceRetention, retentionDays } = require('./retention');
 const { autocardMediaRetentionDays, enforceAutocardMediaRetention } = require('./autocard-media-retention');
-const { cmsAssetRetentionDays, enforceCmsAssetRetention } = require('./cms-asset-retention');
 const { TIME_ZONE } = require('./scheduling');
 const { cleanupFirebaseUsers, cleanupPendingRegistrations, reconcileFirebaseEnables, triggerUserImports } = require('./user-imports');
 const { noteWorkerResultFailures } = require('./worker-status');
 
 retentionDays();
 autocardMediaRetentionDays();
-cmsAssetRetentionDays();
 
 async function updateWorkerStatus(name, phase, error = null) {
   const message = error ? String(error.message || error).slice(0, 1000) : null;
@@ -83,12 +81,6 @@ async function runRetention() {
   } catch (error) {
     lastError = error;
     console.error(JSON.stringify({ service: 'cron', event: 'autocard_media_retention_failed', error: error.message }));
-  }
-  try {
-    lastError = noteWorkerResultFailures(lastError, 'CMS asset retention', await enforceCmsAssetRetention());
-  } catch (error) {
-    lastError = error;
-    console.error(JSON.stringify({ service: 'cron', event: 'cms_asset_retention_failed', error: error.message }));
   }
   try {
     lastError = noteWorkerResultFailures(lastError, 'Pending registration retention', await cleanupPendingRegistrations());

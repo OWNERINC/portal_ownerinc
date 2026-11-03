@@ -30,9 +30,15 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 Knowledge, Benefits, Reminders e Academy usam suas próprias tabelas, payloads,
 rotas e projeções. Esses domínios não consultam `cms_documents`,
 `cms_revisions` ou `cms_assets`, não usam o lock editorial `7193029` e não
-chamam `/api/cms`. O CMS, suas migrations, uploads, documentos, revisões e
-assets históricos continuam preservados para os fluxos editoriais que ainda os
-utilizam; a separação é de runtime, não uma limpeza destrutiva de dados.
+chamam `/api/cms`. O runtime CMS foi removido da API e do cron na OWN-42; suas
+migrations, uploads, documentos, revisões e assets históricos continuam
+preservados, sem rota, job, grant runtime ou readiness estrutural. A separação é
+de runtime, não uma limpeza destrutiva de dados.
+
+`/uploads/cms-private` continua respondendo 404 explicitamente para impedir que
+bytes históricos sejam servidos pelo mount genérico de uploads. O verificador de
+migrations tolera a ausência ou presença das tabelas editoriais e, quando elas
+existem, exige que `portal_api` e `portal_cron` não tenham privilégios nelas.
 
 Knowledge permanece como texto simples (`title`, `category`, `content`) e, após
 autenticação e autorização, rejeita campos PDF legados antes de SQL, transação ou
@@ -152,10 +158,10 @@ exigindo URL HTTP(S). A formação visual (`initial`/`role`) é independente do 
   para dados e revisões antigos; o runtime atual da Academy não lê nem grava
   essa tabela.
 
-Somente `portal_api` recebe CRUD nas quatro novas tabelas. O cron mantém seu
-acesso às revisões CMS para retenção, sem acesso ao progresso. O `schema.sql`
-inclui a estrutura Academy, mas **não registra 033 como aplicada**: no bootstrap,
-a migration 015 ainda precisa criar o CMS antes de 033 ampliar seu CHECK.
+Somente `portal_api` recebe CRUD nas quatro novas tabelas. O cron não acessa o
+progresso nem as tabelas CMS históricas. O `schema.sql` inclui a estrutura
+Academy, mas **não registra 033 como aplicada**: no bootstrap, a migration 015
+ainda precisa criar o CMS antes de 033 ampliar seu CHECK.
 As regras editoriais, elegibilidade e atualização de versão de mídia pertencem
 à camada de aplicação; essa migration entrega a estrutura relacional.
 

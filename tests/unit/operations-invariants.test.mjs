@@ -102,16 +102,15 @@ test('runtime API role can read and manage job titles', async () => {
   assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON job_titles TO portal_api/);
 });
 
-test('cron grants match the CMS retention UPDATE and are checked per privilege', async () => {
+test('runtime roles receive no CMS privileges while historical tables remain optional', async () => {
   const [provision, verification] = await Promise.all([
     read('api/db/provision.js'),
     read('api/db/verify-migrations.js'),
   ]);
-  assert.match(provision, /GRANT SELECT, UPDATE, DELETE ON cms_assets TO portal_cron/);
-  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'SELECT'\)/);
-  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'UPDATE'\)/);
-  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'DELETE'\)/);
-  assert.doesNotMatch(verification, /public\.cms_assets', 'SELECT,DELETE'/);
+  assert.doesNotMatch(provision, /GRANT[^;]*cms_documents|GRANT[^;]*cms_revisions|GRANT[^;]*cms_assets/i);
+  assert.match(verification, /api_cms_privileges_denied/);
+  assert.match(verification, /cron_cms_privileges_denied/);
+  assert.match(verification, /to_regclass\('public\.cms_assets'\)/);
 });
 
 test('cron grants row-lock privileges only for user and reminder rechecks', async () => {
@@ -186,12 +185,7 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location \^~ \/api\/media\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads/);
   assert.match(nginx, /location = \/api\/pos-cards\/media[\s\S]*client_max_body_size 3m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/pos-cards\/media\/[\s\S]*limit_req zone=media_reads/);
-  const cmsAssets = nginx.indexOf('location = /api/cms/assets');
-  const cmsAssetReads = nginx.indexOf('location ^~ /api/cms/assets/');
-  const genericApi = nginx.indexOf('location /api/');
-  assert.ok(cmsAssets >= 0 && cmsAssetReads > cmsAssets && cmsAssetReads < genericApi);
-  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
-  assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
+  assert.doesNotMatch(nginx, /location[^\n]*\/api\/cms/);
   assert.match(nginx, /location \^~ \/api\/users\/bulk[\s\S]*client_max_body_size 1m;[\s\S]*proxy_pass \$api_upstream/);
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
   assert.doesNotMatch(nginx, /script-src[^;"]*'unsafe-inline'/);
@@ -336,27 +330,7 @@ test('AutoCard media retention is scheduled, locked, and volume-safe', async () 
   const cronService = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
   assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
   assert.match(cronService, /AUTOCARD_MEDIA_ORPHAN_DAYS: \$\{AUTOCARD_MEDIA_ORPHAN_DAYS:-7\}/);
-  assert.match(cronService, /CMS_ASSET_ORPHAN_RETENTION_DAYS: \$\{CMS_ASSET_ORPHAN_RETENTION_DAYS:-30\}/);
   assert.match(cronService, /volumes:\n\s+- uploads_data:\/app\/uploads/);
-});
-
-test('CMS asset retention is scheduled with the shared upload volume', async () => {
-  const [cron, cleanup, compose] = await Promise.all([
-    read('cron/index.js'), read('cron/cms-asset-retention.js'), read('docker-compose.yml'),
-  ]);
-  const cronService = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
-  assert.match(cron, /enforceCmsAssetRetention/);
-  assert.match(cleanup, /pg_advisory_xact_lock/);
-  assert.match(cleanup, /CMS_ASSET_RETENTION_LOCK = 7193029/);
-  const lock = cleanup.indexOf("pg_advisory_xact_lock($1)");
-  const candidates = cleanup.indexOf('SELECT a.id, a.storage_key');
-  const reservation = cleanup.indexOf('SET deleting_at = NOW()');
-  const commit = cleanup.indexOf("await client.query('COMMIT')");
-  const unlink = cleanup.indexOf('await fileSystem.unlink');
-  const rowDelete = cleanup.indexOf('DELETE FROM cms_assets');
-  assert.ok(lock >= 0 && candidates > lock && reservation > candidates && commit > reservation && unlink > commit && rowDelete > unlink);
-  assert.match(cronService, /CMS_ASSET_ORPHAN_RETENTION_DAYS/);
-  assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
 });
 
 test('CI builds and publishes commit-addressed production images', async () => {

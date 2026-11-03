@@ -4,7 +4,6 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 export const apiRequire = createRequire(new URL('../../api/package.json', import.meta.url));
@@ -49,14 +48,14 @@ async function loadSource(relative, dependencies) {
 
 export async function createDependencyHarness(t, { forbidEditorial = false } = {}) {
   const state = {
-    sql: [], verifiedTokens: [], files: new Map(), writes: [], opens: [], assets: new Map(),
+    sql: [], verifiedTokens: [], files: new Map(), writes: [],
     knowledge: [], benefits: [],
     history: {
       documents: [{ id: 'historical-document', bytes: 'document' }],
       revisions: [{ id: 'historical-revision', bytes: 'revision' }],
       assets: [{ id: 'historical-asset', bytes: 'asset' }],
     },
-    references: [], connections: 0, releases: 0, incoming: [],
+    connections: 0, releases: 0, incoming: [],
   };
   const audit = sql => /INSERT INTO audit_log/.test(sql);
   const pool = {
@@ -74,7 +73,7 @@ export async function createDependencyHarness(t, { forbidEditorial = false } = {
         return { rows: structuredClone(rows) };
       }
       if (/FROM benefits/.test(sql)) return { rows: structuredClone(state.benefits) };
-      if (/FROM notifications_log|FROM cms_documents/.test(sql) && !/jsonb_array_elements/.test(sql)) return { rows: [] };
+      if (/FROM notifications_log/.test(sql)) return { rows: [] };
       if (/INSERT INTO knowledge_base/.test(sql)) {
         const row = { id: randomUUID(), title: params[0], category: params[1], content: params[2], created_by: params[3] };
         state.knowledge.push(row);
@@ -114,23 +113,6 @@ export async function createDependencyHarness(t, { forbidEditorial = false } = {
         target_users: JSON.parse(params[3]), channel: params[4], active: params[5], created_by: params[6],
       }] };
       if (/SELECT photo_url FROM users/.test(sql)) return { rows: [{ photo_url: '' }] };
-      if (/INSERT INTO cms_assets/.test(sql)) {
-        const asset = {
-          id: randomUUID(), storage_key: params[0], original_name: params[1], mime_type: params[2],
-          byte_size: params[3], uploaded_by: params[4], created_at: '2026-09-29T12:00:00Z',
-        };
-        state.assets.set(asset.id, asset);
-        return { rows: [asset] };
-      }
-      if (/FROM cms_assets WHERE id = \$1 AND deleting_at IS NULL/.test(sql)) {
-        const asset = state.assets.get(params[0]);
-        return { rows: asset && !asset.deleting_at ? [asset] : [] };
-      }
-      if (/FROM cms_assets\s+WHERE id = ANY/.test(sql)) {
-        return { rows: params[0].map(id => state.assets.get(id)).filter(asset => asset
-          && asset.storage_key != null && !asset.deleting_at && asset.byte_size >= 1 && asset.byte_size <= 52428800) };
-      }
-      if (/jsonb_array_elements\(r.blocks\)/.test(sql)) return { rows: state.references };
       if (/^(BEGIN|COMMIT|ROLLBACK)$|INSERT INTO audit_log|UPDATE users SET photo_url/.test(sql) || audit(sql)) return { rows: [] };
       throw new Error(`Unmocked SQL in dependency regression: ${sql}`);
     },
@@ -149,12 +131,6 @@ export async function createDependencyHarness(t, { forbidEditorial = false } = {
       state.files.set(target, Buffer.from(buffer));
     },
     async unlink(target) { state.files.delete(target); },
-    async open(target) {
-      state.opens.push(target);
-      const buffer = state.files.get(target);
-      assert.ok(buffer, 'only a persisted fixture asset may be opened');
-      return { createReadStream: () => Readable.from([buffer]), async close() {} };
-    },
   };
   const auth = await loadSource('middleware/auth.js', new Map([
     ['../db', pool],
@@ -171,7 +147,7 @@ export async function createDependencyHarness(t, { forbidEditorial = false } = {
     ['../db', pool], ['../middleware/auth', auth], ['node:fs/promises', files],
   ]);
   const actualRoutes = new Map();
-  for (const name of ['knowledge', 'benefits', 'reminders', 'cms', 'upload', 'cms-assets']) {
+  for (const name of ['knowledge', 'benefits', 'reminders', 'upload']) {
     actualRoutes.set(`./routes/${name}`, await loadSource(`routes/${name}.js`, dependencies));
   }
   // Load the real index so JSON sizes, query defaults, request IDs, error

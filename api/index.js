@@ -15,8 +15,6 @@ app.use(requestContext);
 app.use(safeResponses);
 app.use(cors(allowedOrigins(process.env)));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
-// CMS block documents are bounded separately; keep the smaller default for every other JSON API.
-app.use('/api/cms', express.json({ limit: '6mb' }));
 app.use('/api/users/bulk', express.json({ limit: '1mb' }));
 app.use(express.json({ limit: '100kb' }));
 
@@ -45,8 +43,6 @@ app.use('/api/academy',   require('./routes/academy'));
 app.use('/api/benefits',  require('./routes/benefits'));
 app.use('/api/upload',    require('./routes/upload'));
 app.use('/api/solides',   require('./routes/solides'));
-app.use('/api/cms',       require('./routes/cms'));
-app.use('/api/cms/assets', require('./routes/cms-assets'));
 const posCardsRoutes = require('./routes/pos-cards');
 app.use('/api/pos-cards', posCardsRoutes);
 // AutoCard is mounted at its namespaced path and at its legacy asset paths so

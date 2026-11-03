@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const require = createRequire(new URL('../../api/package.json', import.meta.url));
@@ -147,13 +146,6 @@ test.beforeEach(() => {
   cronStatus = null;
   process.env.SOLIDES_RELEASE_STAGE = 'off';
   delete process.env.SOLIDES_PILOT_UIDS;
-});
-
-test('CMS route modules are registered without exposing a public asset mount', async () => {
-  const source = await readFile('api/index.js', 'utf8');
-  assert.match(source, /app\.use\('\/api\/cms',\s+require\('\.\/routes\/cms'\)\)/);
-  assert.match(source, /app\.use\('\/api\/cms\/assets',\s+require\('\.\/routes\/cms-assets'\)\)/);
-  assert.doesNotMatch(source, /express\.static\([^)]*cms/i);
 });
 
 test('AutoCard rejects malformed image bytes before touching PostgreSQL', async () => {

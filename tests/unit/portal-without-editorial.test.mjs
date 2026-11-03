@@ -30,13 +30,9 @@ test('Owner News executable files and frontend module directory are absent', asy
   assert.doesNotMatch(scripts, /announcements|owner-news|Owner News/i);
 });
 
-test('shared runtime has no Owner News consumer while generic CMS remains', async () => {
+test('shared runtime has no Owner News or CMS consumer', async () => {
   const files = [
     'api/index.js',
-    'api/routes/cms.js',
-    'api/routes/cms-assets.js',
-    'api/cms/permissions.js',
-    'api/cms/reader.js',
     'public/js/dashboard.js',
     'public/js/router.js',
     'public/dashboard.html',
@@ -49,17 +45,10 @@ test('shared runtime has no Owner News consumer while generic CMS remains', asyn
     assert.doesNotMatch(source, /owner-news|Owner News|announcements|announcement/i, files[index + 1]);
   }
 
-  const cms = sources[1];
-  const reader = sources[4];
-  assert.match(cms, /CONTENT_TYPES/);
-  assert.match(cms, /knowledge/);
-  assert.match(cms, /academy/);
-  assert.match(cms, /reminder/);
-  assert.match(reader, /getPublishedBlocksBatch/);
-  assert.match(reader, /validatePublishedBlocksBatch/);
-  assert.match(sources[5], /storyCard/);
-  assert.match(sources[5], /reminders\/upcoming/);
-  assert.match(sources[5], /api\/academy/);
+  assert.doesNotMatch(sources[0], /\/api\/cms|routes\/cms|cms-assets/);
+  assert.match(sources[1], /storyCard/);
+  assert.match(sources[1], /reminders\/upcoming/);
+  assert.match(sources[1], /api\/academy/);
 });
 
 test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle cleanup', async t => {
@@ -153,6 +142,9 @@ test('legacy Owner News API paths return controlled 404s without database access
     '/api/cms/owner-news',
     '/api/cms/owner-news/home',
     '/api/cms/owner-news/polls',
+    '/api/cms/documents',
+    '/api/cms/assets',
+    '/api/cms/assets/00000000-0000-4000-8000-000000000000',
   ]) {
     const response = await h.request.get(path);
     assert.equal(response.status, 404, path);
