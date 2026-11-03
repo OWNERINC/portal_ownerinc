@@ -18,9 +18,10 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 - Perfis e permissões persistidos no PostgreSQL.
 - Base de conhecimento interna.
 - Academy dentro do Portal: formação inicial para todos, formação por cargo,
-  currículo de módulos/aulas, player YouTube ou arquivo HTTPS, materiais CMS,
-  conclusão manual e retomada individual. O catálogo de benefícios permanece
-  preservado para uma etapa futura e fora da experiência inicial.
+  currículo de módulos/aulas, mídia própria YouTube ou arquivo HTTPS, ativação e
+  desativação de conteúdo próprio, conclusão manual e retomada individual. Não há
+  materiais CMS na Academy ativa. O catálogo de benefícios permanece preservado
+  para uma etapa futura e fora da experiência inicial.
 - Lembretes mensais enviados por email.
 - Upload de foto de perfil.
 

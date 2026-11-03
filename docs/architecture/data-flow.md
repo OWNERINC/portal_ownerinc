@@ -6,7 +6,8 @@
 2. `public/js/auth.js` inclui o token Bearer na requisição.
 3. A API valida o token pelo Firebase Admin.
 4. A API cria ou carrega o perfil correspondente no PostgreSQL.
-5. A rota aplica a permissão necessária e consulta ou altera o banco.
+5. A rota aplica a permissão necessária; só depois valida o payload de domínio e
+   consulta ou altera o banco.
 
 ## Cadastro pendente
 
@@ -105,9 +106,10 @@
    rejeitam SQL para `cms_documents`, `cms_revisions`, `cms_assets` e o lock
    `7193029`, além de exigirem uma chamada positiva ao domínio sob teste.
 2. Knowledge aceita somente `title`, `category` e `content`; campos PDF legados
-   retornam `400` antes de autorização, SQL, transação ou auditoria. A edição e
-   a leitura usam texto simples seguro. PDF ativo retirado por ausência de rota
-   própria.
+   retornam `401` sem autenticação, `403` sem `manageKnowledge` e `400`, para o
+   gestor autenticado, após autenticação e autorização, mas antes de SQL,
+   transação ou auditoria. A edição e a leitura usam texto simples seguro. PDF
+   ativo retirado por ausência de rota própria.
 3. Benefits e Reminders projetam `description`/`instructions` próprias; a
    delivery sem reminder mantém `content_url = null`. Academy usa a hierarquia
    `academy` → `academy_modules` → `academy_lessons`, locks de linha, audiência

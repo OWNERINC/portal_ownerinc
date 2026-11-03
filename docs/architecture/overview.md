@@ -34,13 +34,13 @@ chamam `/api/cms`. O CMS, suas migrations, uploads, documentos, revisões e
 assets históricos continuam preservados para os fluxos editoriais que ainda os
 utilizam; a separação é de runtime, não uma limpeza destrutiva de dados.
 
-Knowledge permanece como texto simples (`title`, `category`, `content`) e rejeita
-campos PDF legados antes de autorização, SQL, transação ou auditoria. PDF ativo
-retirado por ausência de rota própria. Benefits e Reminders renderizam e
+Knowledge permanece como texto simples (`title`, `category`, `content`) e, após
+autenticação e autorização, rejeita campos PDF legados antes de SQL, transação ou
+auditoria. PDF ativo retirado por ausência de rota própria. Benefits e Reminders renderizam e
 entregam `description`/`instructions` próprias com texto seguro. Academy usa a
 árvore `academy` → `academy_modules` → `academy_lessons`, audiência por cargo,
 mídia própria, progresso por UID/media version e fallback visual da própria
-marca; não existe publicação, capa ou material CMS no fluxo mantido.
+marca; não existe fluxo editorial, capa ou material CMS no fluxo mantido.
 
 ## Players de aulas da Academy
 
@@ -142,7 +142,7 @@ exigindo URL HTTP(S). A formação visual (`initial`/`role`) é independente do 
 
 - `academy_course_job_titles`: associação curso/cargo; cargo referenciado não pode
   ser excluído, e a associação é removida com o curso.
-- `academy_modules` → `academy_lessons`: currículo com ordenação e publicação
+- `academy_modules` → `academy_lessons`: currículo com ordenação e ativação
   explícita (módulos e aulas inativos por padrão). A aula exige uma fonte YouTube
   ou arquivo HTTPS, mutuamente exclusivas.
 - `academy_lesson_progress`: chave `(user_uid, lesson_id, media_version)`, posição
@@ -198,7 +198,7 @@ PostgreSQL permanece uma verificação separada, dependente do ambiente autoriza
 exige `job_title_active === true` e associação ao cargo atual. Mesmo um gestor
 precisa dessa audiência na leitura normal; somente `{ preview: true }` usa
 `can(user, 'manageAcademy')` para ler curso inativo ou fora da audiência.
-`canReadCourse` verifica atividade e audiência, não publicação editorial CMS.
+`canReadCourse` verifica atividade e audiência, não estado editorial CMS.
 
 `api/academy/validation.js` expõe validators puros que retornam objeto normalizado
 ou `null`. O payload de curso aceita apenas `title`, `category`, `description`,
@@ -395,14 +395,14 @@ política central de autorização, renderização segura, migrations SQL, ledge
 idempotente de notificações, least privilege, readiness e deploy recuperável.
 As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md).
 
-## CMS e conteúdo publicado
+## CMS e conteúdo publicado — histórico (OWN-45)
 
 > **Registro histórico — Owner News removido em 3 de novembro de 2026 (OWN-40).**
 > As seções editoriais abaixo documentam decisões, contratos e evidências de uma
 > capacidade anterior. Não descrevem rotas, módulos ou content types disponíveis
-> no runtime atual. O CMS genérico e o renderer de blocos permanecem para as áreas
-> mantidas; migrations, dados e histórico Owner News foram preservados sem
-> consumidores executáveis.
+> no runtime atual dos domínios mantidos. Migrations, dados e histórico editorial
+> foram preservados sem consumidores executáveis nesses domínios; a auditoria
+> documental ampla fica para a OWN-45.
 
 ### Enquetes Owner News (P2)
 

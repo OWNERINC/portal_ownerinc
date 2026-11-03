@@ -1,4 +1,4 @@
-# Manual editorial da Academy
+# Manual operacional da Academy
 
 Manual operacional da entrega de 1º de outubro de 2026. Ele descreve o contrato
 implementado; a [matriz de aceite](../reviews/2026-09-30-academy-acceptance.md)
@@ -34,7 +34,7 @@ Ative um curso interno somente depois de ter módulo e aula ativos e mídia
 reproduzível. Concorrência é serializada pelos locks da árvore própria e as
 falhas de auditoria/validação revertem a transação.
 
-## 3. Estrutura, capa e materiais
+## 3. Estrutura e mídia própria
 
 Um curso contém módulos e aulas; reordene usando a lista completa de IDs. O
 progresso acompanha o ID da aula, não sua posição. Cada aula tem título,
@@ -43,7 +43,7 @@ descrição simples e uma mídia primária: YouTube ou arquivo HTTPS MP4/WebM.
 A aula usa a descrição simples persistida em `academy_lessons` e uma mídia
 primária YouTube ou arquivo HTTPS MP4/WebM. Para a apresentação do curso, a
 interface usa `icon_key` e o vetor original da Academy; não há capa ou material
-CMS no fluxo mantido.
+CMS na Academy ativa.
 
 ## 4. URLs de mídia
 
@@ -79,24 +79,23 @@ exemplos comerciais.
 
 ## 7. Segurança e privacidade editorial
 
-`manageAcademy` é obrigatório para criar, editar, ordenar, publicar e pré-visualizar
-conteúdo fora da audiência. Assets não ficam públicos por terem sido enviados:
-uma referência válida e autorizada basta; asset conhecido sem referência legível
-retorna 403 e asset inexistente retorna 404.
+`manageAcademy` é obrigatório para criar, editar, ordenar, ativar/desativar e
+pré-visualizar conteúdo fora da audiência. A Academy ativa usa somente a mídia
+própria da aula; não há upload, referência ou material CMS nesse fluxo.
 
 Progresso é individual e visível ao próprio colaborador nesta versão. Não há
 relatório gerencial, certificado ou avaliação automática. Ao apagar usuário,
 aula, módulo ou curso, o progresso relacionado é excluído em cascata; trocar
 cargo não apaga o histórico, mas muda a elegibilidade corrente.
 
-## 8. Checklist de publicação
+## 8. Checklist de ativação
 
 - [ ] audiência, formação visual e cargos ativos conferidos;
 - [ ] curso, módulo e aula com estado ativo/inativo correto;
 - [ ] URL de mídia validada e título acessível;
 - [ ] descrição e mídia salvas na aula Academy correta;
 - [ ] ícone/fallback visual próprio conferido;
-- [ ] não há dependência de publicação, documento ou asset CMS;
+- [ ] não há dependência de processo editorial, documento ou material CMS;
 - [ ] curso interno testado por uma conta elegível e uma conta inelegível em
       ambiente autorizado;
-- [ ] retirada/despublicação registrada quando conteúdo deixa de ser público.
+- [ ] desativação registrada quando o conteúdo deixa de ser elegível.
