@@ -177,7 +177,7 @@ async function deliverEmail(db, reminder, user, scheduledDate, logId, initialAtt
         return 'skipped';
       }
 
-      // ponytail: hold the shared lock through delivery for send/unpublish ordering; use an outbox if throughput requires shorter transactions.
+      // Reminder/user row locks keep the send decision current; there is no CMS publish/unpublish step here.
       const message = {
         to: currentDelivery.user.email,
         subject: `Lembrete: ${current.title}`,

@@ -191,8 +191,10 @@ use um banco **descartável já migrado até 033 e com Academy vazio**, configur
 `node --test scripts/test-academy.mjs`. Fixtures têm UUIDs próprios, são serializadas
 por advisory lock de teste e removidas por ID no teardown. O script recusa execução
 sem opt-in ou em produção. Não inicia serviços nem aplica migrations. Testes HTTP
-com doubles de SQL e política/CMS reais rodam em `npm run verify`; integração com
-PostgreSQL permanece uma verificação separada, dependente do ambiente autorizado.
+montam as rotas Academy reais, exercitam a política de autorização real com doubles
+controlados de SQL/autenticação e confirmam negativamente que `/api/cms` retorna 404
+em `npm run verify`; integração com PostgreSQL permanece uma verificação separada,
+dependente do ambiente autorizado.
 
 `api/academy/access.js` separa cargo profissional de `role`: audiência restrita
 exige `job_title_active === true` e associação ao cargo atual. Mesmo um gestor
