@@ -57,6 +57,12 @@ deverá aceitar a presença ou ausência dessas relações históricas, sem exig
 runtime dependa delas; quando presentes, deve verificar os privilégios efetivos
 considerando grants diretos, `PUBLIC`, herança e grants por coluna.
 
+O provisionamento garante os grants diretos das roles dedicadas
+`portal_api`/`portal_cron`. Se a auditoria encontrar acesso editorial efetivo por
+`PUBLIC`, membership herdado ou grant por coluna, o candidato falha e exige
+tratamento explícito no provisionamento; não serão feitas revogações amplas sobre
+roles compartilhadas ou domínios mantidos automaticamente.
+
 ### Fresh e upgrade
 
 - **Fresh estrutural:** aplicar somente `schema.sql` e confirmar que o bootstrap não
@@ -77,6 +83,12 @@ considerando grants diretos, `PUBLIC`, herança e grants por coluna.
 - **Ausência/readiness:** testar separadamente o verificador/readiness contra uma
   fixture isolada sem relações editoriais, sem apagar tabelas históricas de uma base
   real e sem apresentar essa fixture como um fluxo normal de upgrade.
+
+  Essa fixture será construída somente para o teste: aplicar `schema.sql` e as
+  migrations não editoriais necessárias, registrar em um ledger sintético local as
+  versões editoriais omitidas para satisfazer o contrato de leitura do verificador e
+  executar `verifyMigrations()` em modo read-only. O ledger sintético não representa
+  um upgrade real, não será usado pelo runner e nunca será aplicado a uma base real.
 
 O harness de integração deve exigir, antes de abrir pool ou chamar o runner,
 `MIGRATION_TEST_SETUP=bootstrap` ou `MIGRATION_TEST_SETUP=upgrade` e
@@ -104,7 +116,9 @@ Registrar, sem dados sensíveis:
 - resultado de `npm run test:migrations`, `npm run verify` e `git diff --check`.
 
 OWN-43 só fica liberada para o próximo gate quando os cenários isolados passam e a
-auditoria read-only da produção não exige uma alteração destrutiva. Se a produção
+auditoria read-only da produção não exige uma alteração destrutiva. Nos cenários
+isolados do candidato, qualquer grant editorial efetivo inesperado bloqueia o gate.
+Se a produção
 ainda estiver na release anterior à OWN-42 e mantiver grants editoriais compatíveis
 com esse runtime antigo, isso será registrado como **PENDENTE externo de promoção**;
 não será revogado nesta etapa read-only e não será apresentado como limpeza produtiva
@@ -135,7 +149,10 @@ dependente de autorização humana posterior.
 ## Critério de falha
 
 Qualquer falha de conexão, divergência no ledger, alteração de checksum histórico,
-grant editorial ativo, alteração de dados fora das fixtures isoladas ou referência
-ambígua entre runtime e histórico bloqueia o próximo gate. O bloqueio deve ser
+grant editorial efetivo inesperado no candidato isolado, alteração de dados fora das
+fixtures isoladas ou referência ambígua entre runtime e histórico bloqueia o próximo
+gate. Grants editoriais observados na produção antiga seguem exclusivamente a exceção
+de **PENDENTE externo de promoção** descrita acima e não são alterados por esta etapa.
+O bloqueio deve ser
 registrado com o comando, o resultado observado e a ação necessária; não será
 contornado marcando a issue como concluída.
