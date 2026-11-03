@@ -10,6 +10,7 @@ import { checkFunctionalParent, readFunctionalConfig } from '../../cms/tests/sup
 import { checkoutBinding, hash, root } from './payload-functional-fixture.mjs';
 import { functionalBaseImages } from './payload-functional-base-images.mjs';
 import { readPrivateBytes } from '../owner-news-payload/files.mjs';
+import { validateFunctionalMigrationDiagnostic } from './payload-functional-diagnostics.mjs';
 
 const fail = reason => { throw new EditorialCIError(reason); };
 class EditorialCIError extends Error {}
@@ -144,23 +145,28 @@ export function validateEditorialFailureReport(raw, expected) {
         }
       }
     }
-    if (!exactKeys(report.failure, ['stage', 'reason'])) return null;
+    const extended = exactKeys(report.failure, ['stage', 'reason', 'role', 'operation', 'cause']);
+    if (!extended && !exactKeys(report.failure, ['stage', 'reason'])) return null;
     const { stage, reason } = report.failure;
     if (reason !== (failureStages.has(stage) ? 'functional_execution_failed' : failurePairs.get(stage)) || typeof reason !== 'string') return null;
+    const migration = extended ? validateFunctionalMigrationDiagnostic({ role: report.failure.role,
+      operation: report.failure.operation, cause: report.failure.cause }) : null;
+    if (extended && (stage !== 'explicit_fixture_migrations' || !migration)) return null;
     const cleanup = Object.hasOwn(report, 'cleanup') ? report.cleanup : 'unknown';
     const transport = Object.hasOwn(report, 'transportCleanup') ? report.transportCleanup : 'unknown';
     if (Object.hasOwn(report, 'cleanup') && !serviceCleanup.has(cleanup) ||
         Object.hasOwn(report, 'transportCleanup') && !transportCleanup.has(transport)) return null;
     if (stage === 'owned_process_stop' && cleanup !== 'owned_stop_failed_preserved' ||
         stage === 'owned_forwarder_stop' && transport !== 'owned_listener_stop_failed') return null;
-    return Object.freeze({ stage, reason, cleanup, transportCleanup: transport });
+    return Object.freeze({ stage, reason, ...(migration || {}), cleanup, transportCleanup: transport });
   } catch { return null; } // No report content or parsing/driver error crosses this boundary.
 }
 
 export function editorialFailureDetail(error) {
   const diagnostic = runnerDiagnostics.get(error);
   return diagnostic ? `; runnerStage=${diagnostic.stage}; runnerReason=${diagnostic.reason}; ` +
-    `reportedCleanup=${diagnostic.cleanup}; reportedTransportCleanup=${diagnostic.transportCleanup}` : '';
+    `reportedCleanup=${diagnostic.cleanup}; reportedTransportCleanup=${diagnostic.transportCleanup}` +
+    (diagnostic.role === undefined ? '' : `; runnerRole=${diagnostic.role}; runnerOperation=${diagnostic.operation}; runnerCause=${diagnostic.cause}`) : '';
 }
 
 export function validateEditorialResult(result, report, expected) {

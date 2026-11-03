@@ -131,6 +131,33 @@ essa fase mantém os outros 44 `INCOMPLETE`, exit 2. A fase preauthority origina
 continua separada; sua ausência de protocolo conflita com readiness atual e requer
 resolução própria antes de alegar aceite dessa fatia.
 
+#### Diagnóstico de falha das migrations da fixture
+
+Na etapa `explicit_fixture_migrations`, o runner pode acrescentar a tupla finita
+`role/operation/cause` ao formato histórico `{stage,reason}`. O CI valida o
+relatório completo e imprime `runnerRole`, `runnerOperation` e `runnerCause`
+somente quando a tupla e os bindings do relatório são válidos. Uma tupla parcial,
+extra ou incompatível mantém a falha opaca `runner_failed`.
+
+Para `portal-migrate`, `cms-provision` e `cms-migrate`, as operações são
+`pre-role-forwarder-health`, `database-bindings`, `portal-system-identity`,
+`cms-system-identity`, `compose-up` e `role-bindings`. Em `post-migrations`, são
+`news-digest`, `authority-baseline` e `pre-runtime-forwarder-health`: 21 pares
+válidos. O digest inteiro permanece uma única fronteira.
+
+A causa aceita apenas códigos próprios enumerados de processo/guard, mapeia
+`ERR_ASSERTION` para `assertion_failed` e usa `unexpected_failure` para desconhecidos.
+Mensagens, causas encadeadas, SQL, argumentos e saída bruta não são exportados.
+A primeira falha é retida antes do cleanup; os campos de cleanup continuam sendo
+estados reportados, sem conferir qualificação. Outras etapas preservam o formato
+histórico, sem reutilizar a última role de migration.
+
+`cms-migrate / compose-up / functional_process_failed` identifica a chamada do
+processo pai, **não o comando interno que falhou no shell do container**. Comandos,
+roles, SQL, ordem, limites e critérios de resultado permanecem os mesmos. Esse
+diagnóstico não transforma uma falha de setup em cenário editorial executado nem
+comprova conclusão física dos processos ou do PostgreSQL.
+
 Admissão editorial em produção requer recovery active/frozen separadamente
 qualificado e binding operacional autenticado de estado/targets/release/imagem,
 hashes from/to, catálogo, epoch, activation e observation. Nenhuma evidência

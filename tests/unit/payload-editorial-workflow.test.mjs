@@ -617,3 +617,85 @@ else process.exitCode=99;`);
     if (mode === 'bad-label') assert.equal(calls.some(args => args[0] === 'run'), false);
   }
 });
+
+const migrationFailure = (extra = {}) => ({ stage: 'explicit_fixture_migrations', reason: 'functional_execution_failed',
+  role: 'cms-migrate', operation: 'compose-up', cause: 'functional_process_failed', ...extra });
+
+test('extended parent failure is validated, WeakMap-bound and printed by the actual CI catch without exposing raw fields', async () => {
+  const input = await failedReport({ stage: 'explicit_fixture_migrations', failCase: null });
+  input.report.failure = migrationFailure();
+  input.report.cleanup = 'owned_stop_failed_preserved'; input.report.transportCleanup = 'owned_listener_stop_failed';
+  const f = await failedOrchestration(input), before = structuredClone(f.report);
+  assert.deepEqual(validateEditorialFailureReport(f.report, f.expected), projectedFailure(f.report));
+  const error = await qualifyEditorial(f.env, f.deps).then(() => assert.fail('failure promoted'), value => value);
+  const detail = '; runnerStage=explicit_fixture_migrations; runnerReason=functional_execution_failed; ' +
+    'reportedCleanup=owned_stop_failed_preserved; reportedTransportCleanup=owned_listener_stop_failed; ' +
+    'runnerRole=cms-migrate; runnerOperation=compose-up; runnerCause=functional_process_failed';
+  assert.equal(editorialFailureDetail(error), detail); assert.deepEqual(f.report, before);
+  f.report.failure.role = privateCanary; f.report.failure.cause = privateCanary;
+  assert.equal(editorialFailureDetail(error), detail, 'validated snapshot does not retain mutable report fields');
+  assert.equal(editorialFailureDetail(Object.assign(new Error('runner_failed'), { diagnostic: migrationFailure() })), '');
+  const source = await readFile(new URL('../../scripts/integration/payload-editorial-ci.mjs', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('main().catch(async error => {') + 'main().catch(async error => {'.length, source.lastIndexOf('});'));
+  const handle = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'error', 'EditorialCIError', 'editorialFailureDetail', 'console', 'process', 'appendFile', body);
+  for (const summaryFails of [false, true]) {
+    const output = [], summaries = [], processDouble = { env: { GITHUB_STEP_SUMMARY: privateCanary }, exitCode: 0 };
+    await handle(error, error.constructor, editorialFailureDetail, { error: value => output.push(value) }, processDouble, async (_filename, text) => {
+      summaries.push(text); if (summaryFails) throw new Error(privateCanary);
+    });
+    assert.equal(processDouble.exitCode, 1);
+    assert.deepEqual(output, [`payload-editorial-ci: FAIL; runner_failed${detail}; acceptance INCOMPLETE; productionValidated=false`]);
+    assert.deepEqual(summaries, [`### Editorial browser qualification\n\n**FAIL / NOT QUALIFIED**: runner_failed${detail}. Full acceptance INCOMPLETE; production validated false.\n`]);
+    assert.ok(![...output, ...summaries].join('').includes(privateCanary));
+  }
+});
+
+test('historical migration failure remains two-field compatible and finite causes never confer success', async () => {
+  const input = await failedReport({ stage: 'explicit_fixture_migrations', failCase: null });
+  assert.deepEqual(validateEditorialFailureReport(input.report, input.expected), projectedFailure(input.report));
+  const historical = await failedOrchestration(input);
+  const error = await qualifyEditorial(historical.env, historical.deps).catch(value => value);
+  assert.equal(error.message, 'runner_failed'); assert.ok(!editorialFailureDetail(error).includes('runnerRole='));
+  for (const cause of ['functional_process_unavailable', 'functional_process_timeout', 'functional_process_output_limit',
+    'functional_process_failed', 'functional_news_inventory_invalid', 'functional_forwarder_listener_closed', 'assertion_failed', 'unexpected_failure']) {
+    input.report.failure = migrationFailure({ role: 'post-migrations', operation: 'news-digest', cause });
+    assert.deepEqual(validateEditorialFailureReport(input.report, input.expected), projectedFailure(input.report));
+  }
+  const complete = await completedReport(); complete.report.failure = migrationFailure();
+  assert.throws(() => validateEditorialResult(complete.result, complete.report, complete.expected), /report_shape_invalid/u);
+  assert.equal(validateEditorialFailureReport(complete.report, complete.expected), null);
+});
+
+test('partial, contradictory and private migration tuples keep the entire failure opaque, never partially promote fields', async () => {
+  let touched = 0;
+  const trap = () => { touched++; throw new Error(privateCanary); };
+  const revoked = Proxy.revocable({}, {}); revoked.revoke();
+  const values = [
+    ...['role', 'operation', 'cause'].map(key => { const value = migrationFailure(); delete value[key]; return value; }),
+    ...['role', 'operation', 'cause'].flatMap(key => [
+      migrationFailure({ [key]: privateCanary }), migrationFailure({ [key]: undefined }), migrationFailure({ [key]: null }),
+      migrationFailure({ [key]: new String(migrationFailure()[key]) }), migrationFailure({ [key]: migrationFailure()[key] + '\n' }),
+      Object.defineProperty(migrationFailure(), key, { get: trap }),
+    ]),
+    migrationFailure({ stage: 'real_runtime_start' }), migrationFailure({ reason: 'functional_cleanup_failed' }),
+    migrationFailure({ role: 'post-migrations' }), migrationFailure({ operation: 'news-digest' }),
+    migrationFailure({ role: 'api' }), migrationFailure({ cause: 'functional_private_new_code' }),
+    migrationFailure({ cause: 'ERR_ASSERTION' }), migrationFailure({ cause: 'functional_execution_failed' }),
+    migrationFailure({ stderr: privateCanary }), migrationFailure({ diagnostic: { role: 'cms-migrate' } }),
+    Object.assign(migrationFailure(), { [Symbol(privateCanary)]: privateCanary }),
+    new Proxy(migrationFailure(), { get: trap, ownKeys: trap, getOwnPropertyDescriptor: trap, getPrototypeOf: trap }), revoked.proxy,
+  ];
+  for (const value of values) {
+    const input = await failedReport({ stage: 'explicit_fixture_migrations', failCase: null });
+    input.report.failure = value;
+    assert.equal(validateEditorialFailureReport(input.report, input.expected), null);
+    const f = await failedOrchestration(input);
+    await assert.rejects(qualifyEditorial(f.env, f.deps), error => {
+      assert.equal(error.message, 'runner_failed'); assert.equal(editorialFailureDetail(error), '');
+      assert.equal(JSON.stringify(error).includes(privateCanary), false); return true;
+    });
+    assert.equal(f.calls.length, 2);
+  }
+  assert.equal(touched, 0, 'neither the validator nor the formatter invokes private accessors/proxies');
+});

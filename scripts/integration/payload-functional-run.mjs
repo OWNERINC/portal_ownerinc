@@ -10,6 +10,7 @@ import { assertFixtureNetwork,assertContainerNetwork,assertResolvedContainerEnvi
 import { reserveFunctionalForwarder,functionalNginxVerifier } from './payload-functional-forwarder.mjs';
 import { assertFunctionalHTTPSReadiness } from './payload-functional-readiness.mjs';
 import { runEditorialContracts } from '../../cms/tests/integration/functional-editorial.mjs';
+import { functionalMigrationDiagnostic } from './payload-functional-diagnostics.mjs';
 
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -88,6 +89,7 @@ export async function executeFunctionalLease(filename,env) {
   if (lease.phase === 'editorial') report.scope='editorial-real-https-isolated-fixture';
   report.source={...lease.binding}; report.startedAt=new Date().toISOString();
   let compose,docker,images,forwarder,runtimeLease,created=false,interrupted=false,stage='loopback_listener_reservation';
+  let migrationRole,migrationOperation;
   const onSignal=()=>{interrupted=true;void forwarder?.stop();};
   process.once('SIGINT',onSignal);process.once('SIGTERM',onSignal);
   try {
@@ -119,14 +121,23 @@ export async function executeFunctionalLease(filename,env) {
       independentClusters:true,freshBeforeDDL:true};
     stage='explicit_fixture_migrations';
     for(const role of ['portal-migrate','cms-provision','cms-migrate']) {
+      migrationRole=role;migrationOperation='pre-role-forwarder-health';
       forwarder.assertHealthy();
+      migrationOperation='database-bindings';
       await verifyBindings(lease,docker,images,['portal-db','cms-db'],isolation);
+      migrationOperation='portal-system-identity';
       assert.equal(await sql('portal',`SELECT system_identifier::text FROM pg_control_system();`),portal.systemIdentifier);
+      migrationOperation='cms-system-identity';
       assert.equal(await sql('cms',`SELECT system_identifier::text FROM pg_control_system();`),cms.systemIdentifier);
+      migrationOperation='compose-up';
       await compose(['up','--no-build','--pull','never','--abort-on-container-exit','--exit-code-from',role,role],{timeout:240000});
+      migrationOperation='role-bindings';
       await verifyBindings(lease,docker,images,[role],isolation);
     }
-    const before=await newsDigest(sql);assert.equal(before.authority,'legacy|1');
+    migrationRole='post-migrations';migrationOperation='news-digest';
+    const before=await newsDigest(sql);
+    migrationOperation='authority-baseline';assert.equal(before.authority,'legacy|1');
+    migrationOperation='pre-runtime-forwarder-health';
     forwarder.assertHealthy();stage='real_runtime_start';
     await compose(['up','--detach','--no-build','--pull','never','api','cms','nginx'],{timeout:120000});
     await verifyBindings(lease,docker,images,['api','cms','nginx'],isolation);
@@ -160,8 +171,9 @@ export async function executeFunctionalLease(filename,env) {
         {check:'independent_fresh_physical_targets',passed:true},{check:'protocol_worker_import_absent',passed:true}];
     });
     }
-  } catch {
-    report.failure={stage,reason:'functional_execution_failed'};
+  } catch(error) {
+    const diagnostic=stage==='explicit_fixture_migrations' ? functionalMigrationDiagnostic(migrationRole,migrationOperation,error) : null;
+    report.failure={stage,reason:'functional_execution_failed',...(diagnostic || {})};
     // Setup failure is not an executed scenario; pending cases stay INCOMPLETE.
   } finally {
     stage='owned_forwarder_stop';
