@@ -1,0 +1,101 @@
+name: Production pre-floor recovery qualification
+
+on:
+  pull_request:
+    paths:
+      - 'ops/payload-production-b0-recovery.py'
+      - 'ops/payload-recovery-*.py'
+      - 'ops/payload-control-*.py'
+      - 'ops/prepare-cms-authenticated.py'
+      - 'ops/provision-payload-candidate-trust.py'
+      - 'tests/fixtures/payload-production-recovery*.py'
+      - 'tests/fixtures/payload-b0-native.py'
+      - 'tests/unit/payload-install-initializer.test.mjs'
+      - 'tests/unit/payload-preparation-authentication.test.mjs'
+      - 'tests/unit/payload-production-recovery.test.mjs'
+      - '.github/workflows/payload-production-recovery-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  required-native-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Authenticate run-attempt start before setup
+        timeout-minutes: 1
+        env:
+          RECOVERY_RUN_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 -I -S - <<'PY'
+          import datetime,json,os,re,time,urllib.request
+          repository,run,attempt=(os.environ[k] for k in ('GITHUB_REPOSITORY','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'))
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',repository)
+          assert all(re.fullmatch(r'[1-9][0-9]*',v) for v in (run,attempt))
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs): raise RuntimeError('redirect refused')
+          request=urllib.request.Request('https://api.github.com/repos/'+repository+'/actions/runs/'+run+'/attempts/'+attempt,
+              headers={'Accept':'application/vnd.github+json','Authorization':'Bearer '+os.environ['RECOVERY_RUN_TOKEN']})
+          with urllib.request.build_opener(NoRedirect).open(request,timeout=15) as response:
+              raw=response.read(1048577)
+          assert len(raw)<=1048576
+          value=json.loads(raw)
+          assert str(value['id'])==run and str(value['run_attempt'])==attempt and value['repository']['full_name']==repository
+          start=int(datetime.datetime.fromisoformat(value['run_started_at'].replace('Z','+00:00')).timestamp()*1000)
+          assert 0 < start <= int(time.time()*1000) < start+34*60000
+          with open(os.environ['GITHUB_ENV'],'a') as stream: stream.write('RECOVERY_CI_STARTED_MS='+str(start)+'\n')
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        timeout-minutes: 2
+        with:
+          node-version: 24
+      - name: Require disposable host and pinned historical build inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_ACTIONS" = true
+          test ! -e /etc/ownerinc
+          test ! -e /opt/ownerinc
+          test ! -e /var/lib/ownerinc
+          sudo env -i PATH=/usr/bin:/bin HOME=/root LANG=C LC_ALL=C \
+            GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted PAYLOAD_REQUIRE_NATIVE_RECOVERY=1 \
+            RECOVERY_CI_STARTED_MS="$RECOVERY_CI_STARTED_MS" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            /usr/bin/python3 -I -S -B tests/fixtures/payload-production-recovery-ci.py --supervise 480 60 -- \
+            /usr/bin/python3 -I -S -B tests/fixtures/payload-production-recovery-ci.py --pull
+      - name: Require every native proof and cleanup receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE="$(command -v node)"
+          sudo env -i PATH=/usr/bin:/bin HOME=/root LANG=C LC_ALL=C \
+            GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted PAYLOAD_REQUIRE_NATIVE_RECOVERY=1 \
+            RECOVERY_CI_STARTED_MS="$RECOVERY_CI_STARTED_MS" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            /usr/bin/python3 -I -S -B tests/fixtures/payload-production-recovery-ci.py --supervise 2280 90 -- \
+            "$NODE" --test tests/unit/payload-production-recovery.test.mjs
+      - name: Verify owned-resource cleanup even after failure
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env -i PATH=/usr/bin:/bin HOME=/root LANG=C LC_ALL=C \
+            GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted PAYLOAD_REQUIRE_NATIVE_RECOVERY=1 \
+            RECOVERY_CI_STARTED_MS="$RECOVERY_CI_STARTED_MS" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            /usr/bin/python3 -I -S -B tests/fixtures/payload-production-recovery-ci.py --cleanup
+      - name: Upload sanitized component qualification only
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-recovery-native-components
+          path: recovery-ci-reports/*.json
+          if-no-files-found: error
+          retention-days: 7

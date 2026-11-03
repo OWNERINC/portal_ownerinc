@@ -277,6 +277,45 @@ test('B0 diagnostics allow only source-grounded fixed reasons and never authoriz
   }
 });
 
+test('recovery diagnostics accept exactly the six fixed state reasons without authorizing prefixes or private fields', () => {
+  const reasons = [
+    'recovery_approval_expired', 'recovery_approval_invalid', 'recovery_baseline_invalid', 'recovery_baseline_required',
+    'recovery_closure_before_reservation_required', 'recovery_completion_proof_missing',
+  ];
+  const emitted = new Set([...controlState.matchAll(/fail\('([a-z][a-z0-9_]+)'\)/gu)].map(match => match[1]));
+  for (const reason of reasons) {
+    assert.ok(emitted.has(reason), `${reason} must be emitted literally by the state producer`);
+    for (const controlCommandContext of ['payload-control:release-preflight', 'payload-control:verify-release', 'payload-operations-guard']) {
+      const options = { controlCommandContext };
+      const parse = stderr => createCommandDiagnostic({ substep: 'recovery_diagnostic_probe', status: 2, stderr, ...options });
+      assert.equal(extractControlErrorIdentifier(`${reason}\n`, options), reason);
+      const diagnostic = parse(`${reason}\n`);
+      assert.equal(diagnostic.controlErrorIdentifier, reason);
+      assert.deepEqual(parse(Buffer.from(`${reason}\r\n`)), diagnostic);
+      assert.deepEqual(sanitizeCommandDiagnostic(diagnostic), diagnostic);
+      for (const stderr of [
+        reason, `${reason.slice(0, -1)}\n`, ` ${reason}\n`, `${reason}\n\n`, `${reason}\n${reason}\n`,
+        `${reason} private-field=postgresql://private:secret@invalid/database\n`,
+        `${reason}\nprivate-detail\n`, `private-detail\n${reason}\n`, `${reason}_unregistered\n`,
+      ]) {
+        const rejected = parse(stderr);
+        assert.equal(rejected.controlErrorIdentifier, null);
+        assert.doesNotMatch(JSON.stringify(rejected), /private-field|private-detail|postgresql:|unregistered/u);
+      }
+    }
+    for (const controlCommandContext of [undefined, 'docker-compose', 'payload-control:backup-metadata',
+      'payload-control:recover-install', 'logical-snapshot-cli']) {
+      assert.equal(extractControlErrorIdentifier(`${reason}\n`, { controlCommandContext }), null);
+    }
+  }
+  for (const reason of ['recovery_attacker_value', 'recovery_approval_attacker_value', 'recovery_baseline_attacker_value',
+    'recovery_closure_attacker_value', 'recovery_completion_attacker_value']) {
+    assert.equal(emitted.has(reason), false);
+    assert.equal(extractControlErrorIdentifier(`${reason}\n`, { controlCommandContext: 'payload-operations-guard' }), null);
+    assert.equal(sanitizeCommandDiagnostic({ controlErrorIdentifier: reason }).controlErrorIdentifier, null);
+  }
+});
+
 test('ownership diagnostics are source-grounded finite codes with exact context and no private detail', () => {
   const identifiers = [
     'invalid_environment_file_owner', 'environment_unavailable',

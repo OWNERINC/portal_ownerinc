@@ -1922,7 +1922,7 @@ def _b0_identity(info):
 
 
 @contextmanager
-def verify_production_b0_artifacts(binding, inventory, key):
+def open_verified_production_b0(binding, inventory, key):
     """Read-only artifact integrity, never restoreability or authorization.
 
     Caller authenticates helpers/context and retains the exclusive deployment
@@ -1943,6 +1943,8 @@ def verify_production_b0_artifacts(binding, inventory, key):
         if not stat.S_ISDIR(info.st_mode) or (info.st_uid, info.st_gid) != (0, 0) or \
            stat.S_IMODE(info.st_mode) & 0o022 or (current == directory and stat.S_IMODE(info.st_mode) != 0o700):
             fail('unsafe_backup_directory')
+        # Pin the full directory identity throughout the retained read scope.
+        # Recovery writes belong below preexisting sibling roots, not B0 ancestry.
         ancestors[current] = _b0_identity(info)
         parent = os.path.dirname(current)
         if parent == current:
@@ -2025,10 +2027,19 @@ def verify_production_b0_artifacts(binding, inventory, key):
         if fingerprint != proof['dataFingerprints']['portalUploads']:
             fail('backup_storage_fingerprint_mismatch')
         reaffirm()
+        for stream in streams.values():
+            stream.seek(0)
+        yield {'streams': streams, 'proof': proof, 'manifest': expected_manifest, 'reaffirm': reaffirm}
+        reaffirm()
+
+
+@contextmanager
+def verify_production_b0_artifacts(binding, inventory, key):
+    # Keep the public verifier's result shape and authorization semantics intact.
+    with open_verified_production_b0(binding, inventory, key):
         yield {'artifactIntegrityVerified': True, 'storageFingerprintVerified': True,
                'databaseRestoreVerified': False, 'liveSourceVerified': False,
                'rollbackAuthorized': False, 'installationExecuted': False, 'deploymentAuthorized': False}
-        reaffirm()
 
 
 def _compose_args(release):
@@ -3156,8 +3167,13 @@ class Runtime:
         raw = _read_bytes(path, mode=0o600, owner_root=True)
         request = STATE.parse_canonical(raw, 'invalid_cold_state')
         if production:
-            STATE._exact_keys(request, {'schemaVersion', 'kind', 'candidate', 'authority', 'inventoryIdentity',
-                                       'sourceCommit', 'expiresAt', 'nonce', 'receiptId'}, 'invalid_cold_state')
+            request_keys = {'schemaVersion', 'kind', 'candidate', 'authority', 'inventoryIdentity',
+                            'sourceCommit', 'expiresAt', 'nonce', 'receiptId'}
+            if 'preparationClosureSha256' in request:
+                request_keys.add('preparationClosureSha256')
+                if not isinstance(request['preparationClosureSha256'], str) or not STATE.HEX_64.fullmatch(request['preparationClosureSha256']):
+                    fail('invalid_cold_state')
+            STATE._exact_keys(request, request_keys, 'invalid_cold_state')
             existing = self.state.get('installIntent')
             request_now = int(time.time())
             current_release = self._current_release()
@@ -3190,7 +3206,9 @@ class Runtime:
                 fail('preauthority_source_recovery_proof_mismatch')
             lease = os.stat(config['paths']['lock'])
             return {'bindingVersion': 4, 'candidate': candidate, 'candidateRelease': self.release_path,
-                    'b0GateVersion': 1, 'receiptId': request['receiptId'],
+                     'b0GateVersion': 1, 'receiptId': request['receiptId'],
+                     **({'recoveryGateVersion': 1, 'preparationClosureSha256': request['preparationClosureSha256']}
+                        if 'preparationClosureSha256' in request else {}),
                     'sourceRelease': source, 'previousImages': source_images,
                     'b0': {'directory': os.path.join(config['paths']['backupRoots'][0], '000-initial-install-b0'),
                            'proofSha256': self.state['legacySourceProofSha256']},

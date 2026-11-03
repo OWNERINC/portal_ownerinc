@@ -1681,9 +1681,9 @@ with patch.object(l.os,'lstat',return_value=info),patch.object(l.os,'fstat',side
 `);
 });
 
-test('all 16 source files authenticate before any closure helper; fixed report never authorizes execution (read doubles)', () => {
+test('all 19 source files authenticate before any closure helper; fixed report never authorizes execution (read doubles)', () => {
   probe(String.raw`
-assert len(p.PREPARATION_FILES)==16
+assert len(p.PREPARATION_FILES)==19
 assert p.PREPARATION_FILES==l.FILES
 assert 'ops/payload-production-observer.py' in p.PREPARATION_FILES
 assert p.PREPARATION_LAUNCHER=='/usr/local/libexec/ownerinc-payload-prepare.py'

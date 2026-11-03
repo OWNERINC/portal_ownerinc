@@ -157,6 +157,301 @@ a relação entre protocolo e readiness. A fixture declara
 substitui a qualificação operacional do clone, recovery produtivo ativo ou recovery
 B0 pré-floor; esses caminhos permanecem work packages separados.
 
+## B0-09 — executor produtivo pré-floor (implementado; qualificação pendente)
+
+`ops/payload-production-b0-recovery.py` contém um executor ADMIN separado do
+executor TEST. O estado termina em `legacy_ready_held`: admission fechada, nginx
+público parado, CMS preservado e cron em bootstrap-only. **Este incremento ainda
+não encerra B0-09 nem autoriza uma execução produtiva.** A revisão independente
+de fonte recebeu **ship** após as correções de mounts/receipts; compilação C,
+CI native e qualificação das imagens anteriores/witness reais continuam
+pendentes. O CI novo não deve ser confundido com o ensaio do B0 produtivo exato.
+
+### Correções da revisão FIX-FIRST e credencial de readiness
+
+O fence inspeciona mounts e compartilhamento de namespaces de **todos** os
+containers antes de excluir os não relacionados. Compara componentes de paths
+Linux e aliases resolvidos contra mountpoints de volumes revalidados pelo receipt,
+incluindo backing paths de volumes locais `bind`/`rbind`. Binds do diretório,
+ancestrais ou descendentes e compartilhamento `container:` de network/PID/IPC são
+recusados para consumidores estrangeiros. Read-only, estado parado, rede `none`
+ou restart policy não concedem uma exceção. Drivers/backing options fora do
+perfil finito também recusam.
+
+O perfil inicial de restore recusa classes que `pg_restore --clean` não removeria
+por não constarem do archive/layout suportado: publications/subscriptions,
+infraestrutura foreign, event triggers, extended statistics, objetos text-search,
+collations/conversions não nativos, infraestrutura de operadores/access methods,
+casts/transforms/languages customizados, security labels, settings de database e
+infraestrutura de replicação lógica. A recusa ocorre antes da medição de baseline,
+da proteção e da primeira invocação destrutiva. Não há fallback de deleção.
+
+Um ID token Firebase pode expirar em `legacy_start_pending` ou depois de
+`legacy_ready_held`. Isso não exige nem permite renovar a decisão de incidente.
+O profile administrativo separado **`b0-readiness-credential`** troca somente o
+arquivo fixo `recovery-read-token` e só nessas duas etapas. O bundle protegido
+contém exatamente esse arquivo: JWT ASCII de três segmentos base64url, com um LF
+final, entre 101 e 16384 bytes. Nunca inclua o token em logs, argumentos ou reports.
+
+A requisição canônica protegida tem somente:
+
+| Campo | Valor/binding |
+| --- | --- |
+| `kind` | `production-b0-readiness-credential-v1` |
+| `purpose` | `refresh-fixed-readiness-identity` |
+| `decisionSha256` | Bytes da decisão original de incidente |
+| `contractSha256` | Bytes do contrato original ligado ao plano |
+| `recoveryBindingSha256` | Valor canônico da binding de recovery já assinada |
+| `profileSha256` | Bytes do profile original, incluindo UID fixo |
+| `previousTokenSha256` / `tokenSha256` | Bytes exatos do token instalado / novo |
+
+Não há campos para UID, URL, target, imagem, comando, paths de destino ou nova
+expiração. O digest esperado da requisição e o provisioner continuam exigindo
+autenticação administrativa independente. A CLI usa o mesmo formato de
+`--approval`, `--approval-sha256`, `--bundle` e `--check`/`--apply`, selecionando
+`--profile b0-readiness-credential`. **Este documento não fornece essa autoridade.**
+
+Sob a lease real, o provisioner autentica closure, B0, contrato, profile e lineage;
+testa o novo token pela API anterior real com o probe fixo, exigindo que o
+`req.user.uid` verificado corresponda ao UID aprovado, além da leitura de upload.
+Um token apenas decodificado ou sintaticamente válido não basta. `--check` não
+publica nem acrescenta journal. `--apply` acrescenta intent HMAC sem bearer,
+compara bytes/identidade do arquivo antigo, faz replace atômico protegido com
+fsync e acrescenta receipt HMAC. Interrupção após rename reconcilia somente o hash
+novo ligado ao intent. Requests para contrato/lineage/identidade diferentes e
+replays contra outro token instalado recusam.
+
+Se um token proposto também expirar antes da conclusão de sua publicação,
+preserva-se seu intent e aceita-se outra requisição administrativa autenticada
+partindo do hash **atualmente instalado**, até o limite de 32 intents. Não se
+transforma um intent incompleto em readiness nem se bloqueia permanentemente a
+rotação por causa da vida curta do bearer. Nenhuma dessas operações repete restore,
+criação de container, aceite B0 ou reserva de incidente. Admission continua fechada.
+
+### Escopo do CI native dedicado
+
+`payload-production-recovery-check.yml` exige Linux/root em GitHub-hosted runner,
+sem secrets produtivos e com ambientes filhos limpos. O wrapper falha em skip,
+prova ausente ou cleanup não confirmado. Os reports publicados são somente
+metadados; arquivos protegidos, tokens, dumps e diagnósticos privados não viram
+artifacts. A etapa `always` tenta limpar exclusivamente recursos receipted/owned
+de fixtures interrompidas; ela não converte teste falho em PASS.
+
+- ADMIN/provisioner/FD9/HMAC: processos reais com closure relocada autenticada e
+  doubles persistidos de Docker/PG. Cases de COMMIT desconhecido, append/head,
+  upload e expiração; a variante de credencial usa a API histórica real.
+- PostgreSQL 16: restore real e sentinelas CMS/unrelated; a regressão de publication
+  vazia mais dados alterados exige **zero** chamadas de restore e preservação de ambos.
+- API/cron: builds locais de `b573a3d900c823a700c167878717bb7534bef500`, baseline
+  observado em 02/11, substituindo somente para essa escolha CI o registro anterior
+  `ce324b1b3d36fafb98270c9dfd8e62fed87d67a3`. Dockerfiles/locks/source archive e base
+  Node por digest são registrados junto aos IDs locais reais. Não se inventam pins
+  GHCR nem se publicam imagens. Esses IDs são inputs de teste de componente, não
+  admissões produtivas. API/cron mantêm `NODE_ENV=production`; Firebase Admin valida
+  criptografia contra peer HTTPS local assinado e restrito, **não Firebase real**.
+- Witness: sshd real, chave pinada, forced command e HTTPS fixture reais; nonce,
+  replay, contexto/profile, key errada, 502, body/redirect e falha de transporte.
+  A adaptação de origin/port/CA é fixa, registrada por hash e qualifica somente
+  transporte loopback. O arranjo externo produtivo continua gate separado.
+
+**Wiring authored; execução native ainda NÃO REALIZADA.** Mesmo um futuro PASS dos
+componentes não certifica a composição integral do host produtivo, o clone B0
+produtivo exato, Firebase externo nem um incidente de recovery real. Review novo,
+CI remoto e verificação estável permanecem necessários antes de SHIP.
+
+### Nova reserva e autoridade
+
+O closure autenticado inclui agora os helpers de recovery, storage e witness.
+Para uma **nova** reserva com recovery, a aprovação de preparação contém
+`hostBaseline.recoveryProfileSha256`; o bundle inclui o profile e os arquivos
+protegidos `recovery-witness.conf`, `recovery-witness.known_hosts`,
+`recovery-api.env` e `recovery-cron.env`. A binding reserva
+`recoveryGateVersion: 1` e `preparationClosureSha256`. Uma reserva anterior não
+pode receber esses campos retroativamente.
+
+A ordem é obrigatória:
+
+1. Capturar B0 e permanecer em `reserved`.
+2. `--capture-b0-recovery-baseline RECEIPT`: capturar schema, segurança, metadados
+   e autenticação das credenciais anteriores, com fence; comparar o schema
+   exportado do archive com o source ainda intacto.
+3. Qualificar o clone do archive exato. `qualification-evidence.json` deve conter
+   `productionRecovery`, kind `production-b0-recovery-clone-measurements-v1`, com
+   `manifestSha256`, `archiveSchemaSha256`, `catalogSha256`, `layoutSha256`,
+   `dataSha256`, `securitySha256`, `rolesSha256`, `uploadsSha256` e
+   `databaseAclSha256`. Esses valores são medições autenticadas do clone; um
+   texto PASS ou somente hashes de dados não substituem a correspondência.
+4. Emitir/provisionar o aceite B0 no **head resultante** e executar `--accept-b0`.
+   A origem histórica desse aceite permanece imutável.
+5. `--check-b0-recovery RECEIPT` retorna proposta de contrato, plano e hash; não
+   produz autoridade. O contrato único liga profiles de segurança, topologia,
+   witness e readiness/egress.
+6. Uma aprovação administrativa **independente e específica do incidente** liga
+   `recoveryPlanSha256`, purpose `restore-previous-legacy-prefloor-held`, janela
+   `approvedAt`/`expiresAt` de até uma hora e canal
+   `independently-authenticated-admin-vps`. O provisioner `--profile b0-recovery`
+   recebe o digest autenticado por esse canal e um bundle protegido com
+   `recovery-contract.json` e `recovery-read-token`.
+7. Somente essa autoridade permite `--recover-b0 RECEIPT`. A autorização do ensaio
+   isolado/M2, o aceite de migration e esta documentação não a substituem.
+
+Hashes de valores usam JSON canônico UTF-8 **sem LF**; hashes de arquivos,
+contratos e decisões incluem seus bytes exatos, inclusive LF. O plano não inclui
+nonce de processo, horário da inspeção, resultado futuro nem o digest da própria
+aprovação. A validade temporal é conferida na reserva e imediatamente antes do
+append `database_restore_pending`. Depois desse append, apenas a mesma decisão
+pode reconciliar/continuar após expiração. Replay histórico não usa o relógio atual.
+
+### Envelope suportado e interrupções
+
+- Somente os dez checkpoints anteriores ao floor são candidatos; presença de
+  floor, protocolo/ativação, conteúdo nativo, sequências de conteúdo já utilizadas,
+  catálogo CMS desconhecido ou resource sem receipt mantém o processo held.
+  **Restrição de compatibilidade da segunda revisão:** qualquer schema nativo
+  reconhecido também recusa, mesmo vazio e protocol-absent. Artigos UUID podem
+  sofrer INSERT/COMMIT/DELETE sem alterar contagens, catálogo ou sequências.
+  Não existe cadeia anterior confiável que prove nunca ter havido uso nativo;
+  nenhum dos seis prefixos nativos é autorizado por este executor. Somente CMS
+  ausente ou não inicializado (sem tabelas nativas; ledger vazio opcional), com
+  os demais bindings/receipts/fences autênticos, pode continuar elegível.
+  `allow_cms` não omite essa checagem. Não há marcador retrospectivo, flag de
+  operador, reset de sequência nem deleção de histórico para obter elegibilidade.
+  Recuperação envolvendo schema/floor nativo exige outro gate/procedimento.
+- O profile inicial suporta somente o mesmo layout enumerado source/current.
+  `pg_restore --single-transaction --clean --if-exists --exit-on-error` preserva
+  database OID e restaura owners/ACLs. Não há deleção de objetos adicionais,
+  recriação de database, alteração de roles/senhas ou grants reparadores. A ACL do
+  database é verificada separadamente: CMS continua sem CONNECT e os demais
+  grantees devem corresponder ao contrato autenticado.
+- O backup protetivo registra tentativa antes dos arquivos exclusivos, faz fsync,
+  consome integralmente os dumps, valida os archives/metadados e sela um único
+  manifest. Tentativas parciais, B1 e resíduos incompletos são mantidos. Depois de
+  destructive-pending nunca se recaptura o alvo como se fosse o estado anterior.
+- Na dúvida sobre COMMIT, primeiro se prova ausência de backend de restore em
+  execução. Comparam-se identidade, catálogo, dados/sequências, segurança e fence.
+  Resultado restaurado é testado primeiro (inclusive quando também coincide com
+  previous); previous exato permite retry; UNKNOWN recusa.
+- Uploads usam staging no mesmo filesystem e journal assinado fora da árvore.
+  Create/materialização, replace, delete, UID, GID, mode e mtime têm intents
+  duráveis próprios. Retomada verifica prefixos de temporários, rename sem
+  completion, conflitos arquivo/diretório e árvore projetada; não limpa tudo de
+  novo. Diretórios/root recebem metadados por último. Mtime é qualificado em
+  segundos inteiros; não se promete preservar atime, ctime ou inode. Links,
+  arquivos sparse, ACLs/xattrs e bits especiais ficam fora do envelope.
+
+### Witness e aplicação anterior
+
+O transporte é OpenSSH fixo para witness externo provisionado independentemente,
+com host key, configuração, binário e profile pinados. O comando remoto forçado
+`ops/payload-recovery-witness.py` só consulta HTTPS do Portal nas três rotas fixas.
+Nonce novo, contexto e profile devem voltar em resposta canônica limitada, dentro
+do prazo medido localmente. 502, timeout, redirect, replay ou body diferente da
+resposta fechada **qualificada** recusam. Nenhum JSON escolhe URL, comando ou
+credenciais. O executor não modifica proxy, firewall ou regras de egress; compara
+as regras/topologia provisionadas ao profile aprovado.
+
+API/cron usam as imagens anteriores da binding em containers privados dedicados,
+sem portas, com uploads read-only e intents/receipts de create/start. O fence de
+readiness admite somente esses containers. Uma retomada de `legacy_start_pending`
+reconcilia create/receipt/start, sem recriar containers já existentes. API verifica
+database, OID e role, `/api/ready`, leitura autenticada `/api/users/me` e leitura
+do upload aprovado. Firebase deve ser real, com egress controlado qualificado;
+emulator não comprova esse contrato. Cron comprova bootstrap e autenticação DB
+com a configuração real; **não** comprova saúde de jobs agendados.
+
+### Evidência disponível e gates ainda abertos
+
+Testes portáveis exercitam journal real, todos os checkpoints do executor com
+adapters explícitos, expiry/append-head, classificações de COMMIT, correspondência
+do clone, prefixos CMS, contratos do witness e gaps create/receipt/start. Os testes
+de metadados/fsync exigem Linux e são skipped no Windows.
+
+O novo workflow `payload-production-recovery-check.yml` executa Linux/root storage
+e PostgreSQL 16 descartável: archive real, COMMIT sem completion, backend de restore
+morto, prepared transaction, senha incorreta, rehash SCRAM compatível, drift de
+schema, ACL/fence e preservação de CMS/database não relacionado. **NOT RUN local**.
+O wiring também inclui ADMIN/FD9 com doubles explícitos, imagens históricas reais
+e SSH/HTTPS loopback. Não certifica composição produtiva, witness externo nem B0
+produtivo exato. Os resultados native ainda faltam. Esses gates, revisão fresca e `npm run verify` estável
+da sessão primária são necessários antes de declarar SHIP. Uma aprovação de
+incidente autêntica permanece requisito separado de qualquer PASS técnico.
+
+### Segunda revisão FIX-FIRST: mounts e orçamento native
+
+O fence lê `/proc/self/mountinfo` com limites de 4 MiB/16384 entradas, decodifica
+escapes e resolve device + filesystem root + subpath, incluindo mounts abaixo de
+um diretório ancestral exposto. Revalida namespace do processo, PID 1 e único
+`dockerd` root, além de identidade/start-time do daemon, tabela completa e ancestrais
+abertos via `O_PATH|O_NOFOLLOW`. Symlinks estrangeiros recusam; não há caminhada
+recursiva de filesystem. Topologia empilhada/ambígua, namespace divergente e
+filesystems fora de ext4/xfs/tmpfs recusam conservadoramente. CI cria aliases reais
+pela API detached descrita abaixo e testa root, descendente, read-only e consumidor parado pelo
+`resources()` real. Cleanup exige receipt do mount, ID, namespace e coordenada
+física idênticos antes de `umount`; não faz lazy/force unmount de alvos arbitrários.
+
+O workflow de 45 minutos autentica `run_started_at`, run ID e attempt pela API do
+GitHub antes do checkout/setup. A deadline única é esse início + 45 minutos;
+fila, setup, pulls e preparação consomem o mesmo relógio. Trabalho para até o
+minuto 38; cleanup tem seis minutos e há um minuto final de margem. Cada subprocesso
+supervisionado recebe o mesmo início/attempt em ambiente limpo, timeout limitado
+ao restante e orçamento mínimo para iniciar. Dez segundos dentro do cutoff ficam
+para término/reap. Correção regressiva do relógio não renova a janela monotônica.
+Subreapers Linux encerram/reap filhos e descendentes adotados, inclusive sessões
+destacadas de trabalho ocioso/crashado. Cleanup usa a deadline original inclusive
+na etapa `always`; falta de tempo, prova ou cleanup faz falhar, nunca vira PASS.
+
+Os novos casos de PG UUID INSERT/COMMIT/DELETE, aliases de mount do kernel e
+subreapers são **CI-only, ainda NOT RUN**. Contadores de zero efeitos são asserções
+exigidas pelos testes, não resultados nativos já observados neste Windows.
+
+### Terceira revisão FIX-FIRST: bind retido e aquisição interrompida
+
+O path `Mounts.Source` atual do host não prova o backing de um container vivo:
+ele pode reter o bind depois de unmount/rebind do alias no host. Antes do filtro
+de relevância, o executor também lê o `/proc/<pid>/mountinfo` efetivo, limitado
+a 4 MiB/16384 entradas, e compara device/root com todas as regiões protegidas.
+Prende descritores de `/proc/<pid>`, root e namespace, confere cgroup do container
+e revalida start-time, root, namespace, tabela, ancestrais no-follow e identidade
+Docker/PID/StartedAt. Drift ou observação incomprovável recusa. Consumidores
+read-only/network-none e parados continuam cercados; para parados, exige PID zero,
+fontes atuais não protegidas e inspeção Docker estável. Containers estrangeiros
+privileged/SYS_ADMIN vivos e layouts não suportados recusam. O envelope efetivo
+admite ext4/xfs/tmpfs, pseudo-filesystems enumerados e overlay somente no root
+com GraphDriver `overlay2`/`overlayfs`; outros layouts exigem qualificação própria.
+
+O helper **exclusivamente CI** agora cria clone detached com `open_tree`, torna
+sua propagação private com `mount_setattr` e obtém IDs comum e não reutilizável
+via `statx(STATX_MNT_ID_UNIQUE)` antes de `move_mount`. Receipt `phase: prepared`
+com ambos os IDs, boot ID, namespace, coordenada e identidades de source/target
+é publicado atomicamente e fsyncado **antes do attachment**. Morte antes disso
+descarta o clone ainda invisível; morte após attachment permite cleanup exato
+mesmo sem completion. Cleanup normal/emergencial verifica essas identidades;
+replacement com o mesmo source/path não pode ser adotado, nem por reutilização
+do ID comum. Continua usando `umount` ordinário, sem lazy/force ou adoção de ID nulo.
+
+ABI: wrappers documentados de libc, headers do runner e pequeno helper C compilado
+com `/usr/bin/cc` já disponível. Exige kernel/headers com `STATX_MNT_ID_UNIQUE`
+(Linux 6.8), glibc 2.36+ e capacidade de mount; falta de suporte falha antes do
+attachment. Não há números de syscall ou layouts de structs inventados em Python.
+Referências: [open_tree(2)](https://man7.org/linux/man-pages/man2/open_tree.2.html),
+[mount_setattr(2)](https://man7.org/linux/man-pages/man2/mount_setattr.2.html),
+[move_mount(2)](https://man7.org/linux/man-pages/man2/move_mount.2.html) e
+[statx(2)](https://man7.org/linux/man-pages/man2/statx.2.html).
+
+O wiring native exige: container ainda lendo os bytes protegidos após unmount e
+rebind do alias, inclusive RO/network-none, `resources()` real recusando com zero
+efeitos; SIGKILL do adquirente após attach e antes de completion, com cleanup
+normal e emergencial em processo novo; e recusa do replacement pelos dois caminhos.
+A deadline absoluta **45m = 38m trabalho + 6m cleanup + 1m margem** continua única,
+inclusive para compilação e processos novos. Esses cenários e a compilação C são
+**NOT RUN / CI-only**. Evidência offline nova: **81 Node PASS, 0 FAIL, 10 skips**;
+Python embutido **20 PASS, 0 FAIL, 2 skips Linux** (22 casos). Compilação Python
+dos filhos gerados não é execução kernel. A revisão independente de fonte recebeu
+**ship** e o primário repetiu esses resultados; CI e verify estável do pacote
+isolado continuam pendentes. **Sem aceite operacional.** A recusa de todo schema CMS
+nativo, contratos ADMIN/grants/witness/incident e preservação histórica continuam
+obrigatórios; nenhuma aprovação operacional é criada por estes checks.
+
 ## Gate B — PostgreSQL compartilhado
 
 O contrato produtivo atual usa exclusivamente o serviço `postgres` e o volume
@@ -1126,6 +1421,24 @@ root:root sem escrita group/other, arquivos root:root 0600, regulares, single-li
 sem symlinks. Mantém os quatro descritores abertos, verifica identidade antes/depois
 e novamente ao sair do contexto. Mudança de nome, inode, tamanho, modo, owner ou
 mtime/ctime é recusa. Leituras não incluem extração, subprocesso ou escrita.
+
+O contrato vale também para `open_verified_production_b0()`, usado por
+`ProductionHost.artifacts()` para manter os mesmos streams e a função de
+reafirmação durante recovery. A identidade completa de nove campos
+(`dev`, `ino`, `mode`, `uid`, `gid`, `nlink`, `size`, `mtime_ns`, `ctime_ns`) é
+retida para o diretório B0, todos os ancestrais e os arquivos; não há modo de
+relaxamento por flag, ambiente ou binding recovery-capable. Criar e remover uma
+entrada B0 durante a retenção não torna a operação válida só porque os quatro
+nomes originais voltaram a corresponder.
+
+Baseline/journal e proteção precisam usar os diretórios separados do layout
+qualificado. Gravar abaixo de um diretório irmão já existente não altera
+recursivamente todos os ancestrais. Se uma gravação legítima de um layout proposto
+alterar uma identidade retida, o fluxo recusa e exige investigação; este contrato
+não declara suporte a inventários arbitrariamente sobrepostos nem demonstra
+separação física contra aliases de mount. A fixture ADMIN deve criar seus arquivos
+de contagem antes da retenção e preservá-los entre retries. Isso não muda os
+critérios de zero restore na recusa por expiração ou exatamente um após retomada.
 
 Reutiliza HMAC/schema/canonicalização de proofs do state, o parser de manifest e
 o parser/fingerprint de tar existentes. Confere hash dos bytes do proof, inventory,

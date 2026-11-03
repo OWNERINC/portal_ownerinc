@@ -32,6 +32,7 @@ PREPARATION_FILES = (
     'ops/deploy-from-production-ci.sh', 'ops/payload-operations-guard.sh', 'ops/payload-control',
     'ops/payload-control-runtime.py', 'ops/compose.payload.production.yaml', 'docker-compose.payload.yml',
     'ops/payload-production-observer.py',
+    'ops/payload-production-b0-recovery.py', 'ops/payload-recovery-storage.py', 'ops/payload-recovery-witness.py',
     'ops/prepare-cms-authenticated.py', 'ops/provision-payload-candidate-trust.py')
 
 
@@ -55,8 +56,12 @@ def validate_preparation_approval(value):
     shape(value['source']['files'], PREPARATION_FILES)
     require(all(hash64(v) for v in value['source']['files'].values()), 'invalid_source_hash')
     baseline = value['hostBaseline']
-    shape(baseline, ('currentCommit', 'legacyImages', 'releaseComposeSha256', 'runtimeComposeSha256',
-                     'releaseOverrideSha256', 'inventoryIdentity', 'installedPredecessors'))
+    baseline_keys = {'currentCommit','legacyImages','releaseComposeSha256','runtimeComposeSha256',
+                     'releaseOverrideSha256','inventoryIdentity','installedPredecessors'}
+    if 'recoveryProfileSha256' in baseline:
+        baseline_keys.add('recoveryProfileSha256')
+        require(hash64(baseline['recoveryProfileSha256']),'invalid_baseline_hash')
+    shape(baseline, baseline_keys)
     require(matches(baseline['currentCommit'], r'[0-9a-f]{40}'), 'invalid_current_commit')
     shape(baseline['legacyImages'], ('api', 'cron'))
     for service, image in baseline['legacyImages'].items():
@@ -78,7 +83,9 @@ def load_preparation_inputs(approval_path, expected_hash, bundle):
     raw = read_protected(approval_path, 0o600, MAX_JSON)
     require(sha(raw) == expected_hash, 'approval_digest_mismatch')
     approval = validate_preparation_approval(strict_json(raw))
-    bundle_layout(bundle, PREPARATION_FILES)
+    extras = ('production-recovery-profile.json','recovery-witness.conf','recovery-witness.known_hosts',
+              'recovery-api.env','recovery-cron.env') if 'recoveryProfileSha256' in approval['hostBaseline'] else ()
+    bundle_layout(bundle, PREPARATION_FILES + extras)
     targets = {}
     for relative in PREPARATION_FILES:
         mode = preparation_mode(relative)
@@ -86,6 +93,23 @@ def load_preparation_inputs(approval_path, expected_hash, bundle):
         require(sha(content) == approval['source']['files'][relative], 'preparation_source_mismatch')
         targets[preparation_target(relative)] = (content, mode, 2 * MAX_JSON)
     targets[PREPARATION_APPROVAL] = (raw, 0o600, MAX_JSON)
+    if extras:
+        profile_raw = read_protected(bundle + '/' + extras[0],0o600,MAX_JSON)
+        require(sha(profile_raw) == approval['hostBaseline']['recoveryProfileSha256'],'recovery_profile_mismatch')
+        # Bootstrap publication never executes bundle code. The authenticated
+        # launcher performs full semantic validation before any host operation.
+        profile = strict_json(profile_raw)
+        shape(profile,('kind','legacySecurity','cmsCatalogs','witness','readiness','topology'))
+        require(profile['kind'] == 'production-b0-recovery-profile-v1','recovery_profile_mismatch')
+        expected = {'production-recovery-profile.json':sha(profile_raw),
+            'recovery-witness.conf':profile['witness']['configSha256'],
+            'recovery-witness.known_hosts':profile['witness']['knownHostsSha256'],
+            'recovery-api.env':profile['readiness']['apiEnvironmentSha256'],
+            'recovery-cron.env':profile['readiness']['cronEnvironmentSha256']}
+        for name in extras:
+            content = read_protected(bundle + '/' + name,0o600,MAX_JSON)
+            require(hash64(expected[name]) and sha(content) == expected[name],'recovery_profile_mismatch')
+            targets['/etc/ownerinc/payload-preparation/' + name] = (content,0o600,MAX_JSON)
     return raw, approval, targets
 
 
@@ -852,15 +876,142 @@ def provision_b0_acceptance(mode, decision_path, expected_digest, bundle):
             require(sha(launcher.host_read(binding['b0']['directory'] + '/manifest.sha256',
                         (0, 0), (0o600,))) == decision['manifestSha256'], 'b0_manifest_mismatch')
             expected = (raw, 0o600, MAX_JSON)
+            recovery_targets = {}
+            if state.recovery_capable_binding(binding):
+                host = launcher.recovery_host((authenticated,captured,None,None,None,record,None),binding['receiptId'])
+                helper = launcher.load_authenticated(captured['ops/payload-production-b0-recovery.py'],
+                    launcher.ROOT + '/ops/payload-production-b0-recovery.py')
+                helper.validate_clone_measurements(strict_json(evidence)['productionRecovery'],host.baseline())
+                recovery_targets = {helper.QUALIFICATION:(evidence,0o600,MAX_JSON),helper.PROCEDURE:(procedure,0o600,MAX_JSON)}
+                for path,value in recovery_targets.items():
+                    existing_target(path,value)
             existing_target(B0_ACCEPTANCE_PATH, expected)
             require(read_protected(decision_path, 0o600, MAX_JSON) == raw and
                     read_protected(PREPARATION_APPROVAL, 0o600, MAX_JSON) == approval_raw and
                     state.read_state(launcher.RUNTIME, repair_head=False)[2:] == (body, head), 'inputs_changed')
             reaffirm()
             if mode == 'apply':
+                for path,value in recovery_targets.items():
+                    publish(path,value)
                 publish(B0_ACCEPTANCE_PATH, expected)
             reaffirm()
     return 'B0 decision ' + ('provisioned' if mode == 'apply' else 'checked') + '; signed acceptance and migration remain separate.'
+
+
+def provision_b0_recovery(mode, decision_path, expected_digest, bundle):
+    require(mode in ('check','apply') and hash64(expected_digest),'invalid_recovery_approval')
+    raw = read_protected(decision_path,0o600,MAX_JSON)
+    require(sha(raw) == expected_digest,'approval_digest_mismatch')
+    approval_raw = read_protected(PREPARATION_APPROVAL,0o600,MAX_JSON)
+    approval = validate_preparation_approval(strict_json(approval_raw))
+    launcher_raw = read_protected(PREPARATION_LAUNCHER,0o755,2*MAX_JSON)
+    require(sha(launcher_raw) == approval['source']['files']['ops/prepare-cms-authenticated.py'],'preparation_source_mismatch')
+    launcher = types.ModuleType('authenticated_recovery_provisioning'); launcher.__file__ = PREPARATION_LAUNCHER
+    exec(compile(launcher_raw,PREPARATION_LAUNCHER,'exec'),launcher.__dict__)
+    bundle_layout(bundle,('recovery-contract.json','recovery-read-token'))
+    contract_raw = read_protected(bundle + '/recovery-contract.json',0o600,MAX_JSON)
+    token = read_protected(bundle + '/recovery-read-token',0o600,16384)
+    with launcher.deployment_lease(close_only=True) as reaffirm:
+        material = launcher._authenticated_material()
+        require(material[0] == approval,'inputs_changed')
+        runtime = launcher.load_runtime_captured(material[1])
+        intent = runtime.STATE.read_state(launcher.RUNTIME,repair_head=False)[2]['installIntent']
+        require(intent is not None,'b0_capture_required')
+        host = launcher.recovery_host(material,intent['binding']['receiptId'])
+        plan = host.inspect(contract_raw)
+        helper = launcher.load_authenticated(material[1]['ops/payload-production-b0-recovery.py'],
+            launcher.ROOT + '/ops/payload-production-b0-recovery.py')
+        helper.readiness_token(token)
+        decision = runtime.STATE.parse_canonical(raw,'recovery_approval_invalid')
+        runtime.STATE.validate_production_recovery_decision(decision,plan)
+        if 'recovery' in intent:
+            require(intent['recovery']['binding']['decisionSha256'] == expected_digest,'destination_conflict')
+        else:
+            require(decision['approvedAt'] <= time.time() < decision['expiresAt'],'recovery_approval_expired')
+        targets = {'production-b0-recovery-contract.json':(contract_raw,0o600,MAX_JSON),
+            'production-b0-recovery.json':(raw,0o600,MAX_JSON),'recovery-read-token':(token,0o600,16384)}
+        for name,value in targets.items():
+            existing_target('/etc/ownerinc/payload-preparation/' + name,value)
+        require(read_protected(decision_path,0o600,MAX_JSON) == raw and
+            read_protected(bundle + '/recovery-contract.json',0o600,MAX_JSON) == contract_raw and
+            read_protected(PREPARATION_APPROVAL,0o600,MAX_JSON) == approval_raw,'inputs_changed')
+        reaffirm()
+        if mode == 'apply':
+            for name,value in targets.items():
+                publish('/etc/ownerinc/payload-preparation/' + name,value)
+        reaffirm()
+    return 'Incident recovery decision ' + ('provisioned' if mode == 'apply' else 'checked') + '; recovery has not executed.'
+
+
+def replace_readiness_token(filename, previous, replacement, reaffirm):
+    """The one mutable credential, under the ADMIN lease and signed intent.
+
+    A crash after rename is reconciled using the exact new hash and existing
+    intent. No decision, contract or lineage file goes through this operation.
+    """
+    require(filename.endswith('/payload-preparation/recovery-read-token'), 'credential_destination_invalid')
+    parent = os.path.dirname(filename)
+    directories(parent)
+    before = os.lstat(filename)
+    require(read_protected(filename,0o600,16384) == previous, 'credential_changed')
+    temporary = parent + '/.readiness-credential-' + uuid.uuid4().hex
+    fd = os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    try:
+        with os.fdopen(fd,'wb',closefd=False) as stream:
+            stream.write(replacement); stream.flush()
+            file_metadata(os.fstat(fd),0o600,16384); os.fsync(fd)
+    finally:
+        os.close(fd)
+    require(read_protected(temporary,0o600,16384) == replacement, 'credential_staged_changed')
+    reaffirm()
+    require(identity(os.lstat(filename)) == identity(before) and
+            read_protected(filename,0o600,16384) == previous, 'credential_changed')
+    os.replace(temporary,filename)
+    sync_directory(parent)
+    require(read_protected(filename,0o600,16384) == replacement, 'credential_publication_failed')
+
+
+def provision_readiness_credential(mode, request_path, expected_digest, bundle):
+    require(mode in ('check','apply') and hash64(expected_digest), 'invalid_credential_request')
+    raw = read_protected(request_path,0o600,MAX_JSON)
+    require(sha(raw) == expected_digest, 'approval_digest_mismatch')
+    approval_raw = read_protected(PREPARATION_APPROVAL,0o600,MAX_JSON)
+    approval = validate_preparation_approval(strict_json(approval_raw))
+    launcher_raw = read_protected(PREPARATION_LAUNCHER,0o755,2*MAX_JSON)
+    require(sha(launcher_raw) == approval['source']['files']['ops/prepare-cms-authenticated.py'], 'preparation_source_mismatch')
+    launcher = types.ModuleType('authenticated_readiness_credential'); launcher.__file__ = PREPARATION_LAUNCHER
+    exec(compile(launcher_raw,PREPARATION_LAUNCHER,'exec'),launcher.__dict__)
+    bundle_layout(bundle,('recovery-read-token',))
+    token = read_protected(bundle + '/recovery-read-token',0o600,16384)
+    with launcher.deployment_lease(close_only=True) as reaffirm:
+        material = launcher._authenticated_material()
+        require(material[0] == approval, 'inputs_changed')
+        runtime = launcher.load_runtime_captured(material[1])
+        intent = runtime.STATE.read_state(launcher.RUNTIME,repair_head=False)[2]['installIntent']
+        require(intent is not None, 'b0_capture_required')
+        host = launcher.recovery_host(material,intent['binding']['receiptId'])
+        value, previous, intended, completed = host.credential_refresh(raw,token)
+        destination = '/etc/ownerinc/payload-preparation/recovery-read-token'
+        def recheck():
+            reaffirm(); host.authenticate()
+            require(read_protected(request_path,0o600,MAX_JSON) == raw and
+                    read_protected(bundle + '/recovery-read-token',0o600,16384) == token and
+                    read_protected(PREPARATION_APPROVAL,0o600,MAX_JSON) == approval_raw, 'inputs_changed')
+        recheck()
+        if mode == 'apply':
+            if not intended:
+                host.event('readiness-credential-intent',value)
+            if previous != token:
+                replace_readiness_token(destination,previous,token,recheck)
+            else:
+                # Reaffirm file and directory durability after a rename/receipt gap.
+                publish(destination,(token,0o600,16384))
+            recheck()
+            if not completed:
+                host.event('readiness-credential-receipt',value)
+            require(host.l.protected(destination,0o600,16384) == token, 'credential_publication_failed')
+        reaffirm()
+    return 'Readiness credential ' + ('refreshed' if mode == 'apply' else 'checked') + '; incident authority and recovery lineage unchanged.'
 
 
 def main(args=None):
@@ -873,7 +1024,7 @@ def main(args=None):
     actions.add_argument('--apply', action='store_true')
     for flag in ('approval', 'approval-sha256', 'bundle'):
         parser.add_argument('--' + flag, required=True)
-    parser.add_argument('--profile', choices=('preparation', 'policy-rotation', 'b0-acceptance'))
+    parser.add_argument('--profile', choices=('preparation', 'policy-rotation', 'b0-acceptance', 'b0-recovery', 'b0-readiness-credential'))
     raw_args = sys.argv[1:] if args is None else args
     require(len(raw_args) == (9 if '--profile' in raw_args else 7), 'invalid_arguments')
     require(all(raw_args.count(flag) <= 1 for flag in
@@ -885,10 +1036,12 @@ def main(args=None):
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'}
             and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C', 'clean_environment_required')
-    if selected.profile == 'b0-acceptance':
+    if selected.profile in ('b0-acceptance','b0-recovery','b0-readiness-credential'):
         require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'), 'python_interpreter_mismatch')
         try:
-            result = provision_b0_acceptance('check' if selected.check else 'apply', selected.approval,
+            provisioner = {'b0-acceptance':provision_b0_acceptance,'b0-recovery':provision_b0_recovery,
+                'b0-readiness-credential':provision_readiness_credential}[selected.profile]
+            result = provisioner('check' if selected.check else 'apply', selected.approval,
                                             selected.approval_sha256, selected.bundle)
         except ProvisionError:
             raise

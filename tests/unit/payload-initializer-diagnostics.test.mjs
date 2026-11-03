@@ -165,6 +165,68 @@ test('fixed B0 reasons retain strict initializer action, substep, exit and frame
   }
 });
 
+test('fixed recovery reasons retain initializer context, exit 2, substep and complete frame boundaries', async () => {
+  const reasons = [
+    'recovery_approval_expired', 'recovery_approval_invalid', 'recovery_baseline_invalid', 'recovery_baseline_required',
+    'recovery_closure_before_reservation_required', 'recovery_completion_proof_missing',
+  ];
+  const state = await readFile('ops/payload-control-state.py', 'utf8');
+  const emitted = new Set([...state.matchAll(/fail\('([a-z][a-z0-9_]+)'\)/gu)].map(match => match[1]));
+  // Synthetic classification frames only; no recovery approval or state change.
+  for (const action of ['initialize-isolated', 'install-floor-commit']) {
+    const context = controlCommandOptions(action, '/synthetic/release');
+    const phase = action === 'initialize-isolated' ? 'request_validation' : 'floor_boundary';
+    const parse = (stderr, extra = {}) => createCommandDiagnostic({ ...context, status: 2, stderr, ...extra });
+    for (const reason of reasons) {
+      assert.ok(emitted.has(reason), `${reason} must be a literal state failure`);
+      const metadata = `PREAUTHORITY_INITIALIZER_DIAGNOSTIC phase=${phase} installStage=reserved commandExit=none commandSignal=none privateStderr=none\n`;
+      const stderr = `${reason}\n${metadata}`;
+      const diagnostic = parse(stderr);
+      assert.equal(diagnostic.controlErrorIdentifier, reason);
+      assert.deepEqual(diagnostic.initializer, { phase, installStage: 'reserved', commandExitCode: null,
+        commandSignal: null, privateStderrRetained: false });
+      assert.deepEqual(sanitizeCommandDiagnostic(diagnostic), diagnostic);
+      assert.deepEqual(parse(Buffer.from(stderr.replaceAll('\n', '\r\n'))), diagnostic);
+      for (const ending of ['\n', '\r\n']) {
+        assert.equal(parse(Buffer.from(reason + ending)).controlErrorIdentifier, reason);
+        assert.equal(parse(reason + ending).initializer, undefined, 'single-line reasons do not invent frame metadata');
+      }
+      const failure = createFixtureCommandFailure({ status: 2, stderr: Buffer.from(stderr) }, context);
+      assert.deepEqual(createRecoveryFailureReportFields({ primaryError: failure }).commandDiagnostic, diagnostic);
+      for (const extra of [
+        { controlCommandContext: undefined }, { controlCommandContext: 'docker-compose' },
+        { controlCommandContext: 'payload-control:recover-install' },
+        { controlCommandContext: `payload-control:${action === 'initialize-isolated' ? 'install-floor-commit' : 'initialize-isolated'}` },
+        { substep: undefined }, { substep: 'payload_control_verify_release' },
+        ...[0, 1, 3, 255, null, '2'].map(status => ({ status })),
+        { signal: 'SIGTERM' }, { errorCode: 'ETIMEDOUT' },
+      ]) {
+        assert.equal(parse(stderr, extra).controlErrorIdentifier, null, `${reason}: mismatched initializer scope`);
+        assert.equal(parse(stderr, extra).initializer, undefined);
+        assert.equal(parse(`${reason}\n`, extra).controlErrorIdentifier, null);
+      }
+      for (const invalid of [
+        stderr.trimEnd(), stderr.slice(0, -12), stderr + stderr, `${reason}\n${stderr}`, stderr + metadata,
+        `private-detail\n${stderr}`, `${stderr}private-detail\n`,
+        stderr.replace(reason, `${reason} private-field=postgresql://private:secret@invalid/database`),
+        stderr.replace(reason, `${reason}_unregistered`), stderr.replace(reason, 'recovery_attacker_value'),
+        stderr.replace(`phase=${phase}`, 'phase=private_phase'),
+        stderr.replace(`phase=${phase}`, `phase=${phase} phase=${phase}`),
+        stderr.replace('installStage=reserved', 'installStage=private_stage'),
+        stderr.replace('commandExit=none', 'commandExit=999'),
+        stderr.replace('commandSignal=none', 'commandSignal=65'),
+        stderr.replace('commandExit=none commandSignal=none', 'commandExit=1 commandSignal=9'),
+        stderr.replace('privateStderr=none', 'privateStderr=none private-field=private-detail'),
+      ]) {
+        const rejected = parse(invalid);
+        assert.equal(rejected.controlErrorIdentifier, null, reason);
+        assert.equal(rejected.initializer, undefined);
+        assert.doesNotMatch(JSON.stringify(rejected), /private-detail|private-field|postgresql:|private_phase|private_stage|unregistered|attacker_value/u);
+      }
+    }
+  }
+});
+
 test('create-only initializer argv is accepted by the real Compose parser without contacting services', async t => {
   const version = spawnSync('docker', ['compose', 'version', '--short'], { encoding: 'utf8', timeout: 30000 });
   if (version.error || version.status !== 0) return t.skip('Docker Compose CLI unavailable; no service or daemon is required for this parser test');

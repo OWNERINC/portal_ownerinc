@@ -60,7 +60,7 @@ def sign():
  raw=s.canonical(s.sign_envelope(proof,key))+b'\n';write('preauthority-proof.json',raw);binding['b0']['proofSha256']=sha(raw)
 sign()
 real_lstat,real_fstat,real_open,real_fdopen=os.lstat,os.fstat,os.open,os.fdopen
-metadata={};requests=[];fd_paths={}
+metadata={};requests=[];fd_paths={};fd_metadata={};readers=[]
 synthetic_ancestors=set();parent=os.path.dirname(root)
 while True:
  synthetic_ancestors.add(parent);next_parent=os.path.dirname(parent)
@@ -86,17 +86,20 @@ def safe_open(name,flags,*args):
  assert not flags&(os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC),'write attempted'
  fd=real_open(name,flags,*args);fd_paths[fd]=name;return fd
 class Reader:
- def __init__(self,stream):self.stream=stream
+ def __init__(self,stream):self.stream=stream;readers.append(self)
  def __enter__(self):return self
  def __exit__(self,*args):self.stream.close()
  def read(self,size=-1):
   assert 0<=size<=1024*1024,'unbounded read';requests.append(size);return self.stream.read(size)
  def __getattr__(self,name):return getattr(self.stream,name)
+def observed_fd(fd):
+ value=observed(real_lstat(fd_paths[fd]) if os.name=='nt' else real_fstat(fd))
+ value.__dict__.update(fd_metadata.get(fd_paths[fd],{}));return value
 @contextmanager
-def checking():
+def checking(stream_helper=False):
  ancestor_observations.clear()
  with patch.object(os,'lstat',side_effect=lambda p:observed(real_lstat(p),p)), \
-      patch.object(os,'fstat',side_effect=lambda fd:observed(real_lstat(fd_paths[fd]) if os.name=='nt' else real_fstat(fd))), \
+      patch.object(os,'fstat',side_effect=observed_fd), \
       patch.object(os,'open',side_effect=safe_open), \
       patch.object(os,'fdopen',side_effect=lambda fd,*a,**kw:Reader(real_fdopen(fd,*a,**kw))), \
       patch.object(os,'mkdir',side_effect=AssertionError('mkdir forbidden')), \
@@ -105,7 +108,8 @@ def checking():
       patch.object(r,'Runtime',side_effect=AssertionError('Runtime forbidden')), \
       patch.object(os,'O_NOFOLLOW',getattr(os,'O_NOFOLLOW',0),create=True), \
       patch.object(os,'O_NONBLOCK',getattr(os,'O_NONBLOCK',0),create=True):
-  with r.verify_production_b0_artifacts(binding,inventory,key) as result:yield result
+  helper=r.open_verified_production_b0 if stream_helper else r.verify_production_b0_artifacts
+  with helper(binding,inventory,key) as result:yield result
 def check():
  with checking() as result:return result
 def refused(callback=check,code=None):
@@ -346,5 +350,71 @@ def replace_synthetic_parent():
  with checking():metadata[shared_parent]={'st_ino':real_lstat(shared_parent).st_ino+1}
 try:refused(replace_synthetic_parent,code='backup_artifact_changed')
 finally:metadata.clear()
+`);
+});
+
+test('public and stream B0 readers reject persistent and removed extra entries throughout retained scopes', () => {
+  probe(String.raw`
+for stream_helper in (False,True):
+ for transient in (False,True):
+  extra=os.path.join(directory,'extra');before=real_lstat(directory)
+  def change_inventory():
+   with checking(stream_helper) as result:
+    with open(extra,'xb') as out:out.write(b'outside writer')
+    if transient:os.unlink(extra)
+    assert set(os.listdir(directory))==set(r.PRODUCTION_B0_LIMITS)| (set() if transient else {'extra'})
+    # Actual directory metadata remains live, including after restoring four names.
+    after=real_lstat(directory)
+    assert any(getattr(before,k)!=getattr(after,k) for k in ('st_nlink','st_size','st_mtime_ns','st_ctime_ns'))
+    if stream_helper:result['reaffirm']()
+  try:refused(change_inventory,code='backup_artifact_changed')
+  finally:
+   if os.path.exists(extra):os.unlink(extra)
+  assert readers and all(reader.closed for reader in readers)
+ # Stream helper must also reaffirm automatically at ordinary context exit.
+ if stream_helper:
+  def change_at_exit():
+   with checking(True):
+    with open(extra,'xb') as out:out.write(b'exit race')
+    os.unlink(extra)
+  refused(change_at_exit,code='backup_artifact_changed')
+ assert all(reader.closed for reader in readers)
+`);
+});
+
+test('both B0 readers pin all nine identity fields for directories, ancestry, file paths and retained FDs', () => {
+  probe(String.raw`
+fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+paths=[directory,os.path.dirname(directory),root,os.path.dirname(root)]+[os.path.join(directory,n) for n in r.PRODUCTION_B0_LIMITS]
+for stream_helper in (False,True):
+ for fd_only in (False,True):
+  for target in (paths[4:] if fd_only else paths):
+   for field in fields:
+    before=observed(real_lstat(target),target)
+    def change_identity():
+     with checking(stream_helper) as result:
+      (fd_metadata if fd_only else metadata)[target]={field:getattr(before,field)+1}
+      if stream_helper:result['reaffirm']()
+    try:refused(change_identity,code='backup_artifact_changed')
+    finally:metadata.clear();fd_metadata.clear()
+    assert all(reader.closed for reader in readers),(stream_helper,fd_only,target,field)
+`);
+});
+
+test('public and stream B0 readers close the same four real descriptors on caller exceptions', () => {
+  probe(String.raw`
+for stream_helper in (False,True):
+ start=len(readers)
+ try:
+  with checking(stream_helper) as result:
+   retained=readers[start:];assert len(retained)==4 and not any(reader.closed for reader in retained)
+   if stream_helper:
+    assert set(result['streams'])==set(r.PRODUCTION_B0_LIMITS)
+    assert list(result['streams'].values())==retained
+    result['reaffirm']()
+   raise InterruptedError('caller interrupted')
+ except InterruptedError:pass
+ else:raise AssertionError('caller exception lost')
+ assert all(reader.closed for reader in retained)
 `);
 });

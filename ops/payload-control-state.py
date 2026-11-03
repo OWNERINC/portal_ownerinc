@@ -67,6 +67,9 @@ INSTALL_TRANSITION_STAGES = INSTALL_STAGES + ('floor_commit_pending', 'floor_com
 PRODUCTION_TRANSITION_STAGES = PRODUCTION_INSTALL_STAGES + ('floor_commit_pending', 'floor_committed')
 INSTALL_RECOVERY_STAGES = ('reserved', 'database_restore_pending', 'database_restored',
                            'uploads_restore_pending', 'uploads_restored', 'data_verified_readiness_pending')
+PRODUCTION_RECOVERY_STAGES = ('reserved', 'quiesce_pending', 'quiesced', 'protection_capture_pending',
+    'protection_verified', 'database_restore_pending', 'database_restored', 'uploads_restore_pending',
+    'uploads_restored', 'data_verified_readiness_pending', 'legacy_start_pending', 'legacy_ready_held')
 
 
 class StateError(Exception):
@@ -132,6 +135,135 @@ def production_binding(binding):
 
 def gated_production_binding(binding):
     return production_binding(binding) and binding.get('bindingVersion') == 4 and binding.get('b0GateVersion') == 1
+
+
+def recovery_capable_binding(binding):
+    return gated_production_binding(binding) and binding.get('recoveryGateVersion') == 1
+
+
+def value_sha256(value):
+    """Canonical value hash excludes LF; file/decision hashes include their LF."""
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def validate_recovery_baseline_reference(value):
+    _exact_keys(value, {'proofSha256', 'originStateSha256', 'manifestSha256'}, 'recovery_baseline_invalid')
+    if any(not isinstance(v, str) or not HEX_64.fullmatch(v) for v in value.values()):
+        fail('recovery_baseline_invalid')
+    return value
+
+
+def bind_recovery_baseline(directory, binding, reference):
+    validate_recovery_baseline_reference(reference)
+    _, _, body, head = read_state(directory, repair_head=False)
+    intent = assert_install_matches(body, binding)
+    if intent.get('b0RecoveryBaseline') == reference:
+        return body
+    if not recovery_capable_binding(binding) or intent['stage'] != 'reserved' or \
+       'b0Acceptance' in intent or 'b0RecoveryBaseline' in intent or reference['originStateSha256'] != head:
+        fail('recovery_baseline_invalid')
+    return transition(directory, lambda current: current['installIntent'].update(b0RecoveryBaseline=reference))
+
+
+def validate_production_recovery_plan(plan, intent):
+    _exact_keys(plan, {'kind', 'installBindingSha256', 'originStateSha256', 'originInstallStage',
+        'b0AcceptanceSha256', 'baselineProofSha256', 'contractSha256'}, 'install_recovery_invalid')
+    if not recovery_capable_binding(intent['binding']) or plan['kind'] != 'production-prefloor-recovery-plan-v1' or \
+       plan['originInstallStage'] != intent['stage'] or intent['stage'] not in PRODUCTION_INSTALL_STAGES or \
+       plan['installBindingSha256'] != value_sha256(intent['binding']) or \
+       plan['b0AcceptanceSha256'] != intent.get('b0Acceptance', {}).get('decisionSha256') or \
+       plan['baselineProofSha256'] != intent.get('b0RecoveryBaseline', {}).get('proofSha256'):
+        fail('install_recovery_invalid')
+    for name in ('installBindingSha256', 'originStateSha256', 'b0AcceptanceSha256', 'baselineProofSha256', 'contractSha256'):
+        if not isinstance(plan[name], str) or not HEX_64.fullmatch(plan[name]):
+            fail('install_recovery_invalid')
+    return plan
+
+
+def validate_production_recovery_decision(decision, plan):
+    _exact_keys(decision, {'schemaVersion', 'kind', 'purpose', 'recoveryPlanSha256', 'approvedAt',
+        'expiresAt', 'authenticatedChannel'}, 'recovery_approval_invalid')
+    if type(decision['schemaVersion']) is not int or decision['schemaVersion'] != 1 or \
+       decision['kind'] != 'production-exact-b0-recovery-approval-v1' or \
+       decision['purpose'] != 'restore-previous-legacy-prefloor-held' or \
+       decision['authenticatedChannel'] != 'independently-authenticated-admin-vps' or \
+       decision['recoveryPlanSha256'] != value_sha256(plan) or \
+       type(decision['approvedAt']) is not int or type(decision['expiresAt']) is not int or \
+       not 0 < decision['approvedAt'] < decision['expiresAt'] <= decision['approvedAt'] + 3600:
+        fail('recovery_approval_invalid')
+    return decision
+
+
+def validate_production_recovery(value, intent):
+    _exact_keys(value, {'binding', 'stage', 'proofs', 'events'}, 'install_recovery_invalid')
+    binding = value['binding']
+    _exact_keys(binding, {'recoveryVersion', 'purpose', 'originStateSha256', 'plan', 'decision', 'decisionSha256'},
+                'install_recovery_invalid')
+    if type(binding['recoveryVersion']) is not int or binding['recoveryVersion'] != 3 or \
+       binding['purpose'] != 'production-exact-b0-prefloor-recovery' or value['stage'] not in PRODUCTION_RECOVERY_STAGES:
+        fail('install_recovery_invalid')
+    plan = validate_production_recovery_plan(binding['plan'], intent)
+    decision = validate_production_recovery_decision(binding['decision'], plan)
+    if binding['originStateSha256'] != plan['originStateSha256'] or \
+       hashlib.sha256(canonical(decision) + b'\n').hexdigest() != binding['decisionSha256']:
+        fail('recovery_approval_invalid')
+    proofs = value['proofs']
+    if not isinstance(proofs, dict) or not set(proofs) <= {'quiescence', 'protection', 'database', 'uploads', 'application'}:
+        fail('install_recovery_invalid')
+    for digest in proofs.values():
+        if not isinstance(digest, str) or not HEX_64.fullmatch(digest):
+            fail('install_recovery_invalid')
+    required_proofs = set()
+    for stage, proof in (('quiesced', 'quiescence'), ('protection_verified', 'protection'),
+                         ('database_restored', 'database'), ('uploads_restored', 'uploads'), ('legacy_ready_held', 'application')):
+        if PRODUCTION_RECOVERY_STAGES.index(value['stage']) >= PRODUCTION_RECOVERY_STAGES.index(stage):
+            required_proofs.add(proof)
+    if set(proofs) != required_proofs:
+        fail('recovery_completion_proof_missing')
+    events = value['events']
+    if not isinstance(events, list) or len(events) > 256:
+        fail('install_recovery_invalid')
+    for event in events:
+        _exact_keys(event, {'kind', 'sha256'}, 'install_recovery_invalid')
+        if event['kind'] not in ('capture-attempt', 'container-intent', 'container-receipt',
+                                'readiness-credential-intent', 'readiness-credential-receipt') or \
+           not isinstance(event['sha256'], str) or not HEX_64.fullmatch(event['sha256']):
+            fail('install_recovery_invalid')
+
+
+def begin_production_recovery(directory, binding, plan, decision, decision_sha256):
+    body = read_state(directory, repair_head=False)[2]
+    intent = assert_install_matches(body, binding)
+    recovery = {'binding': {'recoveryVersion': 3, 'purpose': 'production-exact-b0-prefloor-recovery',
+        'originStateSha256': plan['originStateSha256'], 'plan': plan, 'decision': decision,
+        'decisionSha256': decision_sha256}, 'stage': 'reserved', 'proofs': {}, 'events': []}
+    validate_production_recovery(recovery, intent)
+    if 'recovery' in intent:
+        if intent['recovery']['binding'] != recovery['binding']:
+            fail('install_recovery_invalid')
+        return body
+    return transition(directory, lambda current: current['installIntent'].update(recovery=recovery))
+
+
+def advance_production_recovery(directory, binding, stage, proof=None, event=None):
+    body = read_state(directory, repair_head=False)[2]
+    recovery = assert_install_matches(body, binding).get('recovery')
+    if recovery is None or recovery['binding'].get('recoveryVersion') != 3:
+        fail('install_recovery_invalid')
+    def advance(current):
+        target = current['installIntent']['recovery']
+        target['stage'] = stage
+        if proof is not None:
+            name, digest = proof
+            if name in target['proofs'] and target['proofs'][name] != digest:
+                fail('install_recovery_invalid')
+            target['proofs'][name] = digest
+        if event is not None:
+            target['events'].append(event)
+    expected = json.loads(json.dumps(body)); advance(expected)
+    if expected == body:
+        return body
+    return transition(directory, advance)
 
 
 def validate_b0_acceptance(value, binding):
@@ -244,6 +376,8 @@ def validate_state_body(body):
             names.add('authorizationFreshAtReservation')
             if gated_production_binding(install['binding']) and 'b0Acceptance' in install:
                 names.add('b0Acceptance')
+            if recovery_capable_binding(install['binding']) and 'b0RecoveryBaseline' in install:
+                names.add('b0RecoveryBaseline')
         _exact_keys(install, names, 'invalid_cold_state')
         validate_install_binding(install['binding'])
         transition_stages = PRODUCTION_TRANSITION_STAGES if install['binding'].get('bindingVersion') == 4 and \
@@ -257,6 +391,11 @@ def validate_state_body(body):
            body['rollbackTargetImages'] is not None:
             fail('invalid_cold_state')
         binding = install['binding']
+        if 'b0RecoveryBaseline' in install:
+            validate_recovery_baseline_reference(install['b0RecoveryBaseline'])
+        if recovery_capable_binding(binding) and ('b0Acceptance' in install or stage != 'reserved') and \
+           'b0RecoveryBaseline' not in install:
+            fail('recovery_baseline_required')
         if gated_production_binding(binding):
             if 'b0Acceptance' in install:
                 accepted = install['b0Acceptance']
@@ -373,9 +512,15 @@ def validate_install_binding(binding):
         names |= {'authority', 'sourceCommit', 'project'}
     if version == 4:
         names.add('sharedCluster')
+        if 'recoveryGateVersion' in binding:
+            names |= {'recoveryGateVersion', 'preparationClosureSha256'}
         if 'b0GateVersion' in binding:
             names |= {'b0GateVersion', 'receiptId'}
     _exact_keys(binding, names, 'invalid_cold_state')
+    if 'recoveryGateVersion' in binding and (not gated_production_binding(binding) or
+            type(binding['recoveryGateVersion']) is not int or binding['recoveryGateVersion'] != 1 or
+            not isinstance(binding['preparationClosureSha256'], str) or not HEX_64.fullmatch(binding['preparationClosureSha256'])):
+        fail('invalid_cold_state')
     if 'b0GateVersion' in binding and (not production_binding(binding) or
             type(binding['b0GateVersion']) is not int or binding['b0GateVersion'] != 1 or
             not isinstance(binding['receiptId'], str) or not re.fullmatch(r'payload-[a-z0-9_]{8}', binding['receiptId'])):
@@ -458,6 +603,9 @@ def validate_production_correspondence(binding, approval, record, inventory, aut
     The launcher supplies hashes of the protected bytes it actually verified.
     """
     validate_install_binding(binding)
+    if recovery_capable_binding(binding) and (binding['preparationClosureSha256'] != value_sha256(approval['source']) or
+                                             'recoveryProfileSha256' not in approval['hostBaseline']):
+        fail('recovery_closure_before_reservation_required')
     INVENTORY.validate(inventory)
     _exact_keys(authority, {'sourceApprovalSha256', 'policySha256', 'recordSha256'}, 'invalid_cold_state')
     if any(not isinstance(value, str) or not HEX_64.fullmatch(value) for value in authority.values()):
@@ -597,6 +745,8 @@ def advance_install(directory, binding, stage, cms_target=None, b1=None):
     cms_target is an explicit creator-bound record, never auto-learned on retry."""
     old = read_state(directory)[2]
     intent = assert_install_matches(old, binding)
+    if 'recovery' in intent:
+        fail('install_recovery_invalid')
     stages = PRODUCTION_INSTALL_STAGES if binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod' else INSTALL_STAGES
     if stage not in stages:
         fail('invalid_cold_state')
@@ -630,6 +780,8 @@ def advance_install(directory, binding, stage, cms_target=None, b1=None):
 
 
 def validate_install_recovery(value, intent):
+    if isinstance(value, dict) and isinstance(value.get('binding'), dict) and value['binding'].get('recoveryVersion') == 3:
+        return validate_production_recovery(value, intent)
     _exact_keys(value, {'binding', 'stage'}, 'install_recovery_invalid')
     if value['stage'] not in INSTALL_RECOVERY_STAGES or intent['stage'] not in ('reserved', 'portal_grants_pending'):
         fail('install_recovery_invalid')
@@ -759,6 +911,8 @@ def record_install_creation(directory, binding, kind, name, receipt):
         fail('invalid_cold_state')
     def record(body):
         intent = assert_install_matches(body, binding)
+        if 'recovery' in intent:
+            fail('install_recovery_invalid')
         if intent['stage'] != 'cms_resources_pending' or 'creation' not in intent:
             fail('invalid_cold_state')
         intent['creation'][kind][name] = json.loads(json.dumps(receipt))
@@ -768,6 +922,8 @@ def record_install_creation(directory, binding, kind, name, receipt):
 def begin_install_floor(directory, binding, fingerprint):
     def begin(body):
         intent = assert_install_matches(body, binding)
+        if 'recovery' in intent:
+            fail('install_recovery_invalid')
         required = 'b1_committed' if binding.get('bindingVersion') == 4 and binding.get('project') == 'ownerinc-portal-prod' else 'provisioned'
         if intent['stage'] != required:
             fail('invalid_cold_state')
@@ -780,6 +936,8 @@ def begin_install_floor(directory, binding, fingerprint):
 def commit_install_floor(directory, binding):
     def commit(body):
         intent = assert_install_matches(body, binding)
+        if 'recovery' in intent:
+            fail('install_recovery_invalid')
         if intent['stage'] != 'floor_commit_pending':
             fail('invalid_cold_state')
         intent['stage'] = 'floor_committed'
@@ -984,8 +1142,27 @@ def validate_state_transition(old, new):
            {k: v for k, v in old_install.items() if k != 'recovery'} != {k: v for k, v in new_install.items() if k != 'recovery'} or \
            old_install['recovery']['binding'] != new_install['recovery']['binding']:
             fail('install_recovery_invalid')
-        before = INSTALL_RECOVERY_STAGES.index(old_install['recovery']['stage'])
-        after = INSTALL_RECOVERY_STAGES.index(new_install['recovery']['stage'])
+        r3 = old_install['recovery']['binding'].get('recoveryVersion') == 3
+        recovery_stages = PRODUCTION_RECOVERY_STAGES if r3 else INSTALL_RECOVERY_STAGES
+        before = recovery_stages.index(old_install['recovery']['stage'])
+        after = recovery_stages.index(new_install['recovery']['stage'])
+        if r3:
+            previous, following = old_install['recovery'], new_install['recovery']
+            if any(following['proofs'].get(k) != v for k, v in previous['proofs'].items()) or \
+               following['events'][:len(previous['events'])] != previous['events'] or \
+               len(following['events']) not in (len(previous['events']), len(previous['events']) + 1):
+                fail('install_recovery_invalid')
+            if len(following['events']) > len(previous['events']):
+                kind = following['events'][-1]['kind']
+                allowed = ('legacy_start_pending','legacy_ready_held') if kind.startswith('readiness-credential-') else (
+                    ('protection_capture_pending',) if kind == 'capture-attempt' else ('legacy_start_pending',))
+                if previous['stage'] != following['stage'] or previous['stage'] not in allowed:
+                    fail('install_recovery_invalid')
+            new_proofs = set(following['proofs']) - set(previous['proofs'])
+            expected_proofs = {'quiesced': 'quiescence', 'protection_verified': 'protection',
+                'database_restored': 'database', 'uploads_restored': 'uploads', 'legacy_ready_held': 'application'}
+            if new_proofs and (after != before + 1 or new_proofs != {expected_proofs.get(following['stage'])}):
+                fail('install_recovery_invalid')
         if after not in (before, before + 1) or any(old[k] != new[k] for k in old if k not in ('sequence', 'previousStateSha256', 'installIntent')):
             fail('install_recovery_invalid')
     elif new_install is not None and 'recovery' in new_install:
@@ -993,7 +1170,19 @@ def validate_state_transition(old, new):
            new_install['recovery']['binding']['originStateSha256'] != new['previousStateSha256'] or \
            new_install['recovery']['stage'] != 'reserved' or any(old[k] != new[k] for k in old if k not in ('sequence', 'previousStateSha256', 'installIntent')):
             fail('install_recovery_invalid')
+        if new_install['recovery']['binding'].get('recoveryVersion') == 3 and (
+                new_install['recovery']['proofs'] or new_install['recovery']['events']):
+            fail('install_recovery_invalid')
     if old_install is not None:
+        if 'b0RecoveryBaseline' in old_install:
+            if new_install is None or old_install['b0RecoveryBaseline'] != new_install.get('b0RecoveryBaseline'):
+                fail('recovery_baseline_invalid')
+        elif new_install is not None and 'b0RecoveryBaseline' in new_install:
+            if old_install['stage'] != 'reserved' or 'b0Acceptance' in old_install or \
+               old_install != {k: v for k, v in new_install.items() if k != 'b0RecoveryBaseline'} or \
+               new_install['b0RecoveryBaseline']['originStateSha256'] != new['previousStateSha256'] or \
+               any(old[k] != new[k] for k in old if k not in ('sequence', 'previousStateSha256', 'installIntent')):
+                fail('recovery_baseline_invalid')
         if new_install is None or canonical(old_install['binding']) != canonical(new_install['binding']):
             fail('planned_release_mismatch')
         if gated_production_binding(old_install['binding']):
@@ -1038,7 +1227,7 @@ def validate_state_transition(old, new):
         if old['schemaVersion'] != 2 or old['cmsStatus'] != 'cold' or old['admission'] != 'closed' or \
            old['restoreIntent'] is not None or new_install['stage'] != 'reserved':
             fail('invalid_cold_state')
-        if 'b0Acceptance' in new_install:
+        if 'b0Acceptance' in new_install or 'b0RecoveryBaseline' in new_install or 'recovery' in new_install:
             fail('b0_acceptance_origin_mismatch')
     return new
 
@@ -1244,6 +1433,14 @@ def transition(directory, mutate, authorization_expires_at=None, clock=None, bef
         now = time.time()
         if not decision['acceptedAt'] <= now < decision['expiresAt']:
             fail('b0_acceptance_expired')
+    recovery = intent.get('recovery') if intent is not None else None
+    old_recovery = old_intent.get('recovery') if old_intent is not None else None
+    if recovery is not None and recovery['binding'].get('recoveryVersion') == 3 and (
+            old_recovery is None or old_recovery['stage'] == 'protection_verified' and
+            recovery['stage'] == 'database_restore_pending'):
+        approval = recovery['binding']['decision']
+        if not approval['approvedAt'] <= time.time() < approval['expiresAt']:
+            fail('recovery_approval_expired')
     _write_exclusive(journal_path, raw, 0o600)
     if os.name != 'nt':
         directory_fd = os.open(state_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))

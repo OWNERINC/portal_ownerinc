@@ -42,6 +42,7 @@ FILES = (
     'ops/deploy-from-production-ci.sh', 'ops/payload-operations-guard.sh', 'ops/payload-control',
     'ops/payload-control-runtime.py', 'ops/compose.payload.production.yaml', 'docker-compose.payload.yml',
     'ops/payload-production-observer.py',
+    'ops/payload-production-b0-recovery.py', 'ops/payload-recovery-storage.py', 'ops/payload-recovery-witness.py',
     'ops/prepare-cms-authenticated.py', 'ops/provision-payload-candidate-trust.py')
 
 
@@ -1202,7 +1203,9 @@ def apply_install(receipt_id, operation='apply', resume_request=None):
                                 'recordSha256': approval['admission']['recordSha256']},
                   'inventoryIdentity': authorization['inventoryIdentity'],
                   'sourceCommit': approval['hostBaseline']['currentCommit'],
-                   'expiresAt': authorization['expiresAt'], 'nonce': authorization['nonce'], 'receiptId': receipt_id}
+                    'expiresAt': authorization['expiresAt'], 'nonce': authorization['nonce'], 'receiptId': receipt_id}
+        if 'recoveryProfileSha256' in approval['hostBaseline']:
+            ticket['preparationClosureSha256'] = runtime.STATE.value_sha256(approval['source'])
         ticket_path = RUNTIME + '/payload-production-install-' + authorization['nonce'] + '.json'
         ticket_raw = runtime.STATE.canonical(ticket) + b'\n'
         _write_exact_private(ticket_path, ticket_raw)
@@ -1246,7 +1249,7 @@ def execute_install(operation, receipt_id):
     destination = RELEASES + '/' + record['commit']
     ticket_path = RUNTIME + '/payload-production-install-' + record['authorization']['nonce'] + '.json'
     ticket = runtime.STATE.parse_canonical(host_read(ticket_path, (0, 0), (0o600,)), 'invalid_cold_state')
-    require(ticket == {'schemaVersion': 1, 'kind': 'payload-production-install-request-v1',
+    expected_ticket = {'schemaVersion': 1, 'kind': 'payload-production-install-request-v1',
         'candidate': runtime.STATE.production_candidate(record),
         'authority': {'sourceApprovalSha256': approval_binding_digest(approval),
                       'policySha256': approval['admission']['policySha256'],
@@ -1254,7 +1257,10 @@ def execute_install(operation, receipt_id):
         'inventoryIdentity': record['authorization']['inventoryIdentity'],
         'sourceCommit': approval['hostBaseline']['currentCommit'],
         'expiresAt': record['authorization']['expiresAt'], 'nonce': record['authorization']['nonce'],
-        'receiptId': receipt_id})
+        'receiptId': receipt_id}
+    if 'recoveryProfileSha256' in approval['hostBaseline']:
+        expected_ticket['preparationClosureSha256'] = runtime.STATE.value_sha256(approval['source'])
+    require(ticket == expected_ticket)
     if operation != 'capture':
         protected(B0_ACCEPTANCE, 0o600, 1024 * 1024)
     os.environ.update(PORTAL_OPERATION_LOCK=LOCK, PORTAL_OPERATION_LOCK_HELD=LOCK,
@@ -1263,6 +1269,62 @@ def execute_install(operation, receipt_id):
     action = {'apply': 'initialize-isolated', 'capture': 'capture-production-b0', 'accept': 'accept-production-b0'}[operation]
     runtime.Runtime(action, destination, ticket_path).run()
     verify_inherited_lease()
+
+
+def recovery_host(material, receipt_id):
+    require(re.fullmatch(r'payload-[a-z0-9_]{8}',receipt_id))
+    captured = material[1]
+    helper = load_authenticated(captured['ops/payload-production-b0-recovery.py'],
+                                ROOT + '/ops/payload-production-b0-recovery.py')
+    # load_authenticated uses an in-memory module; pass only this authenticated
+    # launcher's fixed functions, never a request-created operations dictionary.
+    launcher = types.SimpleNamespace(**globals())
+    return helper.ProductionHost(launcher,captured,material,receipt_id)
+
+
+def execute_recovery(receipt_id, baseline=False):
+    verify_inherited_lease()
+    material = _authenticated_material()
+    host = recovery_host(material,receipt_id)
+    result = host.capture_baseline() if baseline else host.execute(protected(
+        '/etc/ownerinc/payload-preparation/production-b0-recovery.json',0o600,1024*1024))
+    verify_inherited_lease()
+    print(json.dumps(result,sort_keys=True,separators=(',',':')))
+
+
+def administrative_recovery(receipt_id, operation):
+    require(operation in ('baseline','check','recover'))
+    with deployment_lease(close_only=True) as reaffirm:
+        material = _authenticated_material()
+        runtime = load_runtime_captured(material[1])
+        if operation != 'check':
+            def before_repair(body):
+                intent = body.get('installIntent')
+                require(intent is not None and runtime.STATE.recovery_capable_binding(intent['binding']) and
+                        intent['binding']['receiptId'] == receipt_id)
+                descriptor,pathname = os.fstat(9),os.lstat(LOCK)
+                require(intent['binding']['lease'] == {'device':descriptor.st_dev,'inode':descriptor.st_ino} and
+                        (descriptor.st_dev,descriptor.st_ino) == (pathname.st_dev,pathname.st_ino))
+                runtime.STATE.validate_production_correspondence(intent['binding'],material[0],material[5],
+                    runtime._inventory(force=True)['document'],{'sourceApprovalSha256':approval_binding_digest(material[0]),
+                    'policySha256':material[0]['admission']['policySha256'],'recordSha256':material[0]['admission']['recordSha256']})
+                if 'recovery' in intent:
+                    raw = protected('/etc/ownerinc/payload-preparation/production-b0-recovery.json',0o600,1024*1024)
+                    require(hashlib.sha256(raw).hexdigest() == intent['recovery']['binding']['decisionSha256'])
+            runtime.STATE.read_state(RUNTIME,repair_head=True,before_repair=before_repair)
+        host = recovery_host(material,receipt_id)
+        if operation == 'check':
+            plan = host.inspect()
+            return {'plan':plan,'recoveryPlanSha256':runtime.STATE.value_sha256(plan),
+                    'contract':host.proposed_contract(),'destructiveOperationAuthorized':False}
+        reaffirm()
+        result = run_bounded_subprocess(['/usr/bin/python3','-I','-S','-B',LAUNCHER,
+            '--execute-b0-recovery-baseline' if operation == 'baseline' else '--execute-b0-recovery',receipt_id],
+            timeout=APPLY_RUNTIME_TIMEOUT_SECONDS,pass_fds=(9,),group_mode='new')
+        require(result.returncode == 0)
+        reaffirm()
+        require(_authenticated_material()[4:6] == material[4:6])
+        return json.loads(result.stdout)
 
 
 def verify():
@@ -1370,13 +1432,20 @@ def main():
     args = sys.argv[1:]
     require(args in (['--check'], ['--apply']) or len(args) == 2 and args[0] in
               ('--verify-context', '--create-inventory', '--check-install-plan', '--apply-install', '--resume-install', '--collect-context',
-              '--capture-b0', '--accept-b0', '--execute-apply', '--execute-capture', '--execute-accept'))
+              '--capture-b0', '--accept-b0', '--execute-apply', '--execute-capture', '--execute-accept',
+              '--capture-b0-recovery-baseline','--check-b0-recovery','--recover-b0',
+              '--execute-b0-recovery','--execute-b0-recovery-baseline'))
     require(sys.platform == 'linux' and os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 0)
     require(sys.flags.isolated and sys.flags.no_site and sys.dont_write_bytecode)
     require(set(os.environ) <= {'PATH', 'LANG', 'LC_ALL'} and os.environ.get('PATH') == '/usr/bin:/bin'
             and os.environ.get('LANG') == 'C' and os.environ.get('LC_ALL') == 'C')
     require(os.path.realpath(sys.executable) == os.path.realpath('/usr/bin/python3'))
-    if args[0].startswith('--execute-'):
+    if args[0] in ('--execute-b0-recovery','--execute-b0-recovery-baseline'):
+        execute_recovery(args[1],args[0].endswith('-baseline'))
+    elif args[0] in ('--capture-b0-recovery-baseline','--check-b0-recovery','--recover-b0'):
+        operation = {'--capture-b0-recovery-baseline':'baseline','--check-b0-recovery':'check','--recover-b0':'recover'}[args[0]]
+        print(json.dumps(administrative_recovery(args[1],operation),sort_keys=True))
+    elif args[0].startswith('--execute-'):
         execute_install(args[0][10:], args[1])
     elif args[0] in ('--capture-b0', '--accept-b0'):
         print(json.dumps(apply_install(args[1], 'capture' if args[0] == '--capture-b0' else 'accept'), sort_keys=True))
