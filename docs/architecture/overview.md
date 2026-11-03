@@ -324,8 +324,10 @@ autorizadas, uma para cada execução:
   033 ausentes, insere o curso legado e executa as migrations pendentes.
 
 Ambos recusam bases com tabelas em `public`, sem apagar tabelas para preparar o
-teste. Sem `MIGRATION_TEST_SETUP`, permanece o fluxo usual de migrations sobre a
-base descartável fornecida. As verificações cobrem repetição sem reaplicar ledger,
+teste. Sem `MIGRATION_TEST_SETUP`, o harness falha antes de abrir o pool; o fluxo
+usual do migrator é separado dos testes de integração. Os cenários PostgreSQL
+fresh/bootstrap, upgrade e readiness foram executados no cluster descartável
+aprovado da OWN-43. As verificações cobrem repetição sem reaplicar ledger,
 defaults, restrições de mídia, isolamento do progresso por usuário/versão,
 cascatas, FK de cargo, tipos CMS e privilégios reais. Os fixtures de comportamento
 Academy são revertidos por transação. Nesta entrega, a execução PostgreSQL dos

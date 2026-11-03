@@ -92,7 +92,8 @@ vigente para substituí-lo ou recriar o fluxo Owner News.
 Se for necessário validar somente o ledger, migrations e constraints históricas
 preservadas, `npm run test:migrations` continua sendo uma verificação válida em
 banco **local descartável**: configure `MIGRATION_DATABASE_URL`,
-`MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_TEST_CLUSTER_ID` e as senhas das
+`MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_TEST_SETUP=bootstrap|upgrade`,
+`MIGRATION_TEST_CLUSTER_ID` e as senhas das
 roles. Antes do teste, configure o marcador no cluster descartável com
 `MIGRATION_TEST_CLUSTER_ID=$(psql ... -Atc "SELECT system_identifier FROM pg_control_system()")`.
 Esse comando não publica,

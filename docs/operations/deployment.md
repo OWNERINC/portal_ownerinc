@@ -337,7 +337,8 @@ os GETs pelo domínio HTTPS para verificar também a borda real.
 
 O CI usa Node 24, testa migrations em PostgreSQL real, executa invariantes/sintaxe/Compose, constrói e escaneia as imagens com Trivy, rejeita vulnerabilidades `high` ou `critical`, publica SBOMs SPDX e envia imagens imutáveis ao GHCR em pushes na `main`.
 `npm run test:migrations` exige `MIGRATION_TEST_DISPOSABLE=true`,
-`MIGRATION_TEST_CLUSTER_ID` e não pode ser executado com `NODE_ENV=production`;
+`MIGRATION_TEST_SETUP=bootstrap|upgrade`, `MIGRATION_TEST_CLUSTER_ID` e não pode
+ser executado com `NODE_ENV=production`;
 ele modifica um banco de teste durante a validação de migrations históricas. O
 PostgreSQL descartável deve fornecer seu `system_identifier` em
 `MIGRATION_TEST_CLUSTER_ID`; o harness recusa o alvo antes de qualquer mutação

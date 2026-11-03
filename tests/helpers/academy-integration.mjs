@@ -49,6 +49,21 @@ export function requireDisposableAcademyDatabase() {
   requireDisposableMigrationEnvironment();
 }
 
+export async function connectApprovedAcademyDatabase(PoolClass = require('pg').Pool) {
+  requireDisposableMigrationEnvironment();
+  const pool = new PoolClass({ connectionString: process.env.MIGRATION_DATABASE_URL });
+  let client;
+  try {
+    client = await pool.connect();
+    await assertApprovedMigrationCluster(client);
+    return { pool, client };
+  } catch (error) {
+    client?.release();
+    await pool.end();
+    throw error;
+  }
+}
+
 async function historicalSnapshot(client) {
   const [documents, revisions, assets] = await Promise.all([
     client.query('SELECT * FROM cms_documents ORDER BY id'),
@@ -64,10 +79,7 @@ async function historicalSnapshot(client) {
 
 export async function createAcademyIntegration(t) {
   requireDisposableAcademyDatabase();
-  const { Pool } = require('pg');
-  const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
-  const client = await pool.connect();
-  await assertApprovedMigrationCluster(client);
+  const { pool, client } = await connectApprovedAcademyDatabase();
   const ids = Object.fromEntries([
     'allCourse', 'closerCourse', 'captureCourse', 'closerLesson', 'captureLesson',
     'module', 'captureModule', 'closerJob', 'captureJob',
