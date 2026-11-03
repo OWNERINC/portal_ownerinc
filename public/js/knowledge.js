@@ -9,8 +9,8 @@ const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
 const showToast = page.toast;
 const history = page.history;
 const location = page.location;
-page.cleanup(() => { ++articlesRequest; ++articleRequest; ++articleDeleteRequest; });
-page.beforeLeave(() => !articleDeleteInFlight && !articleSaveInFlight && !pdfUploadPromise && !pdfCleanupPromise);
+ page.cleanup(() => { ++articlesRequest; ++articleRequest; ++articleDeleteRequest; });
+ page.beforeLeave(() => !articleDeleteInFlight && !articleSaveInFlight);
 const canManage = can(user, 'manageKnowledge');
 if (canManage) {
   document.getElementById('btn-new').style.display = '';
@@ -23,12 +23,8 @@ const articlesPagination = document.getElementById('articles-pagination');
 const articleView = document.getElementById('article-view');
 const modal = document.getElementById('modal-article');
 const form = document.getElementById('article-form');
-const pdfInput = document.getElementById('f-pdf');
-const pdfStateInput = document.getElementById('f-pdf-state');
-const pdfStatus = document.getElementById('f-pdf-status');
-const pdfRemove = document.getElementById('f-pdf-remove');
-const legacyContentInput = document.getElementById('f-content');
-const legacyContentHelp = document.getElementById('f-content-help');
+const contentInput = document.getElementById('f-content');
+const contentHelp = document.getElementById('f-content-help');
 let articles = [];
 let categories = [];
 let articlesRequest = 0;
@@ -37,21 +33,11 @@ let articleDeleteRequest = 0;
 let articleDeleteInFlight = false;
 let total = 0;
 let editingId = null;
-let selectedPdf = null;
-let currentPdf = null;
-let pdfChanged = false;
-const createdPdfAssets = new Map();
-let pdfUploadRequest = 0;
-let pdfUploadPromise = null;
-let pdfCleanupPromise = null;
-let pdfRemoveFocusPending = false;
 let articleSaveInFlight = false;
-let editingCmsManaged = false;
 let lastKnownUrl = location.href;
 const PAGE_SIZE = 20;
-if (modal) setDialogCloseGuard(modal, canCloseArticleDialog, {
-  canLeave: () => !pdfUploadPromise && !pdfCleanupPromise && !articleSaveInFlight,
-  discard: () => createdPdfAssets.size ? cleanupCreatedPdfAssets() : true,
+if (modal) setDialogCloseGuard(modal, () => !articleSaveInFlight, {
+  canLeave: () => !articleSaveInFlight,
 });
 
 function params() {
@@ -203,192 +189,24 @@ function articleBody(article) {
   return article?.content || '';
 }
 
-function visiblePdfFocusTarget(node) {
-  return Boolean(node && node !== document.body && node.isConnected !== false
-    && !node.hidden && !node.disabled && !node.inert && !hasInertAncestor(node) && node.style?.display !== 'none'
-    && !node.closest?.('[hidden], .hidden, [aria-hidden="true"]'));
-}
-
-function pdfFocusTarget() {
-  const title = document.getElementById('modal-article-title');
-  if (title && title.tabIndex < 0) title.tabIndex = -1;
-  return [
-    pdfInput,
-    document.querySelector('label[for="f-pdf"]'),
-    document.getElementById('f-title'),
-    title,
-  ].find(visiblePdfFocusTarget);
-}
-
-function flushPdfRemoveFocus() {
-  if (!pdfRemoveFocusPending) return;
-  const active = document.activeElement;
-  if (active !== pdfRemove && visiblePdfFocusTarget(active)) {
-    pdfRemoveFocusPending = false;
-    return;
-  }
-  const target = pdfFocusTarget();
-  if (target) {
-    pdfRemoveFocusPending = false;
-    target.focus();
-  }
-}
-
-function syncPdfState() {
-  if (!pdfStateInput) return;
-  pdfStateInput.value = JSON.stringify({
-    selected: selectedPdf?.id || null,
-    current: currentPdf?.id || null,
-    changed: pdfChanged,
-    pending: Boolean(pdfUploadPromise || pdfCleanupPromise || articleSaveInFlight || createdPdfAssets.size),
-  });
-}
-
-async function deletePdfAsset(assetId) {
-  return Boolean(assetId);
-}
-
-function pdfAssetTitle(asset) {
-  return String(asset?.original_name || 'PDF').slice(0, 200);
-}
-
-function trackCreatedPdfAsset(asset) {
-  const tracked = { id: asset.id, title: pdfAssetTitle(asset) };
-  createdPdfAssets.set(tracked.id, tracked);
-  return tracked;
-}
-
-async function cleanupStalePdfAsset(asset) {
-  const tracked = trackCreatedPdfAsset(asset);
-  if (await deletePdfAsset(tracked.id)) createdPdfAssets.delete(tracked.id);
-  syncPdfState();
-}
-
-function cleanupCreatedPdfAssets({ onlyIds = null, keepIds = new Set(), closeAfter = false } = {}) {
-  if (pdfCleanupPromise) return pdfCleanupPromise;
-  const ids = [...createdPdfAssets.keys()].filter(id => (!onlyIds || onlyIds.includes(id)) && !keepIds.has(id));
-  if (!ids.length) {
-    if (closeAfter) closeDialog(modal, true);
-    return Promise.resolve(true);
-  }
-
-  const promise = Promise.resolve().then(async () => {
-    setArticleEditorBusy(true);
-    let cleaned = true;
-    try {
-      for (const assetId of ids) {
-        if (!createdPdfAssets.has(assetId)) continue;
-        if (!await deletePdfAsset(assetId)) {
-          cleaned = false;
-          continue;
-        }
-        createdPdfAssets.delete(assetId);
-        if (selectedPdf?.id === assetId) {
-          selectedPdf = null;
-          pdfChanged = false;
-          updatePdfField();
-        }
-      }
-      return cleaned;
-    } finally {
-      if (pdfCleanupPromise === promise) pdfCleanupPromise = null;
-      setArticleEditorBusy(false);
-      syncPdfState();
-      flushPdfRemoveFocus();
-      if (page.active && cleaned && closeAfter) closeDialog(modal, true);
-    }
-  });
-  pdfCleanupPromise = promise;
-  void promise.then(
-    () => { if (pdfCleanupPromise === promise) pdfCleanupPromise = null; },
-    () => { if (pdfCleanupPromise === promise) pdfCleanupPromise = null; },
-  );
-  return promise;
-}
-
-function canCloseArticleDialog() {
-  if (pdfUploadPromise || pdfCleanupPromise || articleSaveInFlight) {
-    showToast('Aguarde a operação do artigo terminar.');
-    return false;
-  }
-  if (createdPdfAssets.size) {
-    showToast('Removendo o PDF antes de fechar…');
-    void cleanupCreatedPdfAssets({ closeAfter: true });
-    return false;
-  }
-  return true;
-}
-
 function setArticleEditorBusy(busy) {
   if (!page.active) return;
   [
     document.getElementById('f-title'),
     document.getElementById('f-category'),
-    legacyContentInput,
-    pdfInput,
-    pdfRemove,
+    contentInput,
     document.getElementById('modal-article-save'),
     document.getElementById('modal-article-close'),
     document.getElementById('modal-article-cancel'),
   ].filter(Boolean).forEach(field => { field.disabled = busy; });
-  if (!busy) syncLegacyContentField();
-  syncPdfState();
-  if (!busy) flushPdfRemoveFocus();
+  if (!busy) syncContentField();
 }
 
-function syncLegacyContentField() {
-  legacyContentInput.disabled = editingCmsManaged;
-  legacyContentInput.required = !editingCmsManaged;
-  legacyContentInput.placeholder = editingCmsManaged
-    ? 'O corpo usa conteúdo editorial estruturado e não é editável neste diálogo.'
-    : 'Conteúdo em texto simples…';
-  if (legacyContentHelp) legacyContentHelp.textContent = editingCmsManaged
-    ? 'Este artigo usa conteúdo editorial estruturado. O corpo fica desabilitado neste diálogo.'
-    : 'Artigos sem gerenciamento editorial mantêm o conteúdo em texto simples editável neste campo.';
-}
-
-function updatePdfField() {
-  const removeWasFocused = document.activeElement === pdfRemove;
-  const pdf = selectedPdf || currentPdf;
-  pdfRemove.hidden = !pdf;
-  if (selectedPdf) {
-    pdfStatus.textContent = `Selecionado: ${selectedPdf.title}. Será anexado ao salvar.`;
-  } else if (currentPdf) {
-    pdfStatus.textContent = `PDF atual: ${currentPdf.title}. Escolha outro arquivo para substituir.`;
-  } else {
-    pdfStatus.textContent = 'Opcional. O arquivo será exibido dentro do artigo após o salvamento.';
-  }
-  if (removeWasFocused && pdfRemove.hidden) {
-    pdfRemoveFocusPending = true;
-    if (!pdfCleanupPromise) flushPdfRemoveFocus();
-  }
-  syncPdfState();
-}
-
-function invalidatePdfUpload(message = '', requestToken = ++pdfUploadRequest) {
-  const pending = pdfUploadPromise;
-  pdfInput.value = '';
-  if (message) pdfStatus.textContent = message;
-  const release = () => {
-    if (requestToken === pdfUploadRequest && !pdfUploadPromise) setArticleEditorBusy(false);
-  };
-  if (pending) void pending.finally(release);
-  else release();
-}
-
-async function uploadPdf(file) {
-  invalidatePdfUpload('PDF não está disponível nesta linha do Portal.');
-}
-
-function resetPdfField() {
-  pdfUploadRequest += 1;
-  pdfInput.value = '';
-  pdfInput.disabled = false;
-  pdfRemove.disabled = false;
-  selectedPdf = null;
-  currentPdf = null;
-  pdfChanged = false;
-  updatePdfField();
+function syncContentField() {
+  contentInput.disabled = false;
+  contentInput.required = true;
+  contentInput.placeholder = 'Conteúdo em texto simples…';
+  if (contentHelp) contentHelp.textContent = 'Artigos mantêm o conteúdo em texto simples editável neste campo.';
 }
 
 function renderCategories(requestToken = articlesRequest) {
@@ -563,27 +381,21 @@ async function loadArticles(focusOverride = null) {
 }
 
 function newArticle() {
-  if (!canCloseArticleDialog()) return;
+  if (!canCloseDialog(modal)) return;
   editingId = null;
-  editingCmsManaged = false;
-  resetPdfField();
   form.reset();
-  syncLegacyContentField();
+  syncContentField();
   document.getElementById('modal-article-title').textContent = 'Novo Artigo';
   openDialog(modal, document.getElementById('f-title'));
 }
 
 function editArticle(article) {
   editingId = article.id;
-  editingCmsManaged = false;
-  resetPdfField();
-  currentPdf = null;
   document.getElementById('modal-article-title').textContent = 'Editar Artigo';
   document.getElementById('f-title').value = article.title || '';
   document.getElementById('f-category').value = article.category || '';
-  legacyContentInput.value = editingCmsManaged ? '' : article.content || '';
-  syncLegacyContentField();
-  updatePdfField();
+  contentInput.value = article.content || '';
+  syncContentField();
   openDialog(modal, document.getElementById('f-title'));
 }
 
@@ -608,23 +420,17 @@ async function deleteArticle(id) {
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
-  if (articleSaveInFlight || pdfCleanupPromise) return;
-  if (pdfUploadPromise) {
-    showToast('Aguarde o envio do PDF terminar.');
-    return;
-  }
+  if (articleSaveInFlight) return;
   if (!form.reportValidity()) return;
   const data = {
     title: document.getElementById('f-title').value.trim(),
     category: document.getElementById('f-category').value.trim(),
-    ...(editingCmsManaged ? {} : { content: legacyContentInput.value.trim() }),
+    content: contentInput.value.trim(),
   };
   const save = document.getElementById('modal-article-save');
   save.textContent = 'Salvando…';
   articleSaveInFlight = true;
   setArticleEditorBusy(true);
-  syncPdfState();
-  const persistedPdfId = pdfChanged && selectedPdf?.id ? selectedPdf.id : null;
   const wasEditing = Boolean(editingId);
   try {
     const result = await fetchAPI(editingId ? `/api/knowledge/${encodeURIComponent(editingId)}` : '/api/knowledge', {
@@ -636,12 +442,6 @@ form.addEventListener('submit', async event => {
       document.getElementById('modal-article-title').textContent = 'Editar Artigo';
     }
     articleSaveInFlight = false;
-    if (persistedPdfId) createdPdfAssets.delete(persistedPdfId);
-    if (!await cleanupCreatedPdfAssets()) {
-      showToast('Artigo salvo, mas um PDF temporário não pôde ser removido. Tente novamente.');
-      return;
-    }
-    resetPdfField();
     closeDialog(modal, true);
     showToast(wasEditing ? 'Artigo atualizado.' : 'Artigo criado.');
     await loadArticles();
@@ -650,7 +450,6 @@ form.addEventListener('submit', async event => {
   } finally {
     articleSaveInFlight = false;
     setArticleEditorBusy(false);
-    syncPdfState();
     save.textContent = 'Salvar';
   }
 });
@@ -669,39 +468,6 @@ document.getElementById('modal-article-close').addEventListener('click', () => {
 });
 document.getElementById('modal-article-cancel').addEventListener('click', () => {
   closeDialog(modal);
-});
-pdfInput.addEventListener('change', () => {
-  const file = pdfInput.files?.[0];
-  if (!file) {
-    invalidatePdfUpload();
-    return;
-  }
-  if (file.type !== 'application/pdf') {
-    invalidatePdfUpload('Selecione um arquivo PDF válido.');
-    return;
-  }
-  if (file.size > 100 * 1024 * 1024) {
-    invalidatePdfUpload('O PDF deve ter no máximo 100 MB.');
-    return;
-  }
-  const promise = uploadPdf(file);
-  pdfUploadPromise = promise;
-  void promise.finally(() => { if (pdfUploadPromise === promise) pdfUploadPromise = null; });
-});
-pdfRemove.addEventListener('click', async () => {
-  if (pdfCleanupPromise || pdfUploadPromise || articleSaveInFlight) return;
-  if (createdPdfAssets.size) {
-    await cleanupCreatedPdfAssets();
-    return;
-  }
-  if (selectedPdf) {
-    selectedPdf = null;
-    pdfChanged = false;
-  } else {
-    currentPdf = null;
-    pdfChanged = true;
-  }
-  updatePdfField();
 });
 searchInput.addEventListener('input', () => { invalidateArticleDelete(); updateUrl({ q: searchInput.value.trim(), offset: '' }); loadArticles(); });
 page.listen(window, 'popstate', () => {

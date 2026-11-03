@@ -113,13 +113,6 @@
       <textarea class="form-textarea" id="f-content" name="content" rows="8" required placeholder="Conteúdo em texto simples…" aria-describedby="f-content-help"></textarea>
       <p class="form-help" id="f-content-help">Artigos sem gerenciamento editorial mantêm o conteúdo em texto simples editável neste campo.</p>
     </div>
-    <div class="form-group" hidden>
-      <label class="form-label" for="f-pdf">PDF do artigo</label>
-      <input class="form-input" id="f-pdf" name="pdf" type="file" accept="application/pdf" aria-describedby="article-editor-help f-pdf-status">
-      <input type="hidden" id="f-pdf-state" name="pdf_state" value="">
-      <p class="form-help" id="f-pdf-status" role="status" aria-live="polite">PDF não está disponível nesta linha do Portal.</p>
-      <button class="btn btn-ghost btn-sm knowledge-pdf-remove" type="button" id="f-pdf-remove" hidden>Remover PDF</button>
-    </div>
     <div style="display:flex; gap:8px; justify-content:flex-end">
       <button class="btn btn-ghost" type="button" id="modal-article-cancel">Cancelar</button>
       <button class="btn btn-primary" type="submit" id="modal-article-save">Salvar</button>

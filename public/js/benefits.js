@@ -1,13 +1,10 @@
 import { fetchAPI, fetchAPIPage } from './auth.js';
 import { clear, element, showState } from './ui.js';
 import { readOffset, renderPagination } from './pagination.js';
-import { renderBlocks } from './cms-block-renderer.js';
 
 const requests = { fetchAPI, fetchAPIPage };
-const renderContent = renderBlocks;
 export function mount(page) {
-const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
-const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
+  const { fetchAPI, fetchAPIPage } = page.bindAPI(requests);
 const history = page.history;
 const location = page.location;
 page.cleanup(() => { ++benefitsRequest; });
@@ -64,22 +61,20 @@ async function loadBenefits() {
       clear(pagination);
       return showState(container, 'Nenhum benefício disponível no momento.');
     }
-    const categories = benefits.reduce((map, benefit) => {
+    const benefitsByCategory = benefits.reduce((map, benefit) => {
       const category = benefit.category || 'Geral';
       map.set(category, [...(map.get(category) || []), benefit]);
       return map;
     }, new Map());
     clear(container);
-    categories.forEach((items, category) => {
+    benefitsByCategory.forEach((items, category) => {
       const section = element('section', { className: 'content-section' }, [element('h2', { text: category })]);
       const grid = element('div', { className: 'card-grid' });
       items.forEach(benefit => {
         const card = element('article', { className: 'card' }, [
           element('div', { className: 'card-title', text: benefit.company }),
         ]);
-        const content = element('div', { className: 'benefit-description cms-public-content' });
-        renderBlocks(content, benefit.content_blocks, { fallbackText: benefit.description || '' });
-        card.append(content);
+        card.append(element('p', { className: 'benefit-description', text: benefit.description || '' }));
         if (benefit.instructions) card.append(element('p', { className: 'info-panel', text: `Como usar: ${benefit.instructions}` }));
         grid.append(card);
       });

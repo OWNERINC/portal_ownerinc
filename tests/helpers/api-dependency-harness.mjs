@@ -51,6 +51,11 @@ export async function createDependencyHarness(t, { forbidEditorial = false } = {
   const state = {
     sql: [], verifiedTokens: [], files: new Map(), writes: [], opens: [], assets: new Map(),
     knowledge: [], benefits: [],
+    history: {
+      documents: [{ id: 'historical-document', bytes: 'document' }],
+      revisions: [{ id: 'historical-revision', bytes: 'revision' }],
+      assets: [{ id: 'historical-asset', bytes: 'asset' }],
+    },
     references: [], connections: 0, releases: 0, incoming: [],
   };
   const audit = sql => /INSERT INTO audit_log/.test(sql);

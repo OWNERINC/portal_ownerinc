@@ -35,7 +35,9 @@ test('OWN-41: Knowledge expõe somente o contrato próprio de texto', async () =
   assert.match(route, /knowledge_base/);
   assert.match(route, /title: text\(200, true\)/);
   assert.match(route, /content: text\(50000\)/);
-  assert.doesNotMatch(route, /pdf_asset_id|pdf_title|syncKnowledgePdf/);
+  assert.match(route, /legacyPdfFields/);
+  assert.match(route, /hasLegacyPdfFields\(req\.body\)/);
+  assert.doesNotMatch(route, /syncKnowledgePdf/);
   assert.match(page, /texto simples/i);
 });
 
@@ -70,5 +72,33 @@ test('OWN-41: CRUD HTTP real usa Knowledge, Benefits e Reminders sem SQL editori
   assertOwnDomainAccess(harness.state, /knowledge_base/);
   assertOwnDomainAccess(harness.state, /benefits/);
   assertOwnDomainAccess(harness.state, /reminders/);
+  assertNoEditorialAccess(harness.state);
+});
+
+test('OWN-41: Knowledge rejeita campos PDF antes de SQL e preserva histórico', async t => {
+  const harness = await createDependencyHarness(t, { forbidEditorial: true });
+  const auth = { Authorization: 'Bearer manager' };
+  const historical = structuredClone(harness.state.history);
+  const legacyFields = ['pdf_asset_id', 'pdf_title', 'pdf', 'asset_id', 'pdf_state'];
+
+  for (const field of legacyFields) {
+    const before = harness.state.sql.length;
+    await harness.request.post('/api/knowledge').set(auth).send({
+      title: 'Artigo inválido', category: 'Operação', content: 'Texto', [field]: 'legacy',
+    }).expect(400);
+    const calls = harness.state.sql.slice(before);
+    assert.equal(calls.some(({ sql }) => /BEGIN|INSERT INTO|UPDATE |DELETE FROM/.test(sql)), false,
+      `${field}: rejected before mutation SQL`);
+  }
+
+  const article = await harness.request.post('/api/knowledge').set(auth).send({
+    title: 'Artigo histórico', category: 'Operação', content: 'Texto original',
+  }).expect(201);
+  await harness.request.put(`/api/knowledge/${article.body.id}`).set(auth).send({
+    title: 'Artigo atualizado', category: 'Operação', content: 'Texto novo',
+  }).expect(200);
+  await harness.request.delete(`/api/knowledge/${article.body.id}`).set(auth).expect(200);
+
+  assert.deepEqual(harness.state.history, historical);
   assertNoEditorialAccess(harness.state);
 });

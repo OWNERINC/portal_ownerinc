@@ -1087,18 +1087,6 @@ test.skip('legacy Knowledge PDF upload cleanup', async () => {
   assert.equal(harness.document.activeElement, harness.nodes.get('f-pdf'));
 });
 
-test('Knowledge moves focus to the PDF input when synchronous removal hides the focused remove button', () => {
-  const harness = loadKnowledgeHarness();
-  harness.context.editArticle({ id: 'article-1', title: 'Artigo', category: 'Geral', content: '', content_blocks: [
-    { type: 'pdf', asset_id: 'persisted-pdf', title: 'manual.pdf' },
-  ] });
-  const remove = harness.nodes.get('f-pdf-remove');
-  remove.focus();
-  remove.dispatch('click');
-  assert.equal(harness.document.activeElement, harness.nodes.get('f-pdf'));
-  assert.equal(remove.hidden, true);
-});
-
 test.skip('legacy Knowledge referenced PDF deletion', async () => {
   const harness = loadKnowledgeHarness();
   const input = harness.nodes.get('f-pdf');

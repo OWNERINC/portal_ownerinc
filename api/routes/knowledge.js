@@ -15,6 +15,9 @@ const listQuery = {
   q: value => value.length <= 120,
   category: value => value.length <= 100,
 };
+const legacyPdfFields = new Set(['pdf_asset_id', 'pdf_title', 'pdf', 'asset_id', 'pdf_state']);
+const hasLegacyPdfFields = body => body && typeof body === 'object'
+  && Object.keys(body).some(key => legacyPdfFields.has(key));
 
 router.get('/categories', authMiddleware, async (req, res, next) => {
   if (Object.keys(req.query).length) return invalid(req, res);
@@ -75,6 +78,7 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
 });
 
 router.post('/', authMiddleware, async (req, res, next) => {
+  if (hasLegacyPdfFields(req.body)) return invalid(req, res);
   if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
   if (!validBody(req.body, schema, ['title'])) return invalid(req, res);
   try {
@@ -92,6 +96,7 @@ router.post('/', authMiddleware, async (req, res, next) => {
 });
 
 router.put('/:id', authMiddleware, async (req, res, next) => {
+  if (hasLegacyPdfFields(req.body)) return invalid(req, res);
   if (!can(req.user, 'manageKnowledge')) return forbidden(req, res);
   if (!uuid(req.params.id) || !validBody(req.body, schema, ['title', 'category'])) return invalid(req, res);
   try {

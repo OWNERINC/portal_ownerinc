@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
+import { createFeedbackHarness, drain } from '../helpers/frontend-feedback-harness.mjs';
 
 const [renderer, css, knowledgeCss, knowledgeHtml, knowledge, academy, academyLesson, benefits, reminders, dashboard] = await Promise.all([
   readFile('public/js/cms-block-renderer.js', 'utf8'),
@@ -125,16 +126,33 @@ test('optional pagination containers stay null-safe on list and detail pages', a
   assert.match(remindersSource, /if \(!remindersPagination\) return/);
 });
 
-test.skip('legacy Knowledge PDF controls', () => {
+test('Knowledge frontend has no PDF or editorial controls', () => {
   assert.match(knowledgeHtml, /href="\.\/css\/knowledge\.css"/);
-  assert.match(knowledgeHtml, /id="f-pdf"[^>]*type="file"[^>]*accept="application\/pdf"/);
-  assert.match(knowledgeHtml, /id="f-pdf-remove"/);
+  assert.doesNotMatch(knowledgeHtml, /f-pdf|pdf_state|PDF do artigo/i);
   assert.match(knowledgeCss, /\.knowledge-search\s*\{/);
-  assert.match(knowledge, /FormData/);
-  assert.match(knowledge, /pdf_asset_id/);
-  assert.match(knowledge, /pdf_title/);
-  assert.match(knowledge, /pdfUploadPromise/);
-  assert.doesNotMatch(knowledge, /Editor CMS|cms\.html|article-cms-link/);
+  assert.doesNotMatch(knowledge, /FormData|pdf_asset_id|pdf_title|pdfUploadPromise|cms\.html|article-cms-link/);
+});
+
+test('Benefits renders own description as text without the CMS transport', async () => {
+  const h = await createFeedbackHarness('benefits', {
+    mount: false,
+    forbidEditorial: true,
+    modules: [
+      { path: 'public/js/pagination.js', exports: 'readOffset, renderPagination' },
+      { path: 'public/js/benefits.js', exports: 'mount' },
+    ],
+  });
+  h.context.mount(h.page);
+  await drain();
+  h.latest('/api/benefits?').resolve({
+    data: [{ id: 'benefit-1', company: 'Parceria', category: 'Saúde', active: true,
+      description: '<script>não executar</script>', instructions: 'Procure o RH.' }], total: 1,
+  });
+  h.latest('/api/benefits/categories').resolve(['Saúde']);
+  await drain();
+  assert.equal(h.node('benefits-content').textContent.includes('<script>não executar</script>'), true);
+  assert.equal(h.requests.some(request => /\/api\/cms/i.test(request.path)), false);
+  assert.equal(h.requests.some(request => /\/api\/benefits\?/.test(request.path)), true);
 });
 
 test.skip('legacy Knowledge PDF upload limit', () => {
