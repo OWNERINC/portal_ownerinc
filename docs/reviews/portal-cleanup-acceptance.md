@@ -28,7 +28,7 @@ gate.
   externas.
 - `docs/product/feature-inventory.md` remove claims de CMS ativo em Knowledge,
   Academy e Reminders.
-- `docs/product/roadmap.md` registra OWN-43/44 aprovadas e OWN-45 em revisão.
+- `docs/product/roadmap.md` registra OWN-43, OWN-44 e OWN-45 aprovadas.
 - `docs/product/privacy-retention.md` classifica documentos, assets e retenção CMS
   como histórico sem job ativo.
 - `docs/architecture/data-flow.md` e `docs/operations/v1-release-checklist.md`
@@ -47,4 +47,5 @@ gate.
 
 O aceite não autoriza deploy, promoção, revogação de grants produtivos, remoção de
 tabelas ou limpeza de uploads históricos. OWN-46 pode consolidar a matriz final de
-smoke, evidências e pendências externas, sem executar promoção produtiva.
+smoke, evidências e pendências externas, sem executar promoção produtiva. O
+handoff está em [`2026-11-03-own-46-handoff.md`](../reports/2026-11-03-own-46-handoff.md).

@@ -110,6 +110,7 @@ qualquer volume histórico.
 
 A auditoria read-only confirma que produção, staging e pre-auth não eram alvos
 seguros para o harness mutável. A instância separada e descartável agora existe e
-os cenários fresh, upgrade e readiness passaram nela. A OWN-43 fica em revisão com
-produção ainda marcada como **PENDENTE externo de promoção**; OWN-44, OWN-45 e OWN-46
-permanecem bloqueadas até aprovação explícita deste gate.
+os cenários fresh, upgrade e readiness passaram nela. A OWN-43 foi aprovada por
+revisão Astra medium (`ship`); produção continua marcada como **PENDENTE externo
+de promoção**. OWN-44 e OWN-45 foram aprovadas em sequência, e a OWN-46 consolida
+o handoff sem alterar esse estado produtivo.

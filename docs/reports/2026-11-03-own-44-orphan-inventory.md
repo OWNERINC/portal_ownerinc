@@ -60,5 +60,5 @@ ou `cron/package.json`) contém dependência Payload, CMS ou Owner News.
   `cms-frontend.test` fora de documentação histórica foi encontrado após o
   rename/delete.
 
-OWN-44 permanece em revisão até uma revisão Astra medium; OWN-45 só será iniciada
-após `ship` explícito.
+OWN-44 foi aprovada por revisão Astra medium (`ship`) e commitada em `970b703`.
+OWN-45 foi iniciada somente depois desse aceite e também recebeu `ship`.
