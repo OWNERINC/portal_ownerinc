@@ -82,7 +82,12 @@ qualquer volume histórico.
 - `node scripts/test-academy.mjs` — 6 PASS no database bootstrap isolado.
 - Teste unitário adicional — cleanup de `client.release()` e `pool.end()` quando a
   identidade da Academy é rejeitada.
-- Cabeça testada: `6cb537f` (`fix: close rejected academy migration connections`).
+- Código executável testado: `6cb537f` (`fix: close rejected academy migration
+  connections`).
+- Os commits posteriores ao código executável testado (`05d4543` e esta
+  reconciliação documental) alteram somente evidências/documentação. A comparação
+  `git diff 6cb537f..HEAD` confirma que não há alteração de código executável,
+  migrations, testes ou configuração após a execução dos cenários.
 - `npm run verify` — 808 testes: 806 PASS, 0 falhas e 2 skips esperados por
   plataforma.
 - `git diff --check` — PASS.
@@ -90,7 +95,7 @@ qualquer volume histórico.
   produção `7667213608036888610`, staging `7665192068030894114`; são distintas.
 - `git diff origin/rewrite/portal-sem-cms..HEAD --stat` e comparação nominal dos
   arquivos alterados foram revisados; as migrations históricas não aparecem no
-  diff.
+  diff. O working tree permaneceu limpo nessa cabeça.
 - Checksums SHA-256 atuais = referência `8746ce2`:
   `015`=`a2731d126f67b57a38081079aa98fbeb8fa2584623374537218f53edf8405cfe`,
   `019`=`0ac373aee43e9d09b825b6a68cdc76d849fe79d973c6904220cbfde5b45ca124`,

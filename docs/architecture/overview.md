@@ -330,8 +330,9 @@ fresh/bootstrap, upgrade e readiness foram executados no cluster descartável
 aprovado da OWN-43. As verificações cobrem repetição sem reaplicar ledger,
 defaults, restrições de mídia, isolamento do progresso por usuário/versão,
 cascatas, FK de cargo, tipos CMS e privilégios reais. Os fixtures de comportamento
-Academy são revertidos por transação. Nesta entrega, a execução PostgreSQL dos
-dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
+Academy são revertidos por transação. Nesta entrega, fresh/bootstrap, upgrade e
+ readiness foram executados no cluster PostgreSQL descartável e separado da
+ produção; isso não constitui homologação de runtime produtivo.
 
 ## Navegação persistente do frontend
 
