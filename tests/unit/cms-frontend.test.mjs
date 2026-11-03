@@ -139,6 +139,11 @@ test('Knowledge articles retain private PDF attachment controls and safe text fa
   assert.doesNotMatch(knowledge, /Editor CMS|cms\.html|article-cms-link/);
 });
 
+test('Knowledge accepts PDF attachments up to 100 MB', () => {
+  assert.equal((knowledge.match(/file\.size > 100 \* 1024 \* 1024/g) || []).length, 2);
+  assert.equal((knowledge.match(/O PDF deve ter no máximo 100 MB\./g) || []).length, 2);
+});
+
 test('maintained domains keep CMS block rendering and their own text fallbacks during the transition', () => {
   for (const source of [knowledge, academy, academyLesson, benefits]) {
     assert.match(source, /content_blocks/);
@@ -157,4 +162,13 @@ test('private preview URLs are revoked and media reserve intrinsic layout space'
   assert.match(renderer, /URL\.revokeObjectURL/);
   assert.match(renderer, /MutationObserver/);
   assert.match(css, /aspect-ratio: 16 \/ 9/);
+});
+
+test('one document-level observer cleans private media when any rendered ancestor detaches', () => {
+  assert.match(renderer, /const documentObservers = new WeakMap\(\)/);
+  assert.match(renderer, /container\.ownerDocument\?\.documentElement/);
+  assert.match(renderer, /observer\.observe\(document\.documentElement, \{ childList: true, subtree: true \}\)/);
+  assert.match(renderer, /candidate\.container\.isConnected/);
+  assert.match(renderer, /record\.states\.add\(state\)/);
+  assert.doesNotMatch(renderer, /observer\.observe\(parent/);
 });
