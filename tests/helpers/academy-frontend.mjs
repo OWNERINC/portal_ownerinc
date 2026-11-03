@@ -27,7 +27,10 @@ export async function academyHarness({ url = 'https://portal.test/academy.html',
   Object.assign(window, { history, get location() { return location; } }); doc.defaultView = window;
   const requests = [], players = [], timers = new Map(), revoked = [];
   let id = 0;
-  const transport = kind => (path, options = {}) => { const pending = { kind, path, options, ...deferred() }; requests.push(pending); return pending.promise; };
+  const transport = kind => (path, options = {}) => {
+    if (/\/api\/cms|\/cms\/assets/i.test(path)) throw new Error(`Forbidden Academy editorial transport: ${path}`);
+    const pending = { kind, path, options, ...deferred() }; requests.push(pending); return pending.promise;
+  };
   const context = vm.createContext({
     document: doc, window, console, AbortController, DOMException, URLSearchParams, TextEncoder,
     URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
@@ -48,7 +51,6 @@ export async function academyHarness({ url = 'https://portal.test/academy.html',
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/js/ui.js', 'clear, element, safeHttpUrl');
-  await load('public/js/cms-block-renderer.js', 'renderBlocks');
   await load('public/academy/progress-controller.js', 'createProgressController');
   await load('public/academy/api.js', 'createAcademyAPI');
   await load('public/academy/view-utils.js', 'unavailable, heading, button, routeLink, brand, errorState, cover, courseCard, curriculum, externalLink');
@@ -74,10 +76,10 @@ export async function academyHarness({ url = 'https://portal.test/academy.html',
 export const course = (id = 'course-a', overrides = {}) => ({ id, title: 'Cultura Ownerinc', category: 'Cultura', description: 'Nossa forma de trabalhar.',
   delivery_mode: 'internal', active: true, icon_key: 'icon-02', total_lessons: 2, completed_lessons: 0, ...overrides });
 export function courseData(id = 'course-a', overrides = {}) {
-  return { course: course(id, overrides), content_blocks: null, modules: [{ id: 'module-a', title: 'Primeiros passos', lessons: [
+  return { course: course(id, overrides), modules: [{ id: 'module-a', title: 'Primeiros passos', lessons: [
     { id: 'lesson-a', title: 'Boas-vindas', media_version: 1 }, { id: 'lesson-b', title: 'Nosso jeito', media_version: 1 },
   ] }] };
 }
 export const lessonData = (id = 'lesson-a', overrides = {}) => ({ course_id: 'course-a', lesson: { id, title: id === 'lesson-a' ? 'Boas-vindas' : 'Nosso jeito', media_version: 1 },
-  media: { type: 'file', url: 'https://media.test/welcome.mp4' }, content_blocks: null, description: 'Material da aula.', next_lesson_id: 'lesson-b',
+  media: { type: 'file', url: 'https://media.test/welcome.mp4' }, description: 'Material da aula.', next_lesson_id: 'lesson-b',
   progress: { lesson_id: id, media_version: 1, position_seconds: 12, completed: false, version: 0 }, ...overrides });
