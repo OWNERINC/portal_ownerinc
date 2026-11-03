@@ -210,7 +210,6 @@ body.modal-open { overflow: hidden; }
 .article-excerpt { margin-top: 10px; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
 .card-link-title { display: block; min-height: 44px; color: inherit; text-decoration: none; }
 .card-link-title:focus-visible { outline-offset: 3px; }
-.announcement-card:focus { outline: 3px solid var(--focus); outline-offset: 3px; }
 .category-filter { cursor: pointer; border: 0; min-height: 36px; padding-inline: 14px; }
 .category-filter, .admin-tab, button { min-height: 44px; }
 .content-section { margin-top: 36px; }

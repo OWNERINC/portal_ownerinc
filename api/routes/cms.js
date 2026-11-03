@@ -3,7 +3,6 @@ const pool = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { canManageCms } = require('../cms/permissions');
 const { validateBlocks } = require('../cms/blocks');
-const { validateNewsRevision } = require('../owner-news/editorial');
 const {
   CmsRouteError, resolveDraftRevisionId, unscheduleRevisionState, withdrawalState,
 } = require('../cms/revisions');
@@ -13,7 +12,7 @@ const {
 
 const router = express.Router();
 const CMS_ASSET_RETENTION_LOCK = 7193029;
-const CONTENT_TYPES = ['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder'];
+const CONTENT_TYPES = ['knowledge', 'academy', 'academy_lesson', 'benefit', 'reminder'];
 const REVISION_STATUSES = ['draft', 'published', 'scheduled', 'archived'];
 const SOURCE_TABLES = {
   knowledge: 'knowledge_base',
@@ -219,7 +218,7 @@ router.post('/documents', authMiddleware, async (req, res, next) => {
   if (!documentBody(req.body)) return invalid(req, res);
   if (!canManageCms(req.user, req.body.type)) return forbidden(req, res);
   const sourceId = req.body.source_id;
-  if (req.body.type !== 'announcement' && !sourceId) return invalid(req, res);
+  if (!sourceId) return invalid(req, res);
 
   try {
     const result = await withAudit(pool, req, 'cms.document.create', 'cms_document', async (db) => {
@@ -242,9 +241,7 @@ router.post('/documents', authMiddleware, async (req, res, next) => {
         `INSERT INTO cms_revisions (document_id, version, status, blocks, editorial, created_by)
          VALUES ($1, 1, 'draft', $2::jsonb, $3::jsonb, $4)
          RETURNING id, document_id, version, status, blocks, editorial, created_by, created_at`,
-        [document.id, JSON.stringify([]), document.content_type === 'announcement'
-          ? JSON.stringify({ version: 1, kind: 'article', summary: '', author: '', source_label: '', source_date: null })
-          : null, req.user.uid],
+         [document.id, JSON.stringify([]), null, req.user.uid],
       );
       const { rows: updated } = await db.query(
         `UPDATE cms_documents SET draft_revision_id = $2, updated_at = NOW()
@@ -317,10 +314,8 @@ router.put('/documents/:id/draft', authMiddleware, async (req, res, next) => {
       if (req.body.editorial === null && current[0]?.editorial != null) {
         throw new CmsRouteError(400, 'editorial_required');
       }
-      const nextRevision = document.content_type === 'announcement'
-        ? validateNewsRevision(req.body.blocks, requestedEditorial)
-        : { blocks: validateBlocks(req.body.blocks), editorial: null };
-      if (!nextRevision?.blocks || (document.content_type !== 'announcement' && requestedEditorial !== null)) {
+      const nextRevision = { blocks: validateBlocks(req.body.blocks), editorial: null };
+      if (!nextRevision.blocks || requestedEditorial !== null) {
         throw new CmsRouteError(400, 'invalid_revision');
       }
       const { blocks, editorial } = nextRevision;
@@ -367,9 +362,7 @@ router.post('/documents/:id/publish', authMiddleware, async (req, res, next) => 
       );
       const revision = revisions[0];
       if (!revision || revision.status !== 'draft') throw new CmsRouteError(409, 'draft_required');
-      const blocks = document.content_type === 'announcement'
-        ? validateNewsRevision(revision.blocks, revision.editorial ?? null, { publishing: true })?.blocks
-        : validateBlocks(revision.blocks);
+      const blocks = validateBlocks(revision.blocks);
       if (!blocks) throw new CmsRouteError(409, 'draft_required');
       await validateAssetReferences(db, blocks);
       if (document.published_revision_id) {
@@ -416,9 +409,7 @@ router.post('/documents/:id/schedule', authMiddleware, async (req, res, next) =>
       );
       const revision = revisions[0];
       if (!revision || revision.status !== 'draft') throw new CmsRouteError(409, 'draft_required');
-      const blocks = document.content_type === 'announcement'
-        ? validateNewsRevision(revision.blocks, revision.editorial ?? null, { publishing: true })?.blocks
-        : validateBlocks(revision.blocks);
+      const blocks = validateBlocks(revision.blocks);
       if (!blocks) throw new CmsRouteError(409, 'draft_required');
       await validateAssetReferences(db, blocks);
       if (document.scheduled_revision_id && document.scheduled_revision_id !== revision.id) {

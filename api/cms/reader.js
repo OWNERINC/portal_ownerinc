@@ -1,8 +1,7 @@
 const { blocksToText, validateBlocks } = require('./blocks');
 const { lockCmsAssets } = require('./locks');
-const { validateNewsRevision, announcementKind, estimateNewsReadTime } = require('../owner-news/editorial');
 
-const CONTENT_TYPES = new Set(['knowledge', 'academy', 'academy_lesson', 'benefit', 'announcement', 'reminder']);
+const CONTENT_TYPES = new Set(['knowledge', 'academy', 'academy_lesson', 'benefit', 'reminder']);
 const SOURCE_TABLES = {
   knowledge: 'knowledge_base',
   academy: 'academy',
@@ -129,12 +128,16 @@ async function retireInvalidScheduled(db, document, reason) {
 }
 
 async function promoteDueScheduled(db, now = new Date(), contentType = null, sourceIds = null) {
+  if (contentType && !CONTENT_TYPES.has(contentType)) return 0;
   await lockCmsAssets(db);
   const values = [now];
   const conditions = ["scheduled.status = 'scheduled'", 'd.scheduled_at <= $1'];
   if (contentType) {
     values.push(contentType);
     conditions.push(`d.content_type = $${values.length}`);
+  } else {
+    values.push([...CONTENT_TYPES]);
+    conditions.push(`d.content_type = ANY($${values.length}::text[])`);
   }
   if (sourceIds) {
     values.push(sourceIds);
@@ -142,7 +145,7 @@ async function promoteDueScheduled(db, now = new Date(), contentType = null, sou
   }
   const { rows } = await db.query(
     `SELECT d.id, d.published_revision_id, d.scheduled_revision_id, d.content_type
-             , scheduled.blocks AS scheduled_blocks, scheduled.editorial AS scheduled_editorial
+             , scheduled.blocks AS scheduled_blocks
        FROM cms_documents d
        JOIN cms_revisions scheduled ON scheduled.id = d.scheduled_revision_id
       WHERE ${conditions.join(' AND ')}
@@ -153,10 +156,6 @@ async function promoteDueScheduled(db, now = new Date(), contentType = null, sou
   let promoted = 0;
   for (const [index, document] of rows.entries()) {
     const validation = validations[index];
-    if (!validation.reason && document.content_type === 'announcement'
-      && !validateNewsRevision(document.scheduled_blocks, document.scheduled_editorial ?? null, { publishing: true })) {
-      validation.reason = 'invalid_editorial';
-    }
     if (validation.reason) await retireInvalidScheduled(db, document, validation.reason);
     else {
       await promoteDocument(db, document, now);
@@ -179,28 +178,6 @@ async function withTransaction(pool, operation) {
   } finally {
     db.release();
   }
-}
-
-async function recheckPublishedAnnouncements(pool, snapshots) {
-  const ids = [...new Set(snapshots.map(({ id }) => String(id).toLowerCase()))];
-  if (!ids.length) return new Set();
-  return withTransaction(pool, async (db) => {
-    await lockCmsAssets(db);
-    const { rows } = await db.query(
-      `SELECT d.id, r.id AS published_revision_id
-         FROM cms_documents d
-         JOIN cms_revisions r
-           ON r.id = d.published_revision_id AND r.status = 'published'
-        WHERE d.content_type = 'announcement' AND d.id = ANY($1::uuid[])
-        FOR UPDATE OF d, r`,
-      [ids],
-    );
-    const current = new Map(rows.map(row => [String(row.id).toLowerCase(),
-      String(row.published_revision_id).toLowerCase()]));
-    return new Set(snapshots
-      .filter(({ id, publishedRevisionId }) => current.get(String(id).toLowerCase()) === String(publishedRevisionId).toLowerCase())
-      .map(({ id }) => String(id).toLowerCase()));
-  });
 }
 
 async function getPublishedBlocksBatch(pool, contentType, sourceIds) {
@@ -347,113 +324,12 @@ function publishedBodyText(row, legacyField = 'content') {
   return typeof row?.[legacyField] === 'string' ? row[legacyField] : '';
 }
 
-async function stablePublishedAnnouncements(pool) {
-  await promoteDueScheduledForPool(pool, new Date(), 'announcement');
-  const visible = await withTransaction(pool, async (db) => {
-    const { rows } = await db.query(
-      `SELECT d.id, d.title, d.category, d.published_at,
-              r.id AS published_revision_id, r.blocks, r.editorial
-         FROM cms_documents d
-         JOIN cms_revisions r
-           ON r.id = d.published_revision_id AND r.status = 'published'
-        WHERE d.content_type = 'announcement'
-        ORDER BY d.published_at DESC NULLS LAST, d.updated_at DESC, d.id`,
-    );
-    const validations = await validatePublishedBlocksBatch(db, rows.map(row => row.blocks));
-    const visible = rows.flatMap((row, index) => {
-      const revision = validateNewsRevision(row.blocks, row.editorial ?? null, { publishing: true });
-      return validations[index].blocks === null || !revision ? [] : [{ ...row, ...revision }];
-    });
-    return visible;
-  });
-  const stableIds = await recheckPublishedAnnouncements(pool, visible.map(row => ({
-    id: row.id,
-    publishedRevisionId: row.published_revision_id,
-  })));
-  return visible.filter(row => stableIds.has(String(row.id).toLowerCase())).map(articleDTO);
-}
-
-function articleDTO({ blocks, published_revision_id: _publishedRevisionId, ...row }) {
-  const editorial = row.editorial ?? null;
-  return { ...row, id: String(row.id).toLowerCase(), editorial, content_blocks: blocks,
-    read_time_minutes: estimateNewsReadTime(blocks, editorial) };
-}
-
-function selectAnnouncements(rows, category, kind) {
-  return rows.filter(row => (category === undefined || row.category === category)
-    && (kind === undefined || announcementKind(row) === kind));
-}
-
-async function listPublishedAnnouncementCategories(pool, { kind, withCounts = false } = {}) {
-  const rows = selectAnnouncements(await stablePublishedAnnouncements(pool), undefined, kind);
-  const counts = new Map();
-  for (const { category } of rows) {
-    if (typeof category === 'string' && category.trim()) counts.set(category, (counts.get(category) || 0) + 1);
-  }
-  const names = [...counts.keys()].sort();
-  return withCounts ? { total: rows.length, categories: names.map(name => ({ name, count: counts.get(name) })) } : names;
-}
-
-async function listPublishedAnnouncements(pool, limit, offset, category, kind) {
-  const stable = selectAnnouncements(await stablePublishedAnnouncements(pool), category, kind);
-  return {
-    count: stable.length,
-    rows: stable.slice(offset, offset + limit),
-  };
-}
-
-async function getPublishedAnnouncementNavigation(pool, id, category) {
-  id = String(id).toLowerCase();
-  const rows = await stablePublishedAnnouncements(pool);
-  const current = rows.find(row => row.id === id);
-  if (!current) return null;
-  if (announcementKind(current) === 'edition') return { previous: null, next: null };
-  const articles = selectAnnouncements(rows, category, 'article');
-  const at = articles.findIndex(row => row.id === id);
-  if (at < 0) return null;
-  const item = row => row ? { id: row.id, title: row.title } : null;
-  return { previous: item(articles[at - 1]), next: item(articles[at + 1]) };
-}
-
-async function getPublishedAnnouncement(pool, id) {
-  await promoteDueScheduledForPool(pool, new Date(), 'announcement');
-  const result = await withTransaction(pool, async (db) => {
-    const { rows } = await db.query(
-      `SELECT d.id, d.title, d.category, d.published_at,
-              r.id AS published_revision_id, r.blocks, r.editorial
-         FROM cms_documents d
-         JOIN cms_revisions r
-           ON r.id = d.published_revision_id AND r.status = 'published'
-        WHERE d.id = $1 AND d.content_type = 'announcement'`,
-      [String(id).toLowerCase()],
-    );
-    const row = rows[0];
-    if (!row) return null;
-    const revision = validateNewsRevision(row.blocks, row.editorial ?? null, { publishing: true });
-    if (!revision) return null;
-    const validation = await validatePublishedBlocks(db, row.blocks);
-    if (validation.blocks === null) return null;
-    return { row: { ...row, ...revision }, blocks: validation.blocks };
-  });
-  if (!result) return null;
-  const stableIds = await recheckPublishedAnnouncements(pool, [{
-    id: result.row.id,
-    publishedRevisionId: result.row.published_revision_id,
-  }]);
-  if (!stableIds.has(String(result.row.id).toLowerCase())) return null;
-  return articleDTO({ ...result.row, blocks: result.blocks });
-}
-
 module.exports = {
   addPublishedBlocks,
   cmsManagedRow,
-  getPublishedAnnouncement,
-  getPublishedAnnouncementNavigation,
   blocksToText,
   getPublishedBlocksBatch,
   isPublicCmsRow,
-  listPublishedAnnouncementCategories,
-  listPublishedAnnouncements,
   publishedBodyText,
   promoteDueScheduled,
   promoteDueScheduledForPool,

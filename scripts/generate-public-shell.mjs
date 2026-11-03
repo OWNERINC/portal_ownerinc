@@ -6,7 +6,6 @@ const pages = [
   ['knowledge', 'Base de Conhecimento', 'book-open'],
   ['reminders', 'Lembretes', 'bell'],
   ['academy', 'Academy', 'graduation-cap'],
-  ['announcements', 'Owner News', 'megaphone'],
   ['profile', 'Meu Perfil', 'user'],
 ];
 
@@ -16,7 +15,6 @@ const generatedPages = [
   ['reminders.html', 'reminders', 'Lembretes'],
   ['academy.html', 'academy', 'Academy'],
   ['benefits.html', 'benefits', 'Benefícios'],
-  ['announcements.html', 'announcements', 'Owner News'],
   ['profile.html', 'profile', 'Meu Perfil'],
   ['admin.html', 'admin', 'Painel Admin'],
   ['autocard.html', 'autocard', 'AutoCard'],
