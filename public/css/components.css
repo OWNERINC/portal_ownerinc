@@ -210,7 +210,6 @@ body.modal-open { overflow: hidden; }
 .article-excerpt { margin-top: 10px; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
 .card-link-title { display: block; min-height: 44px; color: inherit; text-decoration: none; }
 .card-link-title:focus-visible { outline-offset: 3px; }
-.announcement-card:focus { outline: 3px solid var(--focus); outline-offset: 3px; }
 .category-filter { cursor: pointer; border: 0; min-height: 36px; padding-inline: 14px; }
 .category-filter, .admin-tab, button { min-height: 44px; }
 .content-section { margin-top: 36px; }
@@ -231,8 +230,6 @@ body.modal-open { overflow: hidden; }
 .benefit-description { color: var(--espresso); font-weight: 500; overflow-wrap: anywhere; }
 .info-panel { margin-top: 10px; padding: 10px 12px; background: var(--bg); border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .card-link-label { display: inline-flex; align-items: center; min-height: 44px; margin-top: 12px; color: var(--focus); font-size: 12px; }
-.cms-pdf-frame { height: min(80dvh, 760px); }
-.cms-pdf-note { margin-top: 8px; color: var(--text-secondary); font-size: var(--font-size-xs); line-height: 1.5; }
 .table-detail { display: block; margin-top: 3px; font-size: 12px; color: var(--text-secondary); }
 .table-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .pagination { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 16px; }

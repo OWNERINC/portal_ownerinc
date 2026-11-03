@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 import { mountSource, activePageDouble } from '../helpers/page-mount.mjs';
-import { createFeedbackHarness, drain } from '../helpers/frontend-feedback-harness.mjs';
+import { drain } from '../helpers/frontend-feedback-harness.mjs';
 
-const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cmsCss, profile, dashboard, knowledge, academy, announcements, renderer, nginx] = await Promise.all([
+const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, profile, dashboard, knowledge, academy, nginx] = await Promise.all([
   readFile('public/js/ui.js', 'utf8'),
   readFile('public/js/sidebar.js', 'utf8'),
   readFile('public/css/tokens.css', 'utf8'),
@@ -13,13 +13,10 @@ const [ui, sidebar, tokens, layout, components, dashboardHome, knowledgeCss, cms
   readFile('public/css/components.css', 'utf8'),
   readFile('public/css/dashboard-home.css', 'utf8'),
   readFile('public/css/knowledge.css', 'utf8'),
-  readFile('public/css/cms.css', 'utf8'),
   readFile('public/js/profile.js', 'utf8'),
   readFile('public/js/dashboard.js', 'utf8'),
   readFile('public/js/knowledge.js', 'utf8'),
   readFile('public/js/academy.js', 'utf8'),
-  readFile('public/js/announcements.js', 'utf8'),
-  readFile('public/js/cms-block-renderer.js', 'utf8'),
   readFile('nginx/nginx.conf', 'utf8'),
 ]);
 
@@ -268,7 +265,6 @@ function loadAcademyHarness() {
       return node;
     },
     safeHttpUrl: value => /^https?:/.test(value) ? value : null,
-    renderBlocks() {},
     showState(node, message, retry) {
       const state = createTestNode(document, 'div');
       state.textContent = message;
@@ -309,7 +305,7 @@ function loadKnowledgeHarness({ canManage = false } = {}) {
   const ids = [
     ['button', 'btn-new'], ['input', 'search'], ['div', 'categories'], ['div', 'articles-list'],
     ['div', 'articles-pagination'], ['article', 'article-view'], ['div', 'modal-article'], ['form', 'article-form'],
-    ['input', 'f-pdf'], ['input', 'f-pdf-state'], ['p', 'f-pdf-status'], ['button', 'f-pdf-remove'], ['textarea', 'f-content'],
+    ['textarea', 'f-content'],
     ['div', 'article-content'], ['h2', 'article-title'], ['span', 'article-category'], ['div', 'article-admin-bar'],
     ['span', 'modal-article-title'], ['input', 'f-title'], ['input', 'f-category'], ['button', 'modal-article-save'],
     ['button', 'modal-article-close'], ['button', 'modal-article-cancel'], ['button', 'btn-back'],
@@ -318,7 +314,6 @@ function loadKnowledgeHarness({ canManage = false } = {}) {
   const modal = nodes.get('modal-article');
   modal.className = 'modal-backdrop hidden';
   nodes.get('article-view').hidden = true;
-  nodes.get('f-pdf').files = [];
   nodes.get('article-form').reportValidity = () => true;
   const main = createTestNode(document, 'main');
   const pageHeading = createTestNode(document, 'h1', 'knowledge-heading');
@@ -336,8 +331,6 @@ function loadKnowledgeHarness({ canManage = false } = {}) {
   let activeListRequest;
   const detail = deferred();
   const detailRequests = [];
-  const uploadRequests = [];
-  const deleteRequests = [];
   const articleDeleteRequests = [];
   const saveRequests = [];
   const window = { listeners: new Map(), addEventListener(type, handler) { this.listeners.set(type, handler); }, confirm: () => true };
@@ -371,16 +364,6 @@ function loadKnowledgeHarness({ canManage = false } = {}) {
     },
      fetchAPI: (path, options = {}) => {
        if (path.endsWith('/categories')) return activeListRequest.categories.promise;
-      if (path === '/api/cms/assets') {
-        const request = deferred();
-        uploadRequests.push(request);
-        return request.promise;
-      }
-       if (path.startsWith('/api/cms/assets/')) {
-         const request = deferred();
-         deleteRequests.push(request);
-         return request.promise;
-       }
        if (path.startsWith('/api/knowledge/') && options.method === 'DELETE') {
          const request = deferred();
          articleDeleteRequests.push(request);
@@ -444,23 +427,13 @@ function loadKnowledgeHarness({ canManage = false } = {}) {
        next.dataset.paginationBoundaryDisabled = String(next.disabled);
        node.append(previous, context.element('span', { text: `Página ${page + 1} de ${pageCount}` }), next);
      },
-    blocksToText: blocks => blocks.map(block => block.text || '').join('\n'),
-    renderBlocks(node, blocks, { fallbackText = '' } = {}) {
-      context.clear(node);
-      if (!Array.isArray(blocks) || !blocks.length) {
-        if (fallbackText) node.append(context.element('p', { text: fallbackText }));
-        return false;
-      }
-      blocks.forEach(block => node.append(context.element('p', { text: block.text || '' })));
-      return true;
-    },
   };
   const source = knowledge
     .replace(/^import[^\n]+\n/gm, '')
     .replace(/const user = await requireAuth\(\);\nif \(!user\) throw new Error\('Authentication required'\);\n/, '')
     .replace(/\nloadArticles\(\);\n}\s*$/, '\n}');
   vm.runInNewContext(mountSource(source, 'globalThis.loadArticles = loadArticles; globalThis.openArticle = openArticle; globalThis.editArticle = editArticle; globalThis.newArticle = newArticle; globalThis.deleteArticle = deleteArticle;'), context, { filename: 'knowledge.js' });
-  return { context, document, nodes, location, listRequests, detail, detailRequests, uploadRequests, deleteRequests, articleDeleteRequests, saveRequests, window, pageHeading };
+  return { context, document, nodes, location, listRequests, detail, detailRequests, articleDeleteRequests, saveRequests, window, pageHeading };
 }
 
 function loadUiHarness() {
@@ -703,7 +676,7 @@ test('CSP-safe typography and contrast tokens do not depend on remote font loadi
 });
 
 test('requests keep current content pending and reject stale filtered responses', () => {
-  for (const [source, token] of [[dashboard, 'announcementsRequest'], [dashboard, 'remindersRequest'], [dashboard, 'academyRequest'], [knowledge, 'articlesRequest'], [announcements, 'announcementsRequest']]) {
+  for (const [source, token] of [[dashboard, 'remindersRequest'], [dashboard, 'academyRequest'], [knowledge, 'articlesRequest']]) {
     assert.match(source, new RegExp(`let ${token} = 0`));
     assert.match(source, /setBusy\(/);
     assert.match(source, /finally/);
@@ -711,7 +684,6 @@ test('requests keep current content pending and reject stale filtered responses'
   }
   assert.doesNotMatch(knowledge.slice(knowledge.indexOf('async function loadArticles'), knowledge.indexOf('\n\nfunction newArticle')), /showState\(listNode, 'Carregando artigos/);
   assert.match(knowledge, /if \(!articles\.length && offset > 0\)/);
-  assert.match(announcements, /news_page_restart_required/);
   assert.match(knowledge, /function normalizeCategories/);
   assert.match(academy, /mountAcademy\(page\)/);
   assert.match(profile, /const initialFocus = document\.activeElement/);
@@ -722,7 +694,7 @@ test('requests keep current content pending and reject stale filtered responses'
 });
 
 test('focus fallback helpers reject inert targets and inert ancestors', () => {
-  for (const source of [knowledge, announcements]) {
+  for (const source of [knowledge]) {
     assert.match(source, /function hasInertAncestor/);
     assert.match(source, /!node\.inert && !hasInertAncestor\(node\)/);
   }
@@ -735,12 +707,11 @@ test('catalog cards and dashboard stories never put CMS links inside another anc
   const academyCards = await readFile('public/academy/view-utils.js', 'utf8');
   assert.match(academyCards, /element\('article', \{ className: 'academy-course-card'/);
   assert.doesNotMatch(dashboard, /element\(href \? 'a'/);
-  assert.match(renderer, /Abrir PDF em nova aba/);
-  assert.match(renderer, /A acessibilidade do arquivo depende do documento PDF original/);
+  assert.doesNotMatch(dashboard, /cms-block-renderer|content_blocks|\/api\/cms/);
 });
 
 test('mobile shell retains zoom, reflow, keyboard focus, and reduced-motion invariants', async () => {
-  const pages = await Promise.all(['dashboard', 'knowledge', 'academy', 'announcements', 'profile'].map(page => readFile(`public/${page}.html`, 'utf8')));
+  const pages = await Promise.all(['dashboard', 'knowledge', 'academy', 'reminders', 'profile'].map(page => readFile(`public/${page}.html`, 'utf8')));
   for (const html of pages) {
     assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1\.0">/);
     assert.doesNotMatch(html, /user-scalable\s*=\s*no|maximum-scale\s*=\s*1/i);
@@ -752,9 +723,7 @@ test('mobile shell retains zoom, reflow, keyboard focus, and reduced-motion inva
   assert.match(layout, /\.topbar-title[^}]*overflow-wrap:\s*anywhere/);
   assert.doesNotMatch(layout, /\.topbar-title \{[^}]*text-overflow:\s*ellipsis/);
   assert.match(`${layout}\n${components}\n${dashboardHome}\n${knowledgeCss}`, /prefers-reduced-motion:\s*reduce/);
-  assert.match(`${components}\n${dashboardHome}\n${knowledgeCss}\n${cmsCss}`, /overflow-wrap:\s*anywhere/);
-  assert.match(components, /\.cms-pdf-frame\s*\{[^}]*height:\s*min\(80dvh/);
-  assert.match(cmsCss, /\.cms-pdf-frame\s*\{[^}]*width:\s*100%/);
+  assert.match(`${components}\n${dashboardHome}\n${knowledgeCss}`, /overflow-wrap:\s*anywhere/);
   assert.match(`${components}\n${knowledgeCss}`, /outline:\s*3px solid var\(--focus\)/);
 });
 
@@ -810,52 +779,6 @@ test('Academy initial/repeated error focuses usable retry, then successful retry
   h.page.dispose();
 });
 
-test('Announcements preserves pagination focus and boundary buttons after a deferred page load', async t => {
-  const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
-  h.requests.find(r => r.kind === 'list').resolve({
-    data: [{ id: '11111111-1111-4111-8111-111111111111', source: 'legacy', asset_scope: 'legacy', title: 'Primeiro', category: 'Geral', content_blocks: [] }],
-    total: 48, nextCursor: 'second-page',
-  });
-  await drain();
-  const pagination = h.node('announcements-pagination');
-  const oldNext = pagination.querySelectorAll('button')[1];
-  oldNext.focus();
-  oldNext.click();
-  assert.match(h.page.location.href, /cursor=second-page/);
-  assert.equal(h.requests.filter(r => r.kind === 'list').length, 2);
-  h.requests.filter(r => r.kind === 'list').at(-1).resolve({
-    data: [{ id: '22222222-2222-4222-8222-222222222222', source: 'payload', asset_scope: 'owner-news', title: 'Segundo', category: 'Geral', content_blocks: [] }], total: 30, nextCursor: null,
-  }); await drain();
-  assert.match(h.doc.activeElement.textContent, /Segundo/);
-  assert.deepEqual(pagination.querySelectorAll('button').map(button => button.disabled), [false, true]);
-});
-
-test('Announcements restores pagination focus to the list or empty state when controls disappear', async t => {
-  for (const empty of [false, true]) {
-    const h = await createFeedbackHarness('announcements'); t.after(() => h.page.dispose());
-    h.requests.find(r => r.kind === 'list').resolve({ data: [{ id: '11111111-1111-4111-8111-111111111111', source: 'legacy', asset_scope: 'legacy', title: 'Primeiro', content_blocks: [] }], total: 48, nextCursor: 'next' }); await drain();
-    h.node('announcements-pagination').querySelectorAll('button').find(button => !button.disabled).focus();
-    h.popstate('/announcements.html?category=Outra', null);
-    h.requests.filter(r => r.kind === 'list').at(-1).resolve({ data: empty ? [] : [{ id: '22222222-2222-4222-8222-222222222222', source: 'legacy', asset_scope: 'legacy', title: 'Último', content_blocks: [] }], total: empty ? 0 : 1, nextCursor: null }); await drain();
-    assert.match(h.doc.activeElement.textContent, empty ? /Nenhuma publicação nesta editoria/ : /Último/);
-    if (!empty) assert.equal(h.doc.activeElement.tagName, 'A');
-  }
-});
-
-test('Knowledge preserves legacy fallback, hides list pagination in detail, and does not steal moved focus', async () => {
-  const harness = loadKnowledgeHarness();
-  const search = harness.nodes.get('search');
-  search.focus();
-  const request = harness.context.openArticle('article-1', false);
-  search.focus();
-  harness.detail.resolve({ id: 'article-1', title: 'Artigo legado', category: 'Geral', content: 'Texto legado', content_blocks: [] });
-  await request;
-
-  assert.equal(harness.document.activeElement, search);
-  assert.equal(harness.nodes.get('articles-pagination').hidden, true);
-  assert.equal(harness.nodes.get('article-content').children[0].textContent, 'Texto legado');
-  assert.equal(harness.nodes.get('article-view').hidden, false);
-});
 
 test('Knowledge 404/null detail responses return to visible list controls without stealing moved focus', async () => {
   const notFound = loadKnowledgeHarness();
@@ -911,7 +834,7 @@ test('Knowledge keeps moved focus on detail errors and ignores stale filtered re
 test('Knowledge delete from detail restores a visible list destination instead of the hidden delete button', async () => {
   const harness = loadKnowledgeHarness({ canManage: true });
   const detailRequest = harness.context.openArticle('article-1', false);
-  harness.detail.resolve({ id: 'article-1', title: 'Artigo', category: 'Geral', content: 'Texto', content_blocks: [] });
+  harness.detail.resolve({ id: 'article-1', title: 'Artigo', category: 'Geral', content: 'Texto' });
   await detailRequest;
 
   const deleteButton = harness.nodes.get('article-admin-bar').children[1];
@@ -935,7 +858,7 @@ test('Knowledge delete from detail restores a visible list destination instead o
 test('Knowledge ignores a stale detail DELETE after navigation to another article', async () => {
   const harness = loadKnowledgeHarness({ canManage: true });
   const firstArticle = harness.context.openArticle('article-1', false);
-  harness.detail.resolve({ id: 'article-1', title: 'Artigo antigo', category: 'Geral', content: 'Antigo', content_blocks: [] });
+  harness.detail.resolve({ id: 'article-1', title: 'Artigo antigo', category: 'Geral', content: 'Antigo' });
   await firstArticle;
 
   const oldDeleteButton = harness.nodes.get('article-admin-bar').children[1];
@@ -945,7 +868,7 @@ test('Knowledge ignores a stale detail DELETE after navigation to another articl
 
   const secondArticle = harness.context.openArticle('article-2');
   assert.equal(harness.detailRequests.length, 2);
-  harness.detailRequests[1].resolve({ id: 'article-2', title: 'Artigo novo', category: 'Geral', content: 'Novo', content_blocks: [] });
+  harness.detailRequests[1].resolve({ id: 'article-2', title: 'Artigo novo', category: 'Geral', content: 'Novo' });
   await secondArticle;
   assert.match(harness.location.href, /article=article-2/);
   assert.equal(harness.nodes.get('article-title').textContent, 'Artigo novo');
@@ -1056,7 +979,7 @@ test('Knowledge popstate restores the previous URL when dirty modal navigation i
 test('Knowledge back navigation from a detail view restores focus to visible list controls', async () => {
   const harness = loadKnowledgeHarness();
   const detail = harness.context.openArticle('article-1', false);
-  harness.detail.resolve({ id: 'article-1', title: 'Artigo', category: 'Geral', content: 'Texto', content_blocks: [] });
+  harness.detail.resolve({ id: 'article-1', title: 'Artigo', category: 'Geral', content: 'Texto' });
   await detail;
   const detailTitle = harness.nodes.get('article-title');
   assert.equal(harness.document.activeElement, detailTitle);
@@ -1077,7 +1000,7 @@ test('Knowledge back navigation from a detail view restores focus to visible lis
 test('Knowledge back navigation exposes a visible list retry state when loading fails', async () => {
   const harness = loadKnowledgeHarness();
   const detail = harness.context.openArticle('article-1', false);
-  harness.detail.resolve({ id: 'article-1', title: 'Artigo', category: 'Geral', content: 'Texto', content_blocks: [] });
+  harness.detail.resolve({ id: 'article-1', title: 'Artigo', category: 'Geral', content: 'Texto' });
   await detail;
 
   const detailTitle = harness.nodes.get('article-title');
@@ -1100,229 +1023,12 @@ test('Knowledge back navigation exposes a visible list retry state when loading 
   assert.equal(harness.document.activeElement.closest('#article-view'), null);
 });
 
-test('Knowledge blocks PDF close while pending and deletes a newly uploaded asset before closing', async () => {
-  const harness = loadKnowledgeHarness();
-  const pdfInput = harness.nodes.get('f-pdf');
-  pdfInput.files = [{ type: 'application/pdf', size: 10 }];
-  pdfInput.dispatch('change');
-  assert.equal(harness.nodes.get('modal-article').closeGuard(), false);
 
-  harness.uploadRequests[0].resolve({ id: 'asset-1', original_name: 'manual.pdf' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.match(harness.nodes.get('f-pdf-status').textContent, /Selecionado: manual\.pdf/);
 
-  harness.nodes.get('f-pdf-remove').focus();
-  assert.equal(harness.nodes.get('modal-article').closeGuard(), false);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.deleteRequests.length, 1);
-  harness.deleteRequests[0].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.nodes.get('modal-article').classList.contains('hidden'), true);
-  assert.equal(harness.document.activeElement, harness.nodes.get('f-pdf'));
-});
 
-test('Knowledge moves focus to the PDF input when synchronous removal hides the focused remove button', () => {
-  const harness = loadKnowledgeHarness();
-  harness.context.editArticle({ id: 'article-1', title: 'Artigo', category: 'Geral', content: '', content_blocks: [
-    { type: 'pdf', asset_id: 'persisted-pdf', title: 'manual.pdf' },
-  ] });
-  const remove = harness.nodes.get('f-pdf-remove');
-  remove.focus();
-  remove.dispatch('click');
-  assert.equal(harness.document.activeElement, harness.nodes.get('f-pdf'));
-  assert.equal(remove.hidden, true);
-});
 
-test('Knowledge treats a referenced-asset DELETE conflict as preserved, never as a client-side deletion', async () => {
-  const harness = loadKnowledgeHarness();
-  const input = harness.nodes.get('f-pdf');
-  input.files = [{ type: 'application/pdf', size: 10 }];
-  input.dispatch('change');
-  harness.uploadRequests[0].resolve({ id: 'referenced-asset', original_name: 'manual.pdf' });
-  await new Promise(resolve => setImmediate(resolve));
 
-  assert.equal(harness.nodes.get('modal-article').closeGuard(), false);
-  await new Promise(resolve => setImmediate(resolve));
-  harness.deleteRequests[0].reject({ status: 409, reason: 'referenced', message: 'referenced' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.nodes.get('modal-article').classList.contains('hidden'), true);
-});
 
-test('Knowledge keeps pending PDF cleanup in the session and retries 202/already-deleting results', async () => {
-  const upload = async (harness, id) => {
-    const input = harness.nodes.get('f-pdf');
-    input.files = [{ type: 'application/pdf', size: 10 }];
-    input.dispatch('change');
-    harness.uploadRequests[0].resolve({ id, original_name: 'manual.pdf' });
-    await new Promise(resolve => setImmediate(resolve));
-  };
-
-  const pending = loadKnowledgeHarness();
-  await upload(pending, 'pending-asset');
-  pending.nodes.get('modal-article').classList.remove('hidden');
-  pending.nodes.get('f-pdf-remove').focus();
-  assert.equal(pending.nodes.get('modal-article').closeGuard(), false);
-  await new Promise(resolve => setImmediate(resolve));
-  pending.deleteRequests[0].resolve({ error: 'Asset cleanup is pending.', reason: 'pending' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(pending.nodes.get('modal-article').classList.contains('hidden'), false);
-  assert.match(pending.nodes.get('f-pdf-status').textContent, /ainda está pendente/);
-  assert.equal(pending.nodes.get('modal-article').closeGuard(), false);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(pending.deleteRequests.length, 2);
-  pending.deleteRequests[1].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(pending.nodes.get('modal-article').classList.contains('hidden'), true);
-
-  const inProgress = loadKnowledgeHarness();
-  await upload(inProgress, 'in-progress-asset');
-  inProgress.nodes.get('modal-article').classList.remove('hidden');
-  inProgress.nodes.get('f-pdf-remove').focus();
-  assert.equal(inProgress.nodes.get('modal-article').closeGuard(), false);
-  await new Promise(resolve => setImmediate(resolve));
-  inProgress.deleteRequests[0].reject({ status: 409, reason: 'already_deleting', message: 'already deleting' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(inProgress.nodes.get('modal-article').classList.contains('hidden'), false);
-  assert.match(inProgress.nodes.get('f-pdf-status').textContent, /já está em andamento/);
-});
-
-test('Knowledge deletes a stale PDF upload that resolves after a newer valid selection', async () => {
-  const harness = loadKnowledgeHarness();
-  const input = harness.nodes.get('f-pdf');
-  const file = { type: 'application/pdf', size: 10 };
-
-  input.files = [file];
-  input.dispatch('change');
-  input.files = [file];
-  input.dispatch('change');
-  assert.equal(harness.uploadRequests.length, 2);
-
-  harness.uploadRequests[1].resolve({ id: 'newer-asset', original_name: 'newer.pdf' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.match(harness.nodes.get('f-pdf-status').textContent, /Selecionado: newer\.pdf/);
-
-  harness.uploadRequests[0].resolve({ id: 'stale-asset', original_name: 'stale.pdf' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.deleteRequests.length, 1);
-  harness.deleteRequests[0].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  assert.match(harness.nodes.get('f-pdf-status').textContent, /Selecionado: newer\.pdf/);
-  assert.equal(JSON.parse(harness.nodes.get('f-pdf-state').value).selected, 'newer-asset');
-});
-
-test('Knowledge invalid PDF selection invalidates an active upload and cleans its late response', async () => {
-  const harness = loadKnowledgeHarness();
-  const input = harness.nodes.get('f-pdf');
-  input.files = [{ type: 'application/pdf', size: 10 }];
-  input.dispatch('change');
-  input.files = [{ type: 'text/plain', size: 10 }];
-  input.dispatch('change');
-  assert.match(harness.nodes.get('f-pdf-status').textContent, /PDF válido/);
-
-  harness.uploadRequests[0].resolve({ id: 'invalidated-asset', original_name: 'late.pdf' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.deleteRequests.length, 1);
-  harness.deleteRequests[0].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(input.disabled, false);
-  assert.equal(JSON.parse(harness.nodes.get('f-pdf-state').value).pending, false);
-});
-
-test('Knowledge switches a newly created article to PUT before retrying pending PDF cleanup', async () => {
-  const harness = loadKnowledgeHarness();
-  const input = harness.nodes.get('f-pdf');
-  const form = harness.nodes.get('article-form');
-  harness.nodes.get('modal-article').classList.remove('hidden');
-  harness.nodes.get('f-title').value = 'Novo artigo';
-  harness.nodes.get('f-category').value = 'Geral';
-  harness.nodes.get('f-content').value = 'Conteúdo';
-
-  const upload = async (id, name) => {
-    input.files = [{ type: 'application/pdf', size: 10 }];
-    input.dispatch('change');
-    harness.uploadRequests.at(-1).resolve({ id, original_name: name });
-    await new Promise(resolve => setImmediate(resolve));
-  };
-
-  await upload('first-asset', 'first.pdf');
-  await upload('selected-asset', 'selected.pdf');
-  assert.equal(harness.deleteRequests.length, 1);
-  harness.deleteRequests[0].resolve({ reason: 'pending' });
-  await new Promise(resolve => setImmediate(resolve));
-  await new Promise(resolve => setImmediate(resolve));
-
-  form.dispatch('submit', { currentTarget: form });
-  assert.equal(harness.saveRequests[0].options.method, 'POST');
-  harness.saveRequests[0].resolve({ id: 'created-article' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.deleteRequests.length, 2);
-  harness.deleteRequests[1].resolve({ reason: 'pending' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.nodes.get('modal-article').classList.contains('hidden'), false);
-  assert.equal(harness.nodes.get('modal-article-title').textContent, 'Editar Artigo');
-
-  form.dispatch('submit', { currentTarget: form });
-  assert.equal(harness.saveRequests[1].path, '/api/knowledge/created-article');
-  assert.equal(harness.saveRequests[1].options.method, 'PUT');
-  harness.saveRequests[1].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.deleteRequests.length, 3);
-  harness.deleteRequests[2].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  if (harness.listRequests[0]) {
-    harness.listRequests[0].page.resolve({ data: [], total: 0 });
-    harness.listRequests[0].categories.resolve(['all']);
-  }
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(harness.nodes.get('modal-article').classList.contains('hidden'), true);
-});
-
-test('Knowledge cleans every replaced PDF asset on close and keeps only the saved asset', async () => {
-  const upload = async (harness, id, name) => {
-    const input = harness.nodes.get('f-pdf');
-    input.files = [{ type: 'application/pdf', size: 10 }];
-    input.dispatch('change');
-    harness.uploadRequests.at(-1).resolve({ id, original_name: name });
-    await new Promise(resolve => setImmediate(resolve));
-  };
-
-  const closing = loadKnowledgeHarness();
-  await upload(closing, 'asset-a', 'a.pdf');
-  closing.nodes.get('f-pdf').files = [{ type: 'application/pdf', size: 10 }];
-  closing.nodes.get('f-pdf').dispatch('change');
-  closing.uploadRequests.at(-1).resolve({ id: 'asset-b', original_name: 'b.pdf' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(closing.deleteRequests.length, 1);
-  closing.deleteRequests[0].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  closing.nodes.get('f-pdf-remove').focus();
-  assert.equal(closing.nodes.get('modal-article').closeGuard(), false);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(closing.deleteRequests.length, 2);
-  closing.deleteRequests[1].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(closing.nodes.get('modal-article').classList.contains('hidden'), true);
-
-  const saving = loadKnowledgeHarness();
-  await upload(saving, 'asset-a', 'a.pdf');
-  saving.nodes.get('f-pdf').files = [{ type: 'application/pdf', size: 10 }];
-  saving.nodes.get('f-pdf').dispatch('change');
-  saving.uploadRequests.at(-1).resolve({ id: 'asset-b', original_name: 'b.pdf' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(saving.deleteRequests.length, 1);
-  saving.deleteRequests[0].resolve({});
-  await new Promise(resolve => setImmediate(resolve));
-  saving.nodes.get('article-form').dispatch('submit', { currentTarget: saving.nodes.get('article-form') });
-  saving.saveRequests[0].resolve({ id: 'saved-article' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(saving.deleteRequests.length, 1);
-  if (saving.listRequests[0]) {
-    saving.listRequests[0].page.resolve({ data: [], total: 0 });
-    saving.listRequests[0].categories.resolve(['all']);
-  }
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(saving.nodes.get('modal-article').classList.contains('hidden'), true);
-});
 
 test('dialog close guards block unsafe close and restore focus only after visible close', () => {
   const harness = loadUiHarness();

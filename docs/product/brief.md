@@ -18,9 +18,11 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 - Perfis e permissões persistidos no PostgreSQL.
 - Base de conhecimento interna.
 - Academy dentro do Portal: formação inicial para todos, formação por cargo,
-  currículo de módulos/aulas, player YouTube ou arquivo HTTPS, materiais CMS,
-  conclusão manual e retomada individual. O catálogo de benefícios permanece
-  preservado para uma etapa futura e fora da experiência inicial.
+  currículo de módulos/aulas, mídia própria YouTube ou arquivo HTTPS, ativação e
+  desativação de conteúdo próprio, conclusão manual e retomada individual. A
+  Academy não usa materiais CMS nem apresentação editorial no runtime. O catálogo
+  de benefícios permanece preservado para uma etapa futura e fora da experiência
+  inicial.
 - Lembretes mensais enviados por email.
 - Upload de foto de perfil.
 
@@ -31,6 +33,15 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 - O frontend acessa somente a API publicada pelo Nginx.
 - Dados pessoais devem respeitar LGPD, acesso mínimo e rastreabilidade.
 - Firebase, Resend SMTP e futuros canais de mensagem dependem de serviços externos.
+
+## Limite editorial do produto atual
+
+O Portal mantém Knowledge, Academy, Benefits e Reminders com contratos próprios de
+texto, mídia, rotas e tabelas. CMS, Payload CMS, Owner News, editor editorial,
+enquetes, importadores e a URL `/announcements.html` não fazem parte do runtime
+ativo. Migrations, tabelas, uploads e documentação desses fluxos antigos são
+preservados para compatibilidade, auditoria e eventual decisão futura; preservação
+histórica não significa capacidade disponível.
 
 ### Limite de aceite da entrega Academy
 

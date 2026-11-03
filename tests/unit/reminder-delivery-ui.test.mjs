@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMountedHarness, drain } from '../helpers/cms-harness.mjs';
+import { createMountedHarness, drain } from '../helpers/maintained-page-harness.mjs';
 
 const UUID = '550e8400-e29b-41d4-a716-446655440000';
 const cron = overrides => ({
@@ -38,6 +38,18 @@ test('cron health renders while the independent delivery history is stalled', as
   historyRequests(h)[0].resolve(rows());
   await drain();
   assert.match(historyText(h), /Entrega atual/);
+});
+
+test('reminder descriptions render as text without CMS requests', async t => {
+  const h = await createMountedHarness('reminders');
+  t.after(() => h.page.dispose());
+  h.requests.find(request => request.path.startsWith('/api/reminders?')).resolve({
+    data: [{ id: UUID, title: 'Seguro', description: '<script>não executar</script>', trigger_day: 10,
+      target_users: 'all', channel: 'email', active: true }], total: 1,
+  });
+  await drain();
+  assert.match(h.node('reminders-tbody').textContent, /<script>não executar<\/script>/);
+  assert.equal(h.requests.some(request => /\/api\/cms/i.test(request.path)), false);
 });
 
 test('history failure does not mislabel a successful cron consultation', async t => {

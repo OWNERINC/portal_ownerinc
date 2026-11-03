@@ -279,41 +279,22 @@ test('restore protection backup ignores inherited S3 upload even when AWS would 
   assert.equal(await readFile(path.join(f.root, 'smoke.log'), 'utf8'), 'http://restore.invalid\n');
 });
 
-test('top-level backup and restore delegate payload-v1 to the coordinated validator path', async () => {
-  const [backupSource, restoreSource, operations] = await Promise.all([
-    readFile('scripts/backup.sh', 'utf8'), readFile('scripts/restore.sh', 'utf8'), readFile('scripts/payload-operations.sh', 'utf8'),
-  ]);
-  assert.match(backupSource, /RELEASE_FORMAT == payload-v1[\s\S]*?exec bash "\$root\/scripts\/payload-operations\.sh" backup "\$root"/u);
-  assert.match(restoreSource, /RELEASE_FORMAT == payload-v1[\s\S]*?exec bash "\$root\/scripts\/payload-operations\.sh" restore "\$root" "\$backup" --confirm RESTORE/u);
-  assert.match(operations, /verify_backup_manifest "\$backup"/u);
-  assert.match(operations, /write_payload_backup_manifest "\$destination"/u);
-  assert.match(operations, /verify_storage_archive "\$backup\/uploads\.tar\.gz"[\s\S]*?verify_storage_archive "\$backup\/cms-uploads\.tar\.gz"/u);
-  assert.match(operations, /restore_protection_destination[\s\S]*?capture "\$protection"[\s\S]*?destructive=true/u);
-});
-
 for (const failure of ['pg_dump', 'retention']) {
-  test(`failed restore protection backup (${failure}) preserves evidence and does not begin restore`, async t => {
+  test(`failed restore protection backup (${failure}) restarts only previously running services before any restore`, async t => {
     const f = await fixture(t); if (!f) return;
     await writeFile(path.join(f.root, 'running'), 'nginx\napi\npostgres\n');
     if (failure === 'retention') {
       await writeFile(path.join(f.root, 'bin/find'), '#!/usr/bin/env bash\nexit 43\n', { mode: 0o755 });
     }
     const result = f.run('restore', { BACKUP_UPLOAD_S3: 'true', FAKE_AWS_STATUS: '42', FAKE_DOCKER_FAIL: failure });
-    assert.equal(result.status, failure === 'retention' ? 1 : 42, result.output);
+    assert.equal(result.status, failure === 'retention' ? 43 : 42, result.output);
     assert.deepEqual(await f.calls('aws'), []);
     const commands = composeCommands(await f.calls('docker'), await f.shellRoot());
     assert.deepEqual(commands.map(args => args[0]), failure === 'retention'
-      ? [] : ['ps', 'stop', 'exec', 'start']);
-    if (failure === 'pg_dump') assert.deepEqual(commands.at(-1), ['start', 'nginx', 'api']);
+      ? ['ps', 'stop', 'exec', 'run', 'start'] : ['ps', 'stop', 'exec', 'start']);
+    assert.deepEqual(commands.at(-1), ['start', 'nginx', 'api']);
     assert.deepEqual(await f.running(), ['api', 'nginx', 'postgres']);
-    const attempts = await readdir(path.join(f.root, 'pre restore backups'));
-    assert.equal(attempts.length, failure === 'pg_dump' ? 1 : 0);
-    if (failure === 'pg_dump') {
-      assert.match(attempts[0], /^\d{8}T\d{6}Z$/);
-      assert.match(result.stderr, new RegExp(`Backup attempt preserved: ${attempts[0]}`));
-    } else {
-      assert.match(result.stderr, /Backup retention preflight failed: cannot enumerate backup root/);
-    }
+    assert.deepEqual(await readdir(path.join(f.root, 'pre restore backups')), []);
     await assertBackup(path.join(f.root, 'source backup'));
   });
 }

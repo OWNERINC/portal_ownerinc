@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const require = createRequire(new URL('../../api/package.json', import.meta.url));
@@ -51,6 +50,15 @@ const pool = {
         .map(row => ({ source_id: row.source_id, blocks: row.published ? row.blocks : null })) };
     }
     if (/FROM cron_status/.test(sql)) return { rows: cronStatus ? [cronStatus] : [] };
+    if (/INSERT INTO reminders/.test(sql)) return { rows: [{
+      id: '00000000-0000-4000-8000-000000000003', title: params[0], description: params[1],
+      trigger_day: params[2], target_users: JSON.parse(params[3]), channel: params[4],
+      active: params[5], created_by: params[6],
+    }] };
+    if (/UPDATE reminders/.test(sql)) return { rows: [{
+      id: params[0], title: params[1], description: params[2], trigger_day: params[3],
+      target_users: JSON.parse(params[4]), channel: params[5], active: params[6],
+    }] };
     const tableNames = { academy: 'academy', benefits: 'benefits', knowledge: 'knowledge_base', reminders: 'reminders' };
     const table = Object.entries(tableNames).find(([, tableName]) => new RegExp(`FROM ${tableName}\\b`).test(sql))?.[0];
     if (/^\s*SELECT/i.test(sql) && table && !/COUNT\(\*\)/.test(sql)) {
@@ -63,10 +71,16 @@ const pool = {
           && (params.length < 3 || row.target_users === 'all' || row.target_users === audience
             || (Array.isArray(row.target_users) && row.target_users.includes(uid))));
       }
+      if (table === 'reminders' && /LIMIT \$/.test(sql)) {
+        const limit = params.at(-2);
+        const offset = params.at(-1);
+        rows = rows.slice(offset, offset + limit);
+      }
       return { rows };
     }
     if (/COUNT\(\*\)/.test(sql)) {
-      return { rows: [{ count: /FROM notifications_log/.test(sql) ? deliveryCount : 0 }] };
+      return { rows: [{ count: /FROM notifications_log/.test(sql)
+        ? deliveryCount : /FROM reminders/.test(sql) ? contentRows.reminders.length : 0 }] };
     }
     if (/SELECT notifications_log\.id/.test(sql)) return { rows: deliveryRows };
     return { rows: [] };
@@ -134,13 +148,6 @@ test.beforeEach(() => {
   delete process.env.SOLIDES_PILOT_UIDS;
 });
 
-test('CMS route modules are registered without exposing a public asset mount', async () => {
-  const source = await readFile('api/index.js', 'utf8');
-  assert.match(source, /app\.use\('\/api\/cms',\s+require\('\.\/routes\/cms'\)\)/);
-  assert.match(source, /app\.use\('\/api\/cms\/assets',\s+require\('\.\/routes\/cms-assets'\)\)/);
-  assert.doesNotMatch(source, /express\.static\([^)]*cms/i);
-});
-
 test('AutoCard rejects malformed image bytes before touching PostgreSQL', async () => {
   const response = await request(app)
     .post('/api/autocard/media')
@@ -172,7 +179,50 @@ test('upcoming reminders are scoped and require the fixed seven-day contract', a
   assert.deepEqual(read.params, ['clt', 'viewer-1']);
 });
 
-test('reminder details are authenticated, scoped, active, CMS-visible, and linkable', async () => {
+test('reminder lists and upcoming expose UUID links consistently, with pagination totals', async () => {
+  const firstId = '00000000-0000-4000-8000-000000000001';
+  const secondId = '00000000-0000-4000-8000-000000000002';
+  const today = Number(new Intl.DateTimeFormat('en', {
+    timeZone: 'America/Sao_Paulo', day: 'numeric', month: 'numeric', year: 'numeric',
+  }).formatToParts(new Date()).find(part => part.type === 'day').value);
+  contentRows.reminders.push(
+    { id: firstId, title: 'Primeiro', description: '', active: true, target_users: 'all', trigger_day: today },
+    { id: secondId, title: 'Segundo', description: '', active: true, target_users: 'all', trigger_day: today },
+  );
+
+  const viewer = await request(app).get('/api/reminders?limit=1&offset=1');
+  assert.equal(viewer.status, 200);
+  assert.equal(viewer.headers['x-total-count'], '2');
+  assert.equal(viewer.body.length, 1);
+  assert.equal(viewer.body[0].content_url, `/reminders.html#reminder-${secondId}`);
+
+  const manager = await request(app).get('/api/reminders?all=true&limit=1&offset=1').set('x-test-admin', 'true');
+  assert.equal(manager.status, 200);
+  assert.equal(manager.headers['x-total-count'], '2');
+  assert.equal(manager.body.length, 1);
+  assert.equal(manager.body[0].content_url, `/reminders.html#reminder-${secondId}`);
+
+  const upcoming = await request(app).get('/api/reminders/upcoming?days=7');
+  assert.equal(upcoming.status, 200);
+  assert.deepEqual(upcoming.body.map(row => row.content_url), [
+    `/reminders.html#reminder-${firstId}`,
+    `/reminders.html#reminder-${secondId}`,
+  ]);
+
+  const created = await request(app).post('/api/reminders').set('x-test-admin', 'true').send({
+    title: 'Criado', description: 'Descrição', trigger_day: 10, target_users: 'all', channel: 'email', active: true,
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.content_url, `/reminders.html#reminder-${created.body.id}`);
+
+  const updated = await request(app).put(`/api/reminders/${created.body.id}`).set('x-test-admin', 'true').send({
+    title: 'Atualizado', description: 'Descrição', trigger_day: 11, target_users: 'all', channel: 'email', active: true,
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.content_url, `/reminders.html#reminder-${created.body.id}`);
+});
+
+test('reminder details are authenticated, scoped, active, and linkable', async () => {
   const id = '00000000-0000-4000-8000-000000000001';
   contentRows.reminders.push({
     id, title: 'Detalhe', description: 'Conteúdo', active: true, target_users: 'all', trigger_day: 10,
@@ -190,7 +240,7 @@ test('reminder details are authenticated, scoped, active, CMS-visible, and linka
   const read = calls.find(({ sql }) => /SELECT \* FROM reminders/.test(sql));
   assert.ok(read);
   assert.match(read.sql, /id = \$1 AND active = TRUE/);
-  assert.match(read.sql, /cms_documents/);
+  assert.doesNotMatch(read.sql, /cms_documents|cms_revisions|cms_assets/);
   assert.match(read.sql, /target_users/);
   assert.deepEqual(read.params, [id, 'clt', 'viewer-1']);
 
@@ -205,10 +255,6 @@ test('reminder details are authenticated, scoped, active, CMS-visible, and linka
   }
 
   contentRows.reminders[0] = { ...contentRows.reminders[0], active: true, target_users: 'all' };
-  cmsRows = [{ content_type: 'reminder', source_id: id, published: false, blocks: [] }];
-  calls.length = 0;
-  const unpublished = await request(app).get(`/api/reminders/${id}`);
-  assert.equal(unpublished.status, 404);
 });
 
 test('cron status exposes heartbeat, execution state, and delivery state separately', async () => {
@@ -272,6 +318,19 @@ test('delivery history returns reminder, recipient, reason, stable ID, and pagin
   assert.deepEqual(history.params, ['failed', '00000000-0000-4000-8000-000000000001', 20, 20]);
 });
 
+test('orphaned delivery history has no fabricated reminder URL', async () => {
+  deliveryRows = [{
+    id: '00000000-0000-4000-8000-000000000002', reminder_id: null,
+    scheduled_date: '2026-08-17', status: 'skipped', attempt_count: 1,
+  }];
+  deliveryCount = 1;
+  const response = await request(app)
+    .get('/api/reminders/deliveries?limit=20&offset=0')
+    .set('x-test-admin', 'true');
+  assert.equal(response.status, 200);
+  assert.equal(response.body[0].content_url, null);
+});
+
 test('only reminder managers can request inactive and all-audience records', async () => {
   assert.equal((await request(app).get('/api/reminders?all=true')).status, 403);
   const response = await request(app).get('/api/reminders?all=true').set('x-test-admin', 'true');
@@ -291,7 +350,7 @@ test('ordinary academy reads are active-only and unsafe URLs fail before SQL', a
   assert.equal(calls.length, 0);
 });
 
-test('public CMS lists, categories, counts, and details exclude unpublished documents', async () => {
+test('maintained domain lists use their own persisted fields, independent of editorial rows', async () => {
   const legacyId = '00000000-0000-4000-8000-000000000001';
   const hiddenId = '00000000-0000-4000-8000-000000000002';
   contentRows.academy.push(
@@ -320,9 +379,9 @@ test('public CMS lists, categories, counts, and details exclude unpublished docu
     const response = await request(app).get(`${path}?limit=1&offset=0`);
     assert.equal(response.status, 200, path);
     assert.deepEqual(response.body.map(row => row.id), [legacyId], path);
-    assert.equal(response.headers['x-total-count'], '1', path);
+    assert.equal(response.headers['x-total-count'], '2', path);
     const categories = await request(app).get(`${path}/categories`);
-    assert.deepEqual(categories.body, ['Legacy'], path);
+    assert.deepEqual([...categories.body].sort(), ['Hidden', 'Legacy'], path);
   }
 
   const allAcademy = await request(app).get('/api/academy?all=true').set('x-test-admin', 'true');
@@ -331,19 +390,19 @@ test('public CMS lists, categories, counts, and details exclude unpublished docu
   assert.equal(allBenefits.status, 200);
   assert.equal(allAcademy.body.length, 2);
   assert.equal(allBenefits.body.length, 2);
-  assert.equal((await request(app).get(`/api/knowledge/${hiddenId}`)).status, 404);
+  assert.equal((await request(app).get(`/api/knowledge/${hiddenId}`)).status, 200);
   const knowledge = await request(app).get('/api/knowledge?limit=1&offset=0');
   assert.equal(knowledge.status, 200);
   assert.deepEqual(knowledge.body.map(row => row.id), [legacyId]);
-  assert.equal(knowledge.headers['x-total-count'], '1');
+  assert.equal(knowledge.headers['x-total-count'], '2');
   const search = await request(app).get('/api/knowledge?q=body&limit=1&offset=0');
   assert.equal(search.status, 200);
   assert.deepEqual(search.body.map(row => row.id), [legacyId]);
-  assert.equal(search.headers['x-total-count'], '1');
+  assert.equal(search.headers['x-total-count'], '2');
   const reminders = await request(app).get('/api/reminders?limit=1&offset=0');
   assert.equal(reminders.status, 200);
-  assert.deepEqual(reminders.body, []);
-  assert.equal(reminders.headers['x-total-count'], '0');
+  assert.deepEqual(reminders.body.map(row => row.id), [hiddenId]);
+  assert.equal(reminders.headers['x-total-count'], '1');
 });
 
 test('category filters trim persisted whitespace for Knowledge, Academy, and Benefits', async () => {

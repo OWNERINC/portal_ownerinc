@@ -6,35 +6,6 @@ import { createRouterHarness, deferred, drain, Node, TestEvent } from '../helper
 
 const viewer = { uid: 'user-1', role: 'viewer', permissions: {} };
 
-test('Owner News direct URL and invalid return state close locally, then session loss disposes its guard', async () => {
-  const h = await createRouterHarness({ realUI: true });
-  const id = '11111111-1111-4111-8111-111111111111';
-  await h.router.navigate(`/announcements.html?id=${id}`);
-  const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
-  vm.runInContext(`${source}\nglobalThis.createNewsNavigation = createNewsNavigation;`, h.context);
-  const overlay = new Node('div', h.doc, { class: 'hidden', 'data-page-overlay': '' });
-  const close = new Node('button', h.doc, { id: 'news-reader-close' }); overlay.append(close); h.doc.body.append(overlay);
-  const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async () => {} });
-  await navigation.sync();
-  h.scope.history.replaceState({ ...h.history.state, retained: true, ownerNews: { returnHref: 'https://outside.test/announcements.html', cardId: 'news-card-direct', catalogY: 0 } }, '', h.location.href);
-  const length = h.entries.length;
-  h.doc.dispatchEvent(new TestEvent('keydown', { key: 'Escape' })); await drain();
-  assert.equal(h.location.search, '');
-  assert.equal(h.history.state.retained, true);
-  assert.equal(h.history.state.ownerNews, undefined);
-  assert.equal(h.entries.length, length);
-  assert.ok(overlay.classList.contains('hidden'));
-  await navigation.open({ source: 'payload', id: '22222222-2222-4222-8222-222222222222' });
-  const page = h.scope;
-  delete h.doc.documentElement.dataset.authSnapshot;
-  h.context.auth.currentUser = null; h.notifyAuthChange(); await drain();
-  assert.equal(page.active, false);
-  assert.equal(overlay.isConnected, false);
-  assert.equal(h.doc.body.classList.contains('modal-open'), false);
-  const href = h.location.href; navigation.close();
-  assert.equal(h.location.href, href);
-});
-
 test('navigation keeps the current stylesheet active while destination CSS is loading', async () => {
   const h = await createRouterHarness();
   h.page('/dashboard.html', { styles: ['/current.css'] });
@@ -120,7 +91,7 @@ test('review 1/2: authoritative revocation purges Admin even when destination HT
     const html = deferred(), auth = deferred();
     h.context.fetchOverride = () => html.promise;
     h.context.getCurrentUserDoc = () => auth.promise;
-    const navigation = h.router.navigate(order === 'destination-denied' ? '/cms.html' : '/dashboard.html');
+    const navigation = h.router.navigate(order === 'destination-denied' ? '/autocard.html' : '/dashboard.html');
     if (order !== 'auth-first') html.reject(new Error('HTML offline'));
     await drain();
     assert.equal(previous.active, true, 'preparation failure alone cannot revoke access');
@@ -152,11 +123,11 @@ test('review 1: a cancelled route still applies its current authorization, but a
   h.context.getCurrentUserDoc = () => lateAuth.promise;
   const stale = h.router.navigate('/academy.html');
   h.context.getCurrentUserDoc = async () => h.context.user;
-  await h.router.navigate('/cms.html');
+  await h.router.navigate('/knowledge.html');
   const newer = h.scope;
   lateAuth.resolve(viewer); await stale;
   assert.equal(newer.active, true);
-  assert.equal(h.location.pathname, '/cms.html');
+  assert.equal(h.location.pathname, '/knowledge.html');
 
   const otherAccount = deferred();
   h.context.getCurrentUserDoc = () => otherAccount.promise;
@@ -181,115 +152,6 @@ test('review 2: session loss removes private overlays even when auth already cle
   leftover.append(new Node('input', h.doc, { value: 'private' })); h.doc.body.append(leftover);
   h.notifyAuthChange();
   assert.equal(leftover.isConnected, false, 'purge must not depend on activePage still existing');
-});
-
-async function knowledgeWithStagedPdf() {
-  const h = await createRouterHarness({ realUI: true });
-  const deletes = [];
-  const upload = deferred();
-  Object.assign(h.context, {
-    fetchAPIPage: async () => ({ data: [], total: 0 }),
-    fetchAPI: (path, options = {}) => {
-      if (options.method === 'POST') return upload.promise;
-      if (options.method === 'DELETE') { const call = deferred(); deletes.push({ path, ...call }); return call.promise; }
-      return Promise.resolve([]);
-    },
-    renderBlocks() {}, blocksToText: () => '', readOffset: () => 0,
-    renderPagination() {}, setPaginationBusy() {},
-  });
-  const script = (await readFile('public/js/knowledge.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
-  vm.runInContext(`${script}\nglobalThis.knowledgeMount = mount;`, h.context);
-  h.modules.set('./knowledge.js', { mount: page => { h.context.currentKnowledgePage = page; h.context.knowledgeMount(page); } });
-  h.page('/knowledge.html', { setup(doc) {
-    const main = doc.getElementById('main-content');
-    for (const id of ['search', 'categories', 'articles-list', 'articles-pagination', 'article-view', 'article-content', 'article-title', 'article-category', 'article-admin-bar', 'btn-back']) {
-      main.append(new Node('div', doc, { id }));
-    }
-    doc.querySelector('.topbar').append(new Node('button', doc, { id: 'btn-new' }));
-    const modal = new Node('div', doc, { id: 'modal-article', class: 'hidden' });
-    const form = new Node('form', doc, { id: 'article-form' });
-    for (const id of ['f-title', 'f-category', 'f-content', 'f-pdf', 'f-pdf-state']) form.append(new Node('input', doc, { id, name: id }));
-    for (const id of ['modal-article-title', 'f-pdf-status', 'f-pdf-remove', 'modal-article-save', 'modal-article-close', 'modal-article-cancel']) modal.append(new Node('button', doc, { id }));
-    modal.append(form); doc.body.append(modal);
-  } });
-  assert.equal(await h.router.navigate('/knowledge.html'), true);
-  await drain();
-  h.doc.getElementById('article-form').reset = () => {
-    h.doc.getElementById('article-form').querySelectorAll('input').forEach(input => { input.value = ''; });
-  };
-  h.doc.getElementById('btn-new').click();
-  h.doc.getElementById('f-title').value = 'Unsaved article';
-  const input = h.doc.getElementById('f-pdf');
-  input.files = [{ name: 'staged.pdf', type: 'application/pdf', size: 100 }];
-  input.dispatchEvent(new TestEvent('change'));
-  upload.resolve({ id: 'staged-pdf', original_name: 'staged.pdf' }); await drain();
-  return { h, deletes, selected: () => JSON.parse(h.doc.getElementById('f-pdf-state').value).selected };
-}
-
-test('review 3: Back/Cancel keeps the actual Knowledge staged PDF; committed discard waits for cleanup and survives cleanup failure', async () => {
-  const { h, deletes, selected } = await knowledgeWithStagedPdf();
-  const page = h.context.currentKnowledgePage;
-  h.context.confirmResult = false;
-  h.history.go(-1); await drain();
-  assert.equal(h.location.pathname, '/knowledge.html');
-  assert.equal(deletes.length, 0, 'preflight must never DELETE an uploaded asset');
-  assert.equal(selected(), 'staged-pdf');
-  assert.equal(page.active, true);
-  assert.equal(h.doc.getElementById('modal-article').classList.contains('hidden'), false);
-
-  h.context.confirmResult = true;
-  const failed = h.router.navigate('/dashboard.html'); await drain();
-  assert.equal(deletes.length, 1);
-  assert.equal(page.active, true, 'the request must finish before page disposal');
-  deletes[0].reject(new Error('offline'));
-  assert.equal(await failed, false);
-  assert.equal(selected(), 'staged-pdf');
-  assert.equal(h.location.pathname, '/knowledge.html');
-  const accepted = h.router.navigate('/dashboard.html'); await drain();
-  deletes[1].resolve({ deleted: true });
-  assert.equal(await accepted, true);
-  assert.equal(page.active, false);
-  assert.equal(h.doc.getElementById('modal-article'), null);
-});
-
-test('review 3: same-page history and logout use committed discard rather than mutating preflight', async () => {
-  for (const action of ['history', 'logout']) {
-    const { h, deletes, selected } = await knowledgeWithStagedPdf();
-    const page = h.context.currentKnowledgePage;
-    if (action === 'history') page.history.pushState({}, '', '/knowledge.html?q=one');
-    h.context.confirmResult = false;
-    if (action === 'history') h.history.go(-1); else await h.router.requestLogout();
-    await drain();
-    assert.equal(deletes.length, 0);
-    assert.equal(selected(), 'staged-pdf');
-    h.context.confirmResult = true;
-    const done = action === 'logout' ? h.router.requestLogout() : (h.history.go(-1), Promise.resolve());
-    await drain();
-    assert.equal(deletes.length, 1);
-    deletes[0].resolve({ deleted: true }); await done; await drain();
-    if (action === 'logout') assert.equal(h.context.loggedOut, true);
-    else {
-      assert.equal(h.location.search, '');
-      assert.equal(h.doc.getElementById('modal-article').classList.contains('hidden'), true);
-    }
-  }
-});
-
-test('review 3: local modal close confirms before cleanup and closes once only after successful deletion', async () => {
-  const { h, deletes, selected } = await knowledgeWithStagedPdf();
-  let confirmations = 0;
-  h.window.confirm = () => { confirmations++; return h.context.confirmResult; };
-  h.context.confirmResult = false;
-  h.doc.getElementById('modal-article-close').click(); await drain();
-  assert.equal(deletes.length, 0);
-  assert.equal(selected(), 'staged-pdf');
-  h.context.confirmResult = true;
-  h.doc.getElementById('modal-article-close').click(); await drain();
-  assert.equal(deletes.length, 1);
-  assert.equal(h.doc.getElementById('modal-article').classList.contains('hidden'), false);
-  deletes[0].resolve({ deleted: true }); await drain();
-  assert.equal(h.doc.getElementById('modal-article').classList.contains('hidden'), true);
-  assert.equal(confirmations, 2, 'cleanup completion must not ask for consent a second time');
 });
 
 test('review 4: saving Owner updates only its submitted snapshot and keeps Guest edits protected', async () => {

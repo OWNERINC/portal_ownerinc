@@ -6,7 +6,8 @@
 2. `public/js/auth.js` inclui o token Bearer na requisição.
 3. A API valida o token pelo Firebase Admin.
 4. A API cria ou carrega o perfil correspondente no PostgreSQL.
-5. A rota aplica a permissão necessária e consulta ou altera o banco.
+5. A rota aplica a permissão necessária; só depois valida o payload de domínio e
+   consulta ou altera o banco.
 
 ## Cadastro pendente
 
@@ -77,8 +78,8 @@
 6. O Resend SMTP envia o email com um link absoluto para a âncora pública do
    lembrete, derivada de um UUID validado. O histórico administrativo expõe
    lembrete, destinatário, motivo e tentativas com paginação.
-7. `GET /api/reminders/:id` aplica autenticação, `active`, publicação CMS e
-   audiência. A página de lembretes lê o fragmento, busca esse detalhe
+7. `GET /api/reminders/:id` aplica autenticação, `active` e audiência. A página
+   de lembretes lê o fragmento, busca esse detalhe
    autoritativo e o renderiza/focaliza sem alterar ou duplicar a página atual.
 8. `heartbeat_at` mede liveness; `last_error`/`last_success_at` representam o
    resultado da execução do worker, enquanto os contadores e o ledger
@@ -98,116 +99,28 @@
    ou idempotência do provedor seria necessário para essa garantia e não faz parte
    desta arquitetura.
 
-## Conteúdo CMS
+## Domínios mantidos e CMS histórico
 
-1. O editor cria uma revisão `draft` validada; cada nova gravação recebe uma
-   versão imutável e atualiza somente o ponteiro do draft.
-2. Publicar ou agendar adquire o lock de assets antes do documento, confirma
-   que a revisão selecionada ainda é o draft atual e valida novamente os
-   assets referenciados. Uma seleção concorrente retorna `409` sem alterar a
-   publicação.
-3. O leitor promove scheduled vencido com a mesma ordem de lock somente depois
-   de validar blocos e assets. Revisão inválida é arquivada e auditada sem
-   substituir a publicação anterior. A leitura consulta somente `published` e
-   descarta revisão inválida; busca, resumo, detalhes e lembretes usam
-   `blocksToText`/blocos validados; texto legado só existe como fallback quando
-   não há documento CMS.
-4. Unschedule arquiva o scheduled quando já existe draft mais novo;
-   unpublish arquiva published e scheduled, deixando o draft independente.
-   Assim, um lembrete despublicado não é enviado pelo fallback legado.
-5. Exclusão de uma fonte remove seu `cms_document` e revisões, tornando os
-   assets inacessíveis até a retenção remover arquivos sem referências.
-
-6. A edição legacy de PDF altera somente o único bloco PDF sem ambiguidade.
-   Quando há múltiplos blocos PDF, a operação é rejeitada e o Editor CMS é o
-   caminho obrigatório para escolher o bloco correto.
-7. No editor simples da Base de Conhecimento, título/categoria/anexo permanecem
-   editáveis. Sem documento CMS, o texto simples continua no payload; com
-   `cms_managed=true`, o campo corpo fica desabilitado e `content` é omitido.
-   A edição de metadados preserva os blocos e ponteiros de publicação; a troca
-   de PDF segue a sincronização específica acima, sem substituir parágrafos.
-   A ajuda oferece `./cms.html` a admin autorizado em `manageKnowledge`
-   (incluindo super-admin), para selecionar a área e o documento existente.
-   Não há parâmetro de documento/deep link novo nem bypass dos guards do router
-   para edição não salva, gravação, upload ou descarte de PDF temporário.
-8. A tradução fica no DOM: `knowledge` → Base de Conhecimento, painel →
-   Configuração e publicação, estados `draft`/`published`/`scheduled`/`archived`
-   → Rascunho/Publicado/Agendado/Arquivado. Estados desconhecidos permanecem texto
-   seguro. Enums, endpoints, filtros, payloads e classes não são traduzidos;
-   salvar rascunho (inclusive autosave) não equivale a publicar. Publicação e
-   agendamento continuam seguindo as ações e validações dos itens 1–4.
-
-**Limite conhecido do PDF na edição simples:** upload e interface aceitam até
-100 MiB, mas `api/cms/knowledge.js` valida a associação do asset até 50 MiB.
-Essa divergência preexistente foi identificada pela leitura do código; o lote
-de linguagem não muda esse contrato nem comprova arquivos grandes por HTTP.
-
-## Owner News — leitura dual do PR 1
-
-Este é o comportamento implementado no PR 1. Ele **não** instala runtime, não
-altera Nginx/deploy, não ativa Payload e não executa cutover. Os perfis de runtime
-manual do PR 2 e o cutover protegido do PR 3 ainda não estão ativos; o cutover
-real continua sendo uma operação manual sujeita a autorização separada.
-
-1. A API relê `owner_news_authority` em cada operação. Os modos duráveis
-   `legacy`, `frozen`, `payload` e `payload_frozen` continuam controlando somente
-   quem pode escrever. Eles não escolhem uma fonte única de leitura: lista,
-   categorias, home e navegação consultam e compõem legado + Payload sempre que
-   a configuração Payload está ativa. Ausência/valor inválido da autoridade falha
-   fechado antes de tocar uma fonte e nenhuma falha de leitura muda autoridade,
-   libera writer ou chama transição.
-2. A identidade pública é o par `(source,id)`, com `source=legacy|payload` e UUID
-   original lowercase. Cards, detalhe, navegação, dashboard, links e
-   `history.state` preservam os dois campos; não existe UUID sintético nem busca
-   nas duas fontes por colisão. A única compatibilidade de bookmark sem `source`
-   é o detalhe legado: `/announcements.html?id=<uuid>` resolve como `legacy`.
-   Links novos sempre incluem a origem.
-3. Detalhe, asset e prévia são source-directed. `404`/`403` não consultam a outra
-   fonte. Assets legados usam scope/rota `/api/cms/assets/:id`, publicados Payload
-   usam `/api/announcements/assets/:id` e prévias usam a rota própria; combinação
-   incoerente de `source`/`asset_scope`, UUID inválido, referência não publicada,
-   symlink, metadata/tamanho inválido ou Range inválido falha fechado. Streams têm
-   headers allowlisted, teto de 50 MiB, cancelamento e Range simples apenas para
-   PDF/vídeo.
-4. O feed ordena `published_at` descendente (null por último), depois `source`
-   crescente (`legacy`, `payload`) e UUID lowercase crescente. O legado trunca
-   seleção, keyset e DTO para milissegundos, a mesma precisão canônica do cursor e
-   comparador. O cursor base64url v1 contém a fronteira `(published_at,source,id)`
-   e os filtros normalizados `category`/`kind`; replay com filtros diferentes,
-   campos extras, timestamp/UUID inválido, versão desconhecida ou cursor com
-   `offset>0` retorna `400 invalid_request` antes das fontes.
-5. Cada origem fornece lookahead limitado a 101 itens; o legado avança em chunks
-   keyset, no máximo 1.000 chunks/101.000 linhas cruas, sem varrer o restante para
-   inventar total. `X-Total-Count` só existe quando todas as fontes provam um
-   inteiro exato. Total desconhecido é omitido mesmo em resposta `complete`.
-   Offset não zero sem cursor existe apenas como compatibilidade limitada: no modo
-   dual, o merge recebe no máximo 101 candidatos por fonte antes do slice global,
-   então offset profundo pode truncar/esvaziar apesar de haver mais registros.
-   Travessia composta completa e autoritativa exige cursor. No modo Payload
-   intencionalmente inativo, o offset legacy-only e seu total exato são preservados.
-6. Com as duas fontes saudáveis a API emite
-   `X-Owner-News-Read-State: complete`; falha de uma fonte na primeira página
-   permite os itens saudáveis com `degraded`, mas omite tanto `X-Total-Count`
-   quanto `X-Owner-News-Next-Cursor`. Perder uma fonte durante continuação por
-   cursor ou offset retorna `503 news_page_restart_required`; a UI remove cursor
-   e reinicia atomicamente na primeira página. Falha dupla retorna
-   `503 news_unavailable`.
-7. A UI usa Anterior/Próxima e mantém pilhas de cursores por filtros em
-   `history.state`; troca de categoria/tipo invalida a pilha. Cursor recebido por
-   deep link não fabrica página anterior. Voltar/Avançar restaura URL, origem,
-   filtros e foco sem aceitar estado não canônico.
-8. Respostas autenticadas públicas usam `Cache-Control: private,no-store`. DTO,
-   headers, erro e log nunca carregam URL/credencial/stack/conteúdo/razão interna
-   do upstream. O log de degradação contém somente código fixo, ação, fonte e
-   `requestId` sanitizado. O browser nunca chama o bridge privado; Nginx nega por
-   `404` o path exato `/editorial/api/portal-news` e todo seu prefixo.
-
-O reader legado herdado ainda pode promover schedules vencidos conforme o contrato
-anterior descrito acima. A invariante deste PR é mais estreita: o orquestrador de
-fallback/composição em `api/owner-news/backend.js` não importa nem chama guards de
-writer, transições de autoridade ou APIs diretas de mutação. O sucessor/decisão
-para promoção agendada legada foi adiado; não se afirma que todo o call graph do
-reader legado seja livre de efeitos.
+1. Knowledge, Benefits, Reminders e Academy consultam apenas suas próprias
+   tabelas e rotas. Seus transportes não chamam `/api/cms`; seus harnesses
+   rejeitam SQL para `cms_documents`, `cms_revisions`, `cms_assets` e o lock
+   `7193029`, além de exigirem uma chamada positiva ao domínio sob teste.
+2. Knowledge aceita somente `title`, `category` e `content`; campos PDF legados
+   retornam `401` sem autenticação, `403` sem `manageKnowledge` e `400`, para o
+   gestor autenticado, após autenticação e autorização, mas antes de SQL,
+   transação ou auditoria. A edição e a leitura usam texto simples seguro. PDF
+   ativo retirado por ausência de rota própria.
+3. Benefits e Reminders projetam `description`/`instructions` próprias; a
+   delivery sem reminder mantém `content_url = null`. Academy usa a hierarquia
+   `academy` → `academy_modules` → `academy_lessons`, locks de linha, audiência
+   por cargo, mídia própria e progresso por UID/media version.
+4. As migrations e tabelas CMS permanecem no repositório para preservar dados,
+   uploads, documentos, revisões, assets e bytes históricos. Não há runtime
+   editorial remanescente; os testes de ausência e os contratos históricos apenas
+   impedem que os quatro domínios mantidos voltem a depender dele.
+5. Alterações e exclusões nos domínios mantidos não removem nem atualizam
+   `cms_documents`, `cms_revisions` ou `cms_assets`. Fixtures de rollback e
+   exclusão verificam as linhas históricas, bytes e linhas não relacionadas.
 
 ## Evidência e ambiente
 

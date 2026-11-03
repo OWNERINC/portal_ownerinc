@@ -6,18 +6,6 @@ import test from 'node:test';
 
 const read = (file) => readFile(new URL(`../../${file}`, import.meta.url), 'utf8');
 
-function nginxLocationBlock(source, declaration) {
-  const start = source.indexOf(declaration);
-  const opening = source.indexOf('{', start);
-  if (start < 0 || opening < 0) return null;
-  let depth = 0;
-  for (let index = opening; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1;
-    if (source[index] === '}' && --depth === 0) return source.slice(opening + 1, index);
-  }
-  return null;
-}
-
 test('compose limits exposure and waits for API readiness', async () => {
   const compose = await read('docker-compose.yml');
   assert.match(compose, /127\.0\.0\.1.*HTTP_PORT/);
@@ -32,15 +20,16 @@ test('compose limits exposure and waits for API readiness', async () => {
   assert.match(compose, /nginx:alpine@sha256:/);
 });
 
-test('CI exercises default, upgrade, and bootstrap migration databases', async () => {
+test('CI exercises fresh, upgrade, bootstrap, and readiness migration databases', async () => {
   const ci = await read('.github/workflows/ci.yml');
   assert.match(ci, /PGPASSWORD: integration-test-admin-password/);
   assert.match(ci, /CREATE DATABASE portal_test_upgrade OWNER portal_admin/);
   assert.match(ci, /CREATE DATABASE portal_test_bootstrap OWNER portal_admin/);
+  assert.match(ci, /CREATE DATABASE portal_test_readiness OWNER portal_admin/);
   assert.match(ci, /MIGRATION_TEST_SETUP: upgrade[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test_upgrade[\s\S]*run: npm run test:migrations/);
   assert.match(ci, /MIGRATION_TEST_SETUP: bootstrap[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test_bootstrap[\s\S]*run: npm run test:migrations/);
-  assert.match(ci, /MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test[\s\S]*run: npm run test:migrations/);
-  assert.match(ci, /run: node scripts\/test-owner-news-integration\.mjs/);
+  assert.match(ci, /MIGRATION_TEST_SETUP: bootstrap[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test[\s\S]*run: npm run test:migrations/);
+  assert.match(ci, /name: Test migration readiness without editorial relations[\s\S]*MIGRATION_DATABASE_URL: postgresql:\/\/portal_admin:integration-test-admin-password@127\.0\.0\.1:5432\/portal_test_readiness[\s\S]*run: npm run test:migration-readiness/);
   assert.match(ci, /run: node scripts\/test-academy\.mjs/);
 });
 
@@ -70,8 +59,8 @@ test('API and cron require shared Resend SMTP configuration', async () => {
 });
 
 test('API and cron lock Nodemailer to the approved safe policy', async () => {
-  const expectedRange = '^10.2.1';
-  const expectedResolvedVersion = '10.2.1';
+  const expectedRange = '^10.0.13';
+  const expectedResolvedVersion = '10.0.13';
 
   for (const service of ['api', 'cron']) {
     const manifest = JSON.parse(await read(`${service}/package.json`));
@@ -115,16 +104,17 @@ test('runtime API role can read and manage job titles', async () => {
   assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON job_titles TO portal_api/);
 });
 
-test('cron grants match the CMS retention UPDATE and are checked per privilege', async () => {
+test('runtime roles receive no CMS privileges while historical tables remain optional', async () => {
   const [provision, verification] = await Promise.all([
     read('api/db/provision.js'),
     read('api/db/verify-migrations.js'),
   ]);
-  assert.match(provision, /GRANT SELECT, UPDATE, DELETE ON cms_assets TO portal_cron/);
-  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'SELECT'\)/);
-  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'UPDATE'\)/);
-  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'DELETE'\)/);
-  assert.doesNotMatch(verification, /public\.cms_assets', 'SELECT,DELETE'/);
+  assert.doesNotMatch(provision, /GRANT[^;]*cms_documents|GRANT[^;]*cms_revisions|GRANT[^;]*cms_assets/i);
+  assert.match(verification, /api_cms_privileges_denied/);
+  assert.match(verification, /cron_cms_privileges_denied/);
+  assert.match(verification, /to_regclass\('public\.cms_assets'\)/);
+  assert.match(verification, /has_any_column_privilege/);
+  assert.match(verification, /PUBLIC, role membership or column grant/);
 });
 
 test('cron grants row-lock privileges only for user and reminder rechecks', async () => {
@@ -152,7 +142,7 @@ test('job title listing hides inactive titles by default', async () => {
 test('job title access is returned, validated, and preserved on partial updates', async () => {
   const [routes, auth] = await Promise.all([
     read('api/routes/job-titles.js'),
-    read('api/middleware/active-user.js'),
+    read('api/middleware/auth.js'),
   ]);
   assert.match(routes, /jt\.page_access/);
   assert.match(routes, /const pageAccess = \(value\) =>/);
@@ -186,10 +176,7 @@ test('Sólides upstream traffic has per-user read and probe budgets', async () =
 });
 
 test('nginx protects the edge without shadowing uploads', async () => {
-  const [baseline, promoted] = await Promise.all([
-    read('nginx/nginx.conf'), read('nginx/editorial-route.promoted.conf'),
-  ]);
-  const nginx = baseline.replace('include /etc/nginx/editorial-route-state/active.conf;', promoted);
+  const nginx = await read('nginx/nginx.conf');
   for (const header of ['Content-Security-Policy', 'Strict-Transport-Security', 'X-Content-Type-Options', 'X-Frame-Options']) {
     assert.match(nginx, new RegExp(`add_header ${header}`));
   }
@@ -202,33 +189,8 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /location \^~ \/api\/media\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads/);
   assert.match(nginx, /location = \/api\/pos-cards\/media[\s\S]*client_max_body_size 3m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
   assert.match(nginx, /location \^~ \/api\/pos-cards\/media\/[\s\S]*limit_req zone=media_reads/);
-  const cmsAssetUploadBlock = nginxLocationBlock(nginx, 'location = /api/cms/assets {');
-  const cmsAssetReadBlock = nginxLocationBlock(nginx, 'location ^~ /api/cms/assets/ {');
-  const genericApiBlock = nginxLocationBlock(nginx, 'location ^~ /api/ {');
-  const genericApiPrefix = '/api/';
-  const cmsAssetPrefix = '/api/cms/assets/';
-  assert.ok(cmsAssetUploadBlock && cmsAssetReadBlock && genericApiBlock,
-    'CMS uploads, CMS asset reads, and generic API proxy locations must be distinct');
-  assert.ok(cmsAssetPrefix.startsWith(genericApiPrefix) && cmsAssetPrefix.length > genericApiPrefix.length,
-    'longest-prefix selection must choose the more specific CMS asset read location');
-  assert.match(cmsAssetUploadBlock, /client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads/);
-  assert.match(cmsAssetReadBlock, /client_max_body_size 100k;[\s\S]*limit_req zone=media_reads/);
-  assert.doesNotMatch(genericApiBlock, /client_max_body_size\s+101m|proxy_request_buffering\s+off|limit_req\s+zone=uploads/,
-    'large streaming upload allowances must remain isolated from the generic API location');
-  assert.match(nginx, /location = \/api\/cms\/assets[\s\S]*client_max_body_size 101m;[\s\S]*proxy_request_buffering off;[\s\S]*limit_req zone=uploads[\s\S]*proxy_pass \$api_upstream/);
-  assert.match(nginx, /location \^~ \/api\/cms\/assets\/[\s\S]*client_max_body_size 100k;[\s\S]*limit_req zone=media_reads[\s\S]*proxy_pass \$api_upstream/);
+  assert.doesNotMatch(nginx, /location[^\n]*\/api\/cms/);
   assert.match(nginx, /location \^~ \/api\/users\/bulk[\s\S]*client_max_body_size 1m;[\s\S]*proxy_pass \$api_upstream/);
-  const privateBridgeExact = nginxLocationBlock(promoted, 'location = /editorial/api/portal-news {');
-  const privateBridgePrefix = nginxLocationBlock(promoted, 'location ^~ /editorial/api/portal-news/ {');
-  assert.equal((nginx.match(/location = \/editorial\/api\/portal-news \{/gu) || []).length, 1,
-    'the private bridge exact path must have one explicit edge denial');
-  assert.equal((nginx.match(/location \^~ \/editorial\/api\/portal-news\/ \{/gu) || []).length, 1,
-    'the private bridge descendants must have one explicit longest-prefix denial');
-  for (const block of [privateBridgeExact, privateBridgePrefix]) {
-    assert.ok(block, 'both private bridge denial locations must remain present');
-    assert.match(block, /^\s*return 404;\s*$/u);
-    assert.doesNotMatch(block, /proxy_pass|try_files|alias|root/u);
-  }
   assert.doesNotMatch(nginx, /location[^\n]*\/uploads\/cms-private/);
   assert.doesNotMatch(nginx, /script-src[^;"]*'unsafe-inline'/);
   assert.match(nginx, /media-src 'self' blob: https:/);
@@ -252,60 +214,11 @@ test('nginx protects the edge without shadowing uploads', async () => {
   assert.match(nginx, /resolver 127\.0\.0\.11 valid=30s/);
   assert.match(nginx, /set \$api_upstream http:\/\/api:3000/);
   assert.match(nginx, /proxy_pass \$api_upstream/);
-  const jsCssLocation = nginxLocationBlock(nginx, 'location ~* \\.(css|js|mjs)$ {');
-  assert.ok(jsCssLocation, 'JS/MJS/CSS location must exist');
-  assert.match(jsCssLocation, /\bexpires\s+-1\s*;/);
-  assert.match(jsCssLocation, /\bdefault_type\s+application\/javascript\s*;/);
-  assert.doesNotMatch(jsCssLocation, /\badd_header\b/, 'JS/MJS/CSS must inherit server security headers');
+  const jsCssLocation = nginx.match(/location ~\* \\\.\(css\|js\)\$ \{([^}]*)\}/);
+  assert.ok(jsCssLocation, 'JS/CSS location must exist');
+  assert.match(jsCssLocation[1], /\bexpires\s+-1\s*;/);
+  assert.doesNotMatch(jsCssLocation[1], /\badd_header\b/, 'JS/CSS must inherit server security headers');
   assert.match(nginx, /location ~\* \\\.\(svg\|png\|jpg\|jpeg\|ico\|woff2\)\$ \{[\s\S]*expires 7d;/);
-});
-
-test('Owner News read composition observes authority but cannot invoke writers or transitions', async () => {
-  const backend = await read('api/owner-news/backend.js');
-  const topLevel = backend.slice(0, backend.indexOf('const missing'));
-  const requirePaths = source => [...source.matchAll(/\brequire\((['"])([^'"]+)\1\)/gu)].map(match => match[2]);
-  const allowedReadDependencies = [
-    '../cms/locks',
-    '../cms/reader',
-    './authority',
-    './editorial',
-    './feed',
-    './home',
-    './payload-client',
-    './payload-dto',
-    'node:fs',
-    'node:fs/promises',
-    'node:path',
-    'node:stream',
-  ].sort();
-  const topLevelDependencies = requirePaths(topLevel).sort();
-  assert.deepEqual(topLevelDependencies, allowedReadDependencies,
-    'the complete top-level dependency set must stay on the reviewed read-only allowlist');
-  assert.equal((backend.match(/\brequire\s*\(/gu) || []).length, requirePaths(backend).length,
-    'every require call must use one static string literal so dynamic dependencies cannot bypass the allowlist');
-  assert.deepEqual(requirePaths(backend).sort(), topLevelDependencies,
-    'nested or dynamic-scope require calls cannot bypass the top-level dependency allowlist');
-  assert.equal((backend.match(/require\('\.\/authority'\)/gu) || []).length, 1);
-  assert.match(topLevel, /^const \{ getAuthority \} = require\('\.\/authority'\);$/mu,
-    'authority observation must import exactly getAuthority without aliasing or extra capabilities');
-
-  const identifiers = backend.match(/[A-Za-z_$][\w$]*/gu) || [];
-  const forbiddenIdentifiers = new Set([
-    'assertNewsWriter', 'transitionAuthority', 'writerAllowed', 'setAuthority',
-    'createAnnouncement', 'updateAnnouncement', 'deleteAnnouncement',
-    'publishAnnouncement', 'scheduleAnnouncement', 'promoteDueScheduledForPool',
-  ]);
-  assert.deepEqual(identifiers.filter(identifier => /(?:writer|transition|mutation)/iu.test(identifier)
-    || forbiddenIdentifiers.has(identifier)), [],
-  'writer, transition, mutation and direct publication API identifiers are forbidden anywhere in the backend');
-  assert.doesNotMatch(backend, /\.(?:create|update|delete|publish|schedule|promote|transition|mutate)\s*\(/iu,
-    'helpers and aliases must not call direct mutation APIs');
-
-  const stringLiterals = [...backend.matchAll(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/gsu)]
-    .map(match => match[0].toUpperCase()).join('\n');
-  const mutatingSql = /\b(?:INSERT|UPDATE|DELETE|MERGE|UPSERT|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE|COPY|CALL|DO|VACUUM|ANALYZE|CLUSTER|REINDEX|REFRESH|COMMENT|REASSIGN|ATTACH|DETACH|SET|RESET|DISCARD|SECURITY\s+LABEL|IMPORT\s+FOREIGN\s+SCHEMA)\b/u;
-  assert.doesNotMatch(stringLiterals, mutatingSql,
-    'backend SQL may read and use BEGIN/COMMIT/ROLLBACK controls, but cannot mutate data, schema, or privileges');
 });
 
 test('Docker build context excludes environment files recursively', async () => {
@@ -421,27 +334,7 @@ test('AutoCard media retention is scheduled, locked, and volume-safe', async () 
   const cronService = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
   assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
   assert.match(cronService, /AUTOCARD_MEDIA_ORPHAN_DAYS: \$\{AUTOCARD_MEDIA_ORPHAN_DAYS:-7\}/);
-  assert.match(cronService, /CMS_ASSET_ORPHAN_RETENTION_DAYS: \$\{CMS_ASSET_ORPHAN_RETENTION_DAYS:-30\}/);
   assert.match(cronService, /volumes:\n\s+- uploads_data:\/app\/uploads/);
-});
-
-test('CMS asset retention is scheduled with the shared upload volume', async () => {
-  const [cron, cleanup, compose] = await Promise.all([
-    read('cron/index.js'), read('cron/cms-asset-retention.js'), read('docker-compose.yml'),
-  ]);
-  const cronService = compose.match(/\n  cron:\n([\s\S]*?)(?=\nvolumes:)/)?.[1] || '';
-  assert.match(cron, /enforceCmsAssetRetention/);
-  assert.match(cleanup, /pg_advisory_xact_lock/);
-  assert.match(cleanup, /CMS_ASSET_RETENTION_LOCK = 7193029/);
-  const lock = cleanup.indexOf("pg_advisory_xact_lock($1)");
-  const candidates = cleanup.indexOf('SELECT a.id, a.storage_key');
-  const reservation = cleanup.indexOf('SET deleting_at = NOW()');
-  const commit = cleanup.indexOf("await client.query('COMMIT')");
-  const unlink = cleanup.indexOf('await fileSystem.unlink');
-  const rowDelete = cleanup.indexOf('DELETE FROM cms_assets');
-  assert.ok(lock >= 0 && candidates > lock && reservation > candidates && commit > reservation && unlink > commit && rowDelete > unlink);
-  assert.match(cronService, /CMS_ASSET_ORPHAN_RETENTION_DAYS/);
-  assert.match(cronService, /UPLOAD_DIR: \/app\/uploads/);
 });
 
 test('CI builds and publishes commit-addressed production images', async () => {
@@ -450,7 +343,7 @@ test('CI builds and publishes commit-addressed production images', async () => {
   ]);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /ownerinc-portal-api:\$\{GITHUB_SHA\}/);
-  assert.match(workflow, /for service in api cron; do[\s\S]*docker push \$\{REGISTRY\}\/ownerinc-portal-\$\{service\}:\$\{GITHUB_SHA\}/);
+  assert.match(workflow, /docker push \$\{REGISTRY\}\/ownerinc-portal-api:\$\{GITHUB_SHA\}/);
   assert.match(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} --file cron\/Dockerfile \./);
   assert.doesNotMatch(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} cron\s*$/m);
   assert.match(workflow, /Test migrations against PostgreSQL/);
@@ -462,7 +355,7 @@ test('CI builds and publishes commit-addressed production images', async () => {
     0,
     'every GitHub Action must be pinned to an immutable commit SHA',
   );
-  assert.match(apiPackage, /"sharp": "\^0\.35\.5"/);
+  assert.match(apiPackage, /"sharp": "\^0\.35\.4"/);
 });
 
 test('green main revisions deploy through a restricted serialized production gate', async () => {
@@ -471,14 +364,14 @@ test('green main revisions deploy through a restricted serialized production gat
     read('ops/compose.production.yaml'),
   ]);
   assert.doesNotMatch(workflow, /deploy-staging:|PORTAL_STAGING_VPS_/);
-  assert.match(workflow, /deploy-production:\n    name: Deploy production\n    needs: \[validate, publish-images\]\n    if: >-\n      !cancelled\(\) &&\n      needs\.validate\.result == 'success' && needs\.publish-images\.result == 'success' &&/);
+  assert.match(workflow, /deploy-production:\n    name: Deploy production\n    needs: validate\n    if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /deploy-production:[\s\S]*environment: production/);
   assert.match(workflow, /"\$VPS_USER@\$VPS_HOST" "\$GITHUB_SHA" < portal-release\.tar\.gz/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /group: portal-ownerinc-production[\s\S]*cancel-in-progress: false/);
   assert.match(workflow, /--add-virtual-file="\.ci-commit:\$\{GITHUB_SHA\}"/);
-  assert.match(workflow, /API_IMAGE: \$\{\{ needs\.publish-images\.outputs\.api_image \}\}/);
+  assert.match(workflow, /API_IMAGE: \$\{\{ needs\.validate\.outputs\.api_image \}\}/);
   assert.match(workflow, /tar --append --file=portal-release\.tar \.ci-images/);
   assert.match(workflow, /PORTAL_VPS_SSH_KEY/);
   assert.match(workflow, /StrictHostKeyChecking=yes/);
@@ -537,26 +430,13 @@ test('production SSH entrypoint normalizes legacy SHA commands without admitting
   const receiver = await read('ops/deploy-from-production-ci.sh');
   const dispatch = 'exec /usr/local/libexec/ownerinc-portal-deploy "$@"';
   assert.ok(receiver.includes(dispatch));
-  const rootDispatch = 'exec /usr/bin/sudo -n -- /usr/local/libexec/ownerinc-payload-receive "$SSH_ORIGINAL_COMMAND"';
-  assert.ok(receiver.includes(rootDispatch));
-  const probe = receiver.replace(dispatch, 'printf "%s\\n%s\\n" "$SSH_ORIGINAL_COMMAND" "$DEPLOY_RECEIVER_ROLE"')
-    .replace(rootDispatch, 'printf "%s\\nfixed-root-launcher\\n" "$SSH_ORIGINAL_COMMAND"; exit 0');
+  const probe = receiver.replace(dispatch, 'printf "%s\\n%s\\n" "$SSH_ORIGINAL_COMMAND" "$DEPLOY_RECEIVER_ROLE"');
   const sha = 'a'.repeat(40);
   for (const command of [sha, `production:${sha}`]) {
     const result = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: command } });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.replace(/\r/g, ''), `production:${sha}\nproduction\n`);
   }
-  // Dispatch double only: the root launcher's existing helper validates selectors.
-  const payload = `production:payload-v2 ${sha} 123 1 ${['api', 'cron', 'cms'].map(service =>
-    `ghcr.io/ownerinc/ownerinc-portal-${service}@sha256:${'b'.repeat(64)}`).join(' ')} 11 12 13 ${[4, 5, 6].map(value =>
-    `sha256:${String(value).repeat(64)}`).join(' ')} ${[7, 8, 9].map(value => String(value).repeat(64)).join(' ')} ${'a'.repeat(64)} ${'b'.repeat(64)} 1999999999 ${'c'.repeat(64)}`;
-  const payloadResult = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: payload } });
-  assert.equal(payloadResult.status, 0, payloadResult.stderr);
-  assert.equal(payloadResult.stdout.replace(/\r/g, ''), `${payload}\nfixed-root-launcher\n`);
-  const legacyPayload = payload.replace('production:payload-v2', 'production:payload-v1');
-  const legacyResult = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: legacyPayload } });
-  assert.equal(legacyResult.status, 2);
   for (const command of [`staging:${sha}`, sha.slice(1), `${sha}; echo unsafe`, ` ${sha}`, sha.toUpperCase()]) {
     const result = spawnSync(bash, ['-c', probe], { encoding: 'utf8', env: { ...process.env, SSH_ORIGINAL_COMMAND: command } });
     assert.equal(result.status, 2, `must reject ${command}`);

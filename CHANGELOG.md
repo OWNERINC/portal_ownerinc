@@ -9,6 +9,11 @@
 
 ## Unreleased
 
+- Removido integralmente o Owner News do runtime do Portal (OWN-40): página,
+  navegação, Dashboard, API, content type, leitores, enquetes, importadores e
+  cobertura exclusiva foram retirados. URLs antigas retornam 404 controlado;
+  migrations, tabelas, uploads, documentos e histórico foram preservados para
+  não alterar dados nem bloquear a próxima etapa do CMS genérico.
 - AutoCard agora protege alterações pendentes, pagina o histórico, explicita excesso de conteúdo e mantém preview/exportação responsivos.
 - Refinado o espaçamento vertical dos Cards Pós, com separação explícita entre o bloco `Consumos da hospedagem` e o título `O que não está incluso`, preservando as dimensões, o conteúdo e a exportação dos templates Guest e Owner.
 - Cards Pós agora possui os módulos editáveis Convidado e Owner, com alternância na tela, template Owner baseado no frame 2 do Figma e histórico compatível com os dois formatos.

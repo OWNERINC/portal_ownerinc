@@ -91,7 +91,6 @@ test('admin navigation restores the last verified role before paint and revalida
   assert.match(layout, /html\[data-auth-state="ready"\]\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
   assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-portal-role="admin"\]\s+\.admin-link\s*\{[^}]*display:\s*list-item/);
   assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-autocard-access="true"\]\s+\.autocard-link/);
-  assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-cms-access="true"\]\s+\.cms-link/);
   assert.match(layout, /html\[data-auth-snapshot="true"\]\[data-pos-cards-access="true"\]\s+\.pos-cards-link/);
   assert.match(auth, /sessionStorage\.setItem\('ownerinc-verified-role', user\.role\)/);
   assert.match(auth, /sessionStorage\.setItem\(AUTH_SNAPSHOT_KEY/);
@@ -118,8 +117,7 @@ test('authenticated requests centralize auth redirects without treating permissi
   assert.match(authenticatedFetch, /response\.status === 401/);
   assert.match(authenticatedFetch, /response\.clone\(\)/);
   assert.match(authenticatedFetch, /clearVerifiedRole\(\)/);
-  assert.match(authenticatedFetch, /await revokeEditorialSession\(\)/);
-  assert.match(authenticatedFetch, /auth\.currentUser\?\.uid === uid\) await signOut\(auth\)/);
+  assert.match(authenticatedFetch, /await signOut\(auth\)\.catch/);
   assert.match(authenticatedFetch, /redirectToLogin\(/);
   assert.match(authenticatedFetch, /body\?\.reason === 'email-not-verified'\) return 'email'/);
   assert.match(authenticatedFetch, /\/api\/users\/me/);
@@ -128,14 +126,13 @@ test('authenticated requests centralize auth redirects without treating permissi
 });
 
 test('AutoCard navigation consumes backend access instead of a frontend title allowlist', async () => {
-  const [auth, apiAuth, activeUser] = await Promise.all([
+  const [auth, apiAuth] = await Promise.all([
     readFile('public/js/auth.js', 'utf8'),
     readFile('api/middleware/auth.js', 'utf8'),
-    readFile('api/middleware/active-user.js', 'utf8'),
   ]);
 
-  assert.match(apiAuth, /await loadActivePortalUser\(db, decoded\)/);
-  assert.match(activeUser, /user\.autocard_access = canUseAutoCard\(user\)/);
+  assert.match(apiAuth, /const \{ can, canUseAutoCard, canUsePosCards \} = require\('\.\/policy'\)/);
+  assert.match(apiAuth, /req\.user\.autocard_access = canUseAutoCard\(req\.user\)/);
   assert.match(auth, /document\.documentElement\.dataset\.autocardAccess = String\(user\?\.autocard_access === true\)/);
   assert.doesNotMatch(auth, /analista de dho|assistente de dho|coordenador de dho|gerente de dho/i);
 });
@@ -323,7 +320,7 @@ test('Knowledge detail reads the authoritative article and stale pages recover',
   assert.match(reminders, /return loadReminders\(\)/);
 });
 
-test('V1 dashboard keeps scoped data while using the editorial home composition', async () => {
+test('Dashboard keeps scoped areas and maintained previews without Owner News', async () => {
   const [html, script, reminders, homeCss] = await Promise.all([
     readFile('public/dashboard.html', 'utf8'),
     readFile('public/js/dashboard.js', 'utf8'),
@@ -334,11 +331,12 @@ test('V1 dashboard keeps scoped data while using the editorial home composition'
   assert.doesNotMatch(html, /solides-card/);
   assert.match(script, /\/api\/reminders\/upcoming\?days=7/);
   assert.doesNotMatch(script, /pj-card|solides-card|app\.solides\.com\.br/);
-  assert.match(html, /class="dashboard-hero"/);
-  assert.match(html, /id="announcements-preview" class="dashboard-story-rail"/);
+  assert.match(html, /class="dashboard-intro"/);
+  assert.doesNotMatch(html, /dashboard-hero|announcements-preview|Owner News|announcements/i);
   assert.match(html, /id="quick-links" class="dashboard-areas-grid"/);
-  assert.match(script, /renderHero\(announcements\[0\]\)/);
-  assert.match(homeCss, /\.dashboard-hero\s*\{/);
+  assert.doesNotMatch(script, /renderHero|announcements|owner-news/i);
+  assert.match(homeCss, /\.dashboard-section\s*\{/);
+  assert.doesNotMatch(homeCss, /dashboard-hero|announcements|owner-news/i);
   assert.match(homeCss, /@media \(max-width: 768px\)/);
   assert.match(homeCss, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(reminders, /individual-target-group/);
@@ -509,7 +507,7 @@ test('authenticated shell is generated from one static build source', async () =
   assert.match(generator, /id="btn-new"/);
   assert.match(generator, /id="btn-new-reminder"/);
   assert.doesNotMatch(generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '', /benefits|solides/i);
-  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'announcements', 'profile', 'admin', 'cms', 'autocard', 'cards-pos', 'solides']) {
+  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'profile', 'admin', 'autocard', 'cards-pos', 'solides']) {
     const html = await readFile(`public/${page}.html`, 'utf8');
     assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);
     const brands = html.match(/<a\b[^>]*\bclass="sidebar-brand"[^>]*>/g) || [];

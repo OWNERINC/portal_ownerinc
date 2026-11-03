@@ -9,46 +9,6 @@
   min-width: 0;
 }
 
-.dashboard-hero {
-  position: relative;
-  min-height: clamp(320px, 43.75vw, 595px);
-  overflow: hidden;
-  border-radius: 24px;
-  isolation: isolate;
-  background: var(--espresso);
-  color: var(--surface);
-}
-
-.dashboard-hero::after {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  background: linear-gradient(90deg, rgba(9, 9, 9, 0.88) 0%, rgba(9, 9, 9, 0.68) 42%, rgba(9, 9, 9, 0.2) 100%);
-  content: '';
-}
-
-.dashboard-hero > img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.dashboard-hero-copy {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  width: min(72%, 760px);
-  min-height: clamp(320px, 43.75vw, 595px);
-  height: auto;
-  padding: clamp(24px, 3vw, 40px) clamp(40px, 6vw, 80px);
-}
-
-.dashboard-eyebrow,
 .dashboard-section-kicker {
   margin: 0;
   font-size: var(--font-size-xs);
@@ -58,74 +18,15 @@
   text-transform: uppercase;
 }
 
-.dashboard-eyebrow {
-  color: var(--primary);
-}
-
 .dashboard-section-kicker {
   color: var(--espresso);
 }
-
-.dashboard-hero h1 {
-  max-width: 650px;
-  margin: 10px 0 8px;
-  font-family: var(--font-display);
-  font-size: clamp(34px, 4vw, 60px);
-  font-weight: 400;
-  letter-spacing: -0.045em;
-  line-height: 0.99;
-  overflow-wrap: anywhere;
-  word-break: normal;
-}
-
-.dashboard-hero-description {
-  max-width: 460px;
-  margin: 0 0 16px;
-  color: rgba(255, 255, 255, 0.82);
-  font-size: clamp(15px, 1.5vw, 18px);
-  overflow-wrap: anywhere;
-}
-
-.dashboard-button,
 .dashboard-section-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 44px;
   min-height: 44px;
-}
-
-.dashboard-button {
-  padding: 10px 18px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  font-weight: 800;
-  text-decoration: none;
-}
-
-.dashboard-button-primary {
-  background: var(--primary);
-  color: var(--espresso);
-}
-
-.dashboard-button-primary:hover,
-.dashboard-button-primary:active {
-  background: var(--primary-hover);
-}
-
-.dashboard-hero-meta {
-  margin: 12px 0 0;
-  color: var(--surface);
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  overflow-wrap: anywhere;
-}
-
-.dashboard-hero-meta span {
-  padding: 0 4px;
 }
 
 .dashboard-section {
@@ -316,35 +217,11 @@
 }
 
 @media (max-width: 1020px) {
-  .dashboard-hero-copy {
-    width: 70%;
-  }
 }
 
 @media (max-width: 768px) {
   .dashboard-home {
     padding: 0 16px max(48px, env(safe-area-inset-bottom));
-  }
-
-  .dashboard-hero {
-    min-height: clamp(400px, 125vw, 760px);
-    margin: 0 -16px;
-    border-radius: 0;
-  }
-
-  .dashboard-hero::after {
-    background: linear-gradient(180deg, rgba(9, 9, 9, 0.22) 0%, rgba(9, 9, 9, 0.82) 74%, rgba(9, 9, 9, 0.94) 100%);
-  }
-
-  .dashboard-hero-copy {
-    justify-content: end;
-    width: 100%;
-    min-height: clamp(400px, 125vw, 760px);
-    padding: 28px clamp(28px, 8vw, 40px) 32px;
-  }
-
-  .dashboard-hero h1 {
-    font-size: clamp(38px, 11vw, 58px);
   }
 
   .dashboard-section {
@@ -377,27 +254,6 @@
 }
 
 @media (max-width: 390px) {
-  .dashboard-hero-copy {
-    padding: 18px 20px 20px;
-  }
-
-  .dashboard-hero h1 {
-    margin-top: 8px;
-    margin-bottom: 10px;
-    font-size: clamp(32px, 10vw, 40px);
-  }
-
-  .dashboard-hero-description {
-    margin-bottom: 12px;
-    font-size: 14px;
-  }
-
-  .dashboard-hero-meta {
-    margin-top: 12px;
-    font-size: 10px;
-    line-height: 1.35;
-  }
-
   .dashboard-section-heading {
     align-items: flex-start;
     flex-direction: column;
@@ -411,14 +267,4 @@
   }
 }
 
-/* No publication to read: keep the heading and useful areas above the fold. */
 .dashboard-home [hidden] { display: none; }
-.dashboard-hero:not([data-state="populated"]) { min-height: 0; }
-.dashboard-hero:not([data-state="populated"])::after { display: none; }
-.dashboard-hero:not([data-state="populated"]) .dashboard-hero-copy {
-  width: 100%;
-  min-height: 0;
-  padding: 24px;
-}
-.dashboard-hero:not([data-state="populated"]) h1 { font-size: 32px; }
-.dashboard-hero:not([data-state="populated"]) .dashboard-hero-meta { display: none; }

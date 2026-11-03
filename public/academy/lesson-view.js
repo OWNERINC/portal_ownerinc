@@ -1,7 +1,6 @@
 import { fetchAPI } from '../js/auth.js';
 import { element } from '../js/ui.js';
 import { createPageLifecycle } from '../js/page-lifecycle.js';
-import { renderBlocks } from '../js/cms-block-renderer.js';
 import { createLessonPlayer } from './player.js';
 import { createProgressController } from './progress-controller.js';
 import { heading, button, curriculum, routeLink, unavailable } from './view-utils.js';
@@ -17,7 +16,7 @@ export function lessonView({ root, page, api, navigate, LessonView, CourseView, 
   const host = element('div', { className: 'academy-player', 'aria-label': lesson.title, 'aria-busy': 'true' });
   const playerStatus = element('div', { className: 'academy-player-status' }, [element('p', { role: 'status', text: 'Carregando vídeo…' })]);
   const status = element('p', { role: 'status', className: 'academy-save-status' });
-  const materials = element('div', { className: 'academy-materials cms-public-content' });
+  const materials = element('div', { className: 'academy-materials', text: LessonView.description || '' });
   const actions = element('div', { className: 'academy-actions' });
   const next = LessonView.next_lesson_id ? routeLink('Próxima aula →',
     { course: CourseView.course.id, lesson: LessonView.next_lesson_id, ...(preview ? { preview: '1' } : {}) }, navigate) : null;
@@ -32,7 +31,6 @@ export function lessonView({ root, page, api, navigate, LessonView, CourseView, 
   ]);
   root.replaceChildren(routeLink('← Voltar ao curso', { course: CourseView.course.id, ...(preview ? { preview: '1' } : {}) }, navigate),
     element('div', { className: 'academy-classroom' }, [main, details]));
-  renderBlocks(materials, LessonView.content_blocks, { fallbackText: LessonView.description || '', signal: scope.signal });
 
   function revoke() {
     if (lost || !scope.active) return;

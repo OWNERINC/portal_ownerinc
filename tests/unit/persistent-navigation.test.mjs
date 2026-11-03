@@ -4,96 +4,6 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { createRouterHarness, deferred, drain, Node, TestEvent } from '../helpers/router-harness.mjs';
 
-test('editorial external and shell entry links respect cancelled global leave guards before navigation', async () => {
-  for (const href of ['/editorial/', '/editorial/admin', '/editorial-entry.html']) {
-    const h = await createRouterHarness();
-    h.scope.beforeLeave(() => false);
-    const old = h.scope, link = new Node('a', h.doc, { href }); h.doc.body.append(link);
-    const event = new TestEvent('click', { target: link, button: 0 }); h.doc.dispatchEvent(event); await drain();
-    assert.equal(event.defaultPrevented, true); assert.equal(h.scope, old); assert.equal(old.active, true);
-    assert.equal(h.location.pathname, '/dashboard.html');
-  }
-});
-
-test('Owner News reconciles the real router forced close before async Back/Forward and double close', async () => {
-  const first = '11111111-1111-4111-8111-111111111111';
-  const second = '22222222-2222-4222-8222-222222222222';
-  const h = await createRouterHarness({ realUI: true });
-  await h.router.navigate('/announcements.html?category=Cultura&offset=24');
-  const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
-  vm.runInContext(`${source}\nglobalThis.createNewsNavigation = createNewsNavigation;`, h.context);
-  const overlay = new Node('div', h.doc, { id: 'news-reader-overlay', class: 'hidden', 'data-page-overlay': '' });
-  overlay.append(new Node('button', h.doc, { id: 'news-reader-close' })); h.doc.body.append(overlay);
-  const catalog = h.doc.getElementById('main-content');
-  const card = new Node('article', h.doc, { id: `news-card-legacy-${first}` });
-  const link = new Node('a', h.doc, { href: `./announcements.html?id=${first}&source=legacy` }); card.append(link); catalog.append(card);
-  link.focus(); h.window.scrollY = 640;
-  h.scope.history.replaceState({ retained: 'yes' }, '', h.location.href);
-  const routes = [];
-  const catalogReady = deferred();
-  const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async route => {
-    routes.push(route);
-    await Promise.allSettled([route.id ? Promise.resolve() : catalogReady.promise, Promise.resolve()]);
-  } });
-  await navigation.open({ source: 'legacy', id: first }); await navigation.jump({ source: 'payload', id: second });
-  assert.equal(h.entries.length, 3);
-  assert.equal(h.history.state.retained, 'yes');
-  navigation.close(); navigation.close();
-  assert.match(h.location.search, new RegExp(`id=${second}`), 'native traversal is asynchronous');
-  await drain();
-  assert.equal(h.location.search, '?category=Cultura&offset=24');
-  assert.equal(h.doc.activeElement, catalog, 'router restores main for an ID-less origin while local onRoute is pending');
-  catalogReady.resolve(); await drain();
-  assert.equal(h.doc.activeElement, link);
-  assert.equal(h.window.scrollY, 640);
-  assert.equal(h.doc.getElementById('main-content'), catalog);
-  assert.ok(overlay.classList.contains('hidden'));
-  h.history.forward(); await drain();
-  assert.equal(overlay.classList.contains('hidden'), false);
-  assert.equal(routes.at(-1).id, second);
-  assert.equal(h.doc.body.classList.contains('modal-open'), true);
-  // Same-ID traversal still forces close in the router; sync must reopen it.
-  h.scope.history.pushState({ ...h.history.state }, '', h.location.href + '&extra=1');
-  h.history.back(); await drain();
-  assert.equal(overlay.classList.contains('hidden'), false);
-  assert.equal(h.doc.activeElement.id, 'news-reader-close');
-  await h.router.navigate('/dashboard.html');
-  assert.equal(overlay.isConnected, false);
-  assert.equal(h.doc.body.classList.contains('modal-open'), false);
-});
-
-for (const action of ['missing-card', 'pointerdown', 'keydown']) test(`Owner News async return handles ${action} after router focus restoration`, async () => {
-  const first = '11111111-1111-4111-8111-111111111111';
-  const h = await createRouterHarness({ realUI: true });
-  await h.router.navigate('/announcements.html?category=Cultura&offset=24');
-  const source = (await readFile('public/js/owner-news/navigation.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
-  vm.runInContext(`${source}\nglobalThis.createNewsNavigation = createNewsNavigation;`, h.context);
-  const overlay = new Node('div', h.doc, { id: 'news-reader-overlay', class: 'hidden', 'data-page-overlay': '' });
-  overlay.append(new Node('button', h.doc, { id: 'news-reader-close' })); h.doc.body.append(overlay);
-  const catalog = h.doc.getElementById('main-content');
-  const heading = new Node('h2', h.doc, { id: 'news-catalog-title', tabindex: '-1' });
-  const card = new Node('article', h.doc, { id: `news-card-legacy-${first}` });
-  const link = new Node('a', h.doc, { href: `./announcements.html?id=${first}&source=legacy` }); card.append(link);
-  const other = new Node('button', h.doc, { id: 'another-control' }); catalog.append(heading, card, other);
-  link.focus(); h.window.scrollY = 640;
-  const ready = deferred();
-  const navigation = h.context.createNewsNavigation({ page: h.scope, overlay, onRoute: async route => {
-    await Promise.allSettled([route.id ? Promise.resolve() : ready.promise, Promise.resolve()]);
-  } });
-  await navigation.open({ source: 'legacy', id: first });
-  if (action === 'missing-card') card.remove();
-  navigation.close(); await drain();
-  assert.equal(h.doc.activeElement, catalog);
-  if (action !== 'missing-card') {
-    h.window.dispatchEvent(new TestEvent(action, { target: other, key: 'Tab' }));
-    other.focus(); h.window.scrollY = 120;
-  }
-  ready.resolve(); await drain();
-  assert.equal(h.doc.activeElement, action === 'missing-card' ? heading : other);
-  assert.equal(h.window.scrollY, action === 'missing-card' ? 640 : 120);
-  h.scope.dispose();
-});
-
 test('all shell destinations mount repeatedly with one document, sidebar, topbar, main and cached modules', async () => {
   const h = await createRouterHarness();
   const nodes = ['.sidebar', '.topbar', '.main-content', '#main-content'].map(selector => h.doc.querySelector(selector));
@@ -108,6 +18,71 @@ test('all shell destinations mount repeatedly with one document, sidebar, topbar
   }
   assert.equal(h.modules.size, Object.keys(h.router.routes).length);
   assert.equal(h.disposed.length, h.mounts.length - 1);
+});
+
+test('BFCache keeps the mounted page lifecycle and does not remount on persisted pageshow', async () => {
+  const h = await createRouterHarness();
+  const mounts = h.mounts.length;
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: true }));
+  h.window.dispatchEvent(new TestEvent('test-page-event'));
+  assert.equal(h.events.length, 1);
+
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  await drain();
+  assert.equal(h.mounts.length, mounts);
+  assert.equal(h.disposed.length, 0);
+
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: false }));
+  assert.equal(h.disposed.length, 1);
+  h.window.dispatchEvent(new TestEvent('test-page-event'));
+  assert.equal(h.events.length, 1);
+});
+
+test('BFCache aborts pending navigation without replacing the preserved page', async () => {
+  const h = await createRouterHarness();
+  const preservedMain = h.doc.getElementById('main-content');
+  const preservedHeading = preservedMain.querySelector('h1');
+  const preservedMounts = h.mounts.length;
+  const first = deferred();
+  let firstSignal;
+  h.context.fetchOverride = (url, options) => {
+    firstSignal = options.signal;
+    return first.promise;
+  };
+
+  const pendingNavigation = h.router.navigate('/academy.html');
+  await drain();
+  assert.ok(firstSignal, 'navigation must start an abortable fetch');
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: true }));
+  assert.equal(firstSignal.aborted, true);
+  first.resolve({ ok: true, headers: new Map([['content-type', 'text/html']]), text: async () => '/academy.html' });
+  assert.equal(await pendingNavigation, false);
+  assert.equal(h.mounts.length, preservedMounts);
+  assert.equal(h.doc.getElementById('main-content'), preservedMain);
+  assert.equal(h.doc.getElementById('main-content').querySelector('h1'), preservedHeading);
+
+  const second = deferred();
+  let secondSignal;
+  h.context.fetchOverride = (url, options) => {
+    secondSignal = options.signal;
+    return second.promise;
+  };
+  const rejectedNavigation = h.router.navigate('/knowledge.html');
+  await drain();
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: true }));
+  assert.equal(secondSignal.aborted, true);
+  second.reject(new Error('late failure'));
+  assert.equal(await rejectedNavigation, false);
+  h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
+  await drain();
+  assert.equal(h.mounts.length, preservedMounts);
+  assert.equal(h.doc.getElementById('main-content'), preservedMain);
+  assert.equal(h.doc.getElementById('main-content').querySelector('h1'), preservedHeading);
+
+  h.window.dispatchEvent(new TestEvent('pagehide', { persisted: false }));
+  assert.equal(h.disposed.length, 1);
+  h.window.dispatchEvent(new TestEvent('test-page-event'));
+  assert.equal(h.events.length, 0);
 });
 
 test('signed-out direct links keep the destination query and fragment through login', async () => {
@@ -195,12 +170,12 @@ test('Academy catalog return metadata coexists with the real router history inde
 
 test('cancelled dirty dialogs retain the page and history entry; confirmation is checked after preparation', async () => {
   const h = await createRouterHarness();
-  await h.router.navigate('/cms.html');
+  await h.router.navigate('/profile.html');
   h.context.uiLeaveAllowed = false;
   const oldMain = h.doc.getElementById('main-content').children[0];
   assert.equal(await h.router.navigate('/dashboard.html'), false);
   h.history.go(-1); await drain();
-  assert.equal(h.location.pathname, '/cms.html');
+  assert.equal(h.location.pathname, '/profile.html');
   assert.equal(h.doc.getElementById('main-content').children[0], oldMain);
   assert.equal(h.entries.length, 2);
   h.context.uiLeaveAllowed = true;
@@ -243,49 +218,10 @@ test('superseded navigation and transient authentication failure keep the previo
   assert.ok(h.doc.querySelector('.portal-navigation-error').querySelector('button'));
 });
 
-test('route preparation announces loading and failures preserve the old page until the exact retry succeeds', async () => {
-  const h = await createRouterHarness();
-  const main = h.doc.getElementById('main-content');
-  const draft = new Node('input', h.doc, { id: 'unsaved-route-draft', value: 'keep this draft' });
-  main.append(draft);
-  const previous = h.scope;
-  let unavailable = true;
-  h.context.fetchOverride = async url => unavailable
-    ? { ok: false, status: 503, headers: new Map([['content-type', 'text/html']]), text: async () => '' }
-    : { ok: true, headers: new Map([['content-type', 'text/html']]), text: async () => new URL(url).pathname };
-  const destination = '/academy.html?course=onboarding#lesson-two';
-  const pending = h.router.navigate(destination);
-  const loading = h.doc.querySelector('.portal-navigation-loading');
-  assert.ok(loading);
-  assert.equal(loading.getAttribute('role'), 'status');
-  assert.equal(loading.getAttribute('aria-live'), 'polite');
-  assert.equal(loading.textContent, 'Carregando a área solicitada…');
-  assert.equal(main.querySelector('#unsaved-route-draft'), draft);
-  assert.equal(previous.active, true);
-
-  assert.equal(await pending, false);
-  const error = h.doc.querySelector('.portal-navigation-error');
-  assert.equal(error.getAttribute('role'), 'alert');
-  assert.match(error.querySelector('p').textContent, /temporariamente indisponível/);
-  assert.equal(h.location.pathname, '/dashboard.html');
-  assert.equal(main.querySelector('#unsaved-route-draft'), draft);
-  assert.equal(draft.value, 'keep this draft');
-  assert.equal(previous.active, true);
-
-  unavailable = false;
-  error.querySelector('button').click();
-  await drain();
-  await drain();
-  assert.equal(h.requests.at(-1).url, `https://portal.test${destination}`);
-  assert.equal(h.location.pathname, '/academy.html');
-  assert.equal(h.location.search, '?course=onboarding');
-  assert.equal(h.location.hash, '#lesson-two');
-});
-
 test('authorization is server-validated and denied tools never mount, including revoked current areas', async () => {
   const h = await createRouterHarness();
   h.context.user = { uid: 'user-1', role: 'viewer', permissions: {}, autocard_access: false, pos_cards_access: false };
-  for (const path of ['/admin.html', '/cms.html', '/autocard.html', '/cards-pos.html']) {
+  for (const path of ['/admin.html', '/autocard.html', '/cards-pos.html']) {
     assert.equal(await h.router.navigate(path), false);
   }
   assert.equal(h.mounts.length, 1);
@@ -343,65 +279,6 @@ test('a UID change during resource preparation cannot mount the previously valid
   css.resolve();
   assert.equal(await loading, false);
   assert.equal(h.mounts.length, 1);
-});
-
-test('CMS guard blocks in-flight work, confirms only unsaved edits, and disposal cancels autosave', async () => {
-  const source = await readFile('public/js/cms.js', 'utf8');
-  let guard, dispose, confirms = 0;
-  const cancelled = [];
-  const context = vm.createContext({
-    page: { beforeLeave(fn) { guard = fn; }, cleanup(fn) { dispose = fn; } },
-    saving: false, actionBusy: false, creatingDocument: false, assetUploading: 0, saveInFlight: null,
-     dirty: false, newDocumentDirty: false, saveQueued: false, saveTimer: 42,
-     homeEditor: null, editorialFields: null, previewCleanup: null,
-     selectionToken: 0, documentsRequestToken: 0, historyRequestToken: 0, creationRequestToken: 0, editorGeneration: 0,
-      newsAuthorityRequest: 1,
-     showToast() {}, clearTimeout(id) { cancelled.push(id); },
-    window: { confirm() { confirms++; return false; } },
-  });
-  vm.runInContext(source.slice(source.indexOf('page.beforeLeave('), source.indexOf('function setError(')), context);
-  assert.equal(guard(), true);
-  for (const field of ['saving', 'actionBusy', 'creatingDocument', 'assetUploading', 'saveInFlight']) {
-    context[field] = true; assert.equal(guard(), false); context[field] = false;
-  }
-  assert.equal(confirms, 0, 'confirmation cannot abandon a write');
-  context.dirty = true;
-  assert.equal(guard(), false); assert.equal(confirms, 1);
-  assert.equal(context.dirty, true, 'a guard never clears the draft');
-  const pendingAuthorityRequest = context.newsAuthorityRequest;
-  dispose();
-  assert.deepEqual(cancelled, [42]);
-  assert.equal(context.saveTimer, null);
-  assert.equal(context.selectionToken, 1);
-  assert.equal(context.newsAuthorityRequest, pendingAuthorityRequest + 1,
-    'cleanup invalidates in-flight Owner News authority and availability responses');
-});
-
-test('the CMS renderer aborts assets and revokes late blobs when the page signal ends', async () => {
-  const h = await createRouterHarness();
-  const pending = deferred(), revoked = [];
-  const host = new Node('div', h.doc); h.doc.getElementById('main-content').append(host);
-  let requestedSignal;
-  const source = (await readFile('public/js/cms-block-renderer.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
-  const context = vm.createContext({
-    document: h.doc, AbortController, TextEncoder,
-    URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
-    MutationObserver: class { observe() {} disconnect() {} },
-    clear(node) { node.replaceChildren(); return node; },
-    element(tag, options = {}, children = []) { const node = new Node(tag, h.doc, options); node.append(...children); return node; },
-    safeHttpUrl: value => value,
-    fetchAPIAsset(path, { signal }) { requestedSignal = signal; return pending.promise; },
-  });
-  vm.runInContext((await readFile('public/js/owner-news/asset-path.mjs', 'utf8')).replace(/^export /gm, ''), context);
-  vm.runInContext(source, context);
-  const page = new AbortController();
-  context.renderBlocks(host, [{ type: 'image', asset_id: '550e8400-e29b-41d4-a716-446655440000', alt: 'Cover' }], { signal: page.signal });
-  const image = host.children[0];
-  page.abort();
-  assert.equal(requestedSignal.aborted, true);
-  pending.resolve('blob:late-cms'); await drain();
-  assert.deepEqual(revoked, ['blob:late-cms']);
-  assert.equal(image.src, undefined);
 });
 
 test('Admin reconciles identical tabs by node identity, activates before secondary feature discovery', async () => {

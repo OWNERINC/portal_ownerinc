@@ -1,14 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { parseFixture } from './cms-harness.mjs';
+import { parseFixture } from './maintained-page-harness.mjs';
 import { createRouterHarness, TestEvent, deferred, drain } from './router-harness.mjs';
 
 export { TestEvent, drain };
 export const editor = { uid: 'user-1', role: 'admin', permissions: { manageKnowledge: true } };
 
-// Parse the actual HTML and run the whole Knowledge module, renderer, UI and
-// router/lifecycle with DOM/form/auth/transport doubles. The destination CMS
-// mount is a marker, not its real editor; CMS has a separate mounted harness.
+// Parse the actual HTML and run the whole Knowledge module, UI and
+// router/lifecycle with DOM/form/auth/transport doubles.
 export async function createKnowledgeEditorialHarness(t, { user = editor } = {}) {
   const h = await createRouterHarness({ initialURL: 'https://portal.test/knowledge.html', user, autoStart: false, realUI: true });
   const { doc, context } = h;
@@ -29,12 +28,14 @@ export async function createKnowledgeEditorialHarness(t, { user = editor } = {})
   doc.createElement = tag => { const node = new FormNode(tag, doc); adopt(node); return node; };
   doc.createTextNode = text => { const node = doc.createElement('#text'); node.textContent = text; return node; };
   doc.documentElement.dataset.authSnapshot = 'true';
-  const requests = [], revoked = [], confirms = [], errors = [];
-  const transport = kind => (path, options = {}) => { const call = { kind, path, options, ...deferred() }; requests.push(call); return call.promise; };
+  const requests = [], confirms = [], errors = [];
+  const transport = kind => (path, options = {}) => {
+    if (/\/api\/cms/i.test(path)) throw new Error(`Forbidden Knowledge editorial request: ${path}`);
+    const call = { kind, path, options, ...deferred() }; requests.push(call); return call.promise;
+  };
   Object.assign(context, {
     console: { ...console, error: (...args) => errors.push(args) },
-    fetchAPI: transport('api'), fetchAPIPage: transport('list'), fetchAPIAsset: transport('asset'), TextEncoder, structuredClone,
-    URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
+    fetchAPI: transport('api'), fetchAPIPage: transport('list'),
     FormData: class {
       constructor(form) { this.form = form; this.parts = []; }
       append(...parts) { this.parts.push(parts); }
@@ -48,8 +49,6 @@ export async function createKnowledgeEditorialHarness(t, { user = editor } = {})
     vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { ${exports} }); })();`, context, { filename: path });
   }
   await load('public/js/pagination.js', 'renderPagination, readOffset, setPaginationBusy');
-  await load('public/js/owner-news/asset-path.mjs', 'cmsAssetEndpoint, validateAssetScope, validateNewsSourceScope');
-  await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks');
   await load('public/js/knowledge.js', 'knowledgeMount: mount');
   context.onMount = (name, page) => { if (name === './knowledge.js') context.knowledgeMount(page); };
   await h.router.startRouter(); await drain();
@@ -60,7 +59,7 @@ export async function createKnowledgeEditorialHarness(t, { user = editor } = {})
   latest('/api/knowledge?').resolve({ data: [], total: 0 });
   latest('/api/knowledge/categories').resolve([]); await drain();
   return {
-    ...h, html, page, node, requests, revoked, confirms, errors, latest,
+    ...h, html, page, node, requests, confirms, errors, latest,
     async showArticle(article, edit = true) {
       page.history.pushState({}, '', `/knowledge.html?article=${encodeURIComponent(article.id)}`);
       h.window.dispatchEvent(new TestEvent('popstate', { state: h.history.state })); await drain();
@@ -70,11 +69,5 @@ export async function createKnowledgeEditorialHarness(t, { user = editor } = {})
     },
     input(id, value) { node(id).value = value; node(id).dispatchEvent(new TestEvent('input')); },
     async submit() { node('article-form').dispatchEvent(new TestEvent('submit')); await drain(); },
-    async followCmsLink() {
-      const anchor = node('article-cms-link');
-      if (!anchor) throw new Error('No authorized CMS link');
-      doc.dispatchEvent(new TestEvent('click', { target: anchor })); await drain();
-    },
-    async uploadPdf() { node('f-pdf').files = [{ name: 'synthetic.pdf', type: 'application/pdf', size: 100 }]; node('f-pdf').dispatchEvent(new TestEvent('change')); await drain(); return latest('/api/cms/assets'); },
   };
 }

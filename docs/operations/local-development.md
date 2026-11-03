@@ -64,7 +64,12 @@ doubles não substituem migrations, persistência ou jornadas reais no navegador
 Para conferir o shell gerado sem escrever arquivos, use
 `node scripts/generate-public-shell.mjs --check`; confira também `git diff --check`.
 
-### Persistência de enquetes Owner News
+### Persistência histórica de enquetes Owner News
+
+Esta seção descreve somente o schema histórico preservado após a remoção do
+runtime Owner News (OWN-40). O Portal não oferece mais rotas ou scripts para
+criar, ler ou votar nessas enquetes; não execute operações destrutivas nem use
+este fluxo como parte do desenvolvimento atual.
 
 A migration `035_owner_news_polls` cria enquetes, opções e votos. A API recebe
 SELECT/INSERT/UPDATE/DELETE nas três tabelas após o REVOKE do provisionamento;
@@ -79,92 +84,25 @@ preservando enquetes/opções. Excluir uma enquete diretamente no banco remove
 suas opções e votos; excluir isoladamente uma opção votada é bloqueado pela FK.
 Esse schema não oferece uma rota de exclusão.
 
-Em banco **local descartável**, configure `MIGRATION_DATABASE_URL`,
-`MIGRATION_TEST_DISPOSABLE=true` e as senhas das roles; execute
-`npm run test:migrations` e `node scripts/test-owner-news-integration.mjs`.
-Os checks cobrem grants de API/cron, constraints reais, exclusões e operações
-com `SET LOCAL ROLE portal_api` em transação revertida. Fixtures são sintéticas.
+O comando histórico `node scripts/test-owner-news-integration.mjs` existia na
+linha arquivada de verificação da publicação editorial. O arquivo foi removido
+na OWN-40 e **não deve ser executado nesta branch**; não há instrução operacional
+vigente para substituí-lo ou recriar o fluxo Owner News.
+
+Se for necessário validar somente o ledger, migrations e constraints históricas
+preservadas, `npm run test:migrations` continua sendo uma verificação válida em
+banco **local descartável**: configure `MIGRATION_DATABASE_URL`,
+`MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_TEST_SETUP=bootstrap|upgrade`,
+`MIGRATION_TEST_CLUSTER_ID` e as senhas das
+roles. Antes do teste, configure o marcador no cluster descartável com
+`MIGRATION_TEST_CLUSTER_ID=$(psql ... -Atc "SELECT system_identifier FROM pg_control_system()")`.
+Esse comando não publica,
+lê ou vota Owner News e não substitui uma homologação de runtime. Os checks
+cobrem grants de API/cron, constraints reais, exclusões e operações com
+`SET LOCAL ROLE portal_api` em transação revertida. Fixtures são sintéticas.
 
 Resultados de homologação e aceites das correções de setembro estão no
 [registro da sessão principal](../reviews/2026-09-29-portal-corrections-acceptance.md).
 Uma fixture local aprovada não comprova produção, dados/cargos oficiais,
 recebimento externo de e-mail ou uso em dispositivo físico. Operações Docker
 que afetem serviços em execução continuam exigindo autorização explícita.
-
-### Persistência da sessão editorial e autoridade Payload
-
-A migration `036_payload_editorial_control` é aplicada pelo migrator do Portal,
-inclusive após `schema.sql`. O provisionamento concede CRUD de
-`cms_editor_sessions` apenas a `portal_api`, SELECT/UPDATE de `owner_news_authority`
-à API e somente SELECT da autoridade ao cron. O singleton começa em `legacy`;
-reexecutar a migration não muda modo, epoch, manifesto, autoria ou sessões.
-
-O store faz limpeza de até 100 expirados na própria emissão, sem job adicional.
-Os helpers e a ordem de locks estão no
-[contrato de arquitetura](../architecture/overview.md#controle-de-sessão-e-autoridade-editorial-payload).
-A Task 3 conecta a emissão/resolução/revogação de cookies, sem ativar a origem
-Payload nos leitores. Veja o
-[contrato de autenticação](../architecture/overview.md#autenticação-editorial-revogável-payload-task-3)
-e o [README do CMS](../../cms/README.md#portal-authentication-boundary).
-Configure `PORTAL_PUBLIC_URL` canônica e `PAYLOAD_TO_PORTAL_SECRET` na API para
-usar a ponte; ausência dessas variáveis afeta somente as rotas editoriais. O
-startup/rotas legadas continuam disponíveis. A página de entrada/saída e a
-sincronização de contas entre abas são dependências explícitas da Task 9.
-
-A correção local de 03/10/2026 torna a rotação atômica e serializa a única emissão
-Firebase por UID usando estado compartilhado no PostgreSQL. Não espaçar chamadas
-no teste para ocultar colisões: o oracle deve enviar requisições imediatas/concorrentes
-e conferir hashes distintos, nova cookie200, anterior401 e rollback em falhas.
-Há espera pré-emissão limitada; 503 por colisão/contensão não autoriza retry automático
-nem significa logout confirmado. O import local confiável usa um processo separado
-com `cms/src/payload.import.config.ts` e `createLegacyNewsArticle`; papel restrito,
-`push:false` e migrations apenas CLI. Nunca habilitar a opção de IDs no adapter web
-em execução. Ver [correções e evidência](../reviews/2026-10-03-payload-five-fixes.md).
-
-Checks sem serviços:
-
-```sh
-node --test tests/unit/editorial-control.test.mjs tests/unit/schema-invariants.test.mjs
-node --test tests/unit/editorial-session.test.mjs
-npm --prefix cms run test:unit
-npm --prefix cms run typecheck
-npm --prefix cms run build
-npm run verify
-git diff --check
-```
-
-Para os checks reais, fornecer **duas bases vazias descartáveis autorizadas**, uma
-por cenário, `MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_DATABASE_URL` e as senhas
-`PORTAL_API_DB_PASSWORD`/`PORTAL_CRON_DB_PASSWORD` por ambiente privado. Nunca usar
-produção. Em cada base, configurar `MIGRATION_TEST_SETUP=upgrade` ou `bootstrap`
-e executar `npm run test:migrations`. O script recusa bases não vazias nesses
-modos, roda o migrator duas vezes e verifica o ledger e grants reaplicados.
-O upgrade conserva a fixture legada anterior à Academy e aplica também 034–036;
-o bootstrap confirma que 036 e suas tabelas estavam ausentes antes do runner.
-
-Ambos exercitam constraints, datas/defaults, unicidade de hash/singleton,
-expiração inclusiva, revogação idempotente, lote de limpeza, cascata de usuário,
-preservação de autoridade na exclusão do ator e reaplicação direta da migration.
-Executam os helpers sob `SET LOCAL ROLE portal_api`, a leitura sob `portal_cron`,
-e escritas proibidas reais, além de `has_table_privilege`. Fixtures de controle
-editorial e alterações de teste são revertidas por transação.
-
-**Pendente nesta entrega:** executar os dois cenários PostgreSQL; não houve
-autorização para banco ou serviços Docker. PASS unitário/estático não comprova
-constraints, locks concorrentes ou grants em um servidor PostgreSQL real.
-
-### Overlay Payload (Task13)
-
-O arquivo opcional `docker-compose.payload.yml` separa CMSDB, provisionador,
-migrator, web e worker, com volumes próprios e imagem CMS comum. O parser pode
-ser exercitado sem iniciar serviços:
-
-```sh
-docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.payload.yml config --quiet
-```
-
-Placeholders servem somente a esse parse. Runtime requer configuração privada e
-papéis provisionados. O primary coordena leases de build/serviços; não usar a
-amostra ou seus volumes para ensaio de recuperação. CSP/Next produção, grants,
-worker e restore reais continuam dependentes do ensaio autorizado. Contratos e
-bloqueios em [Runtime e recuperação Payload](payload-runtime-recovery.md).

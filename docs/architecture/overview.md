@@ -18,34 +18,50 @@ documentação e validação, mas não exige mover código para uma pasta `src/`
 - Resend SMTP entrega emails gerados pelo serviço de lembretes.
 - Z-API está prevista, mas permanece desativada.
 
-## Fronteira de verificação do piloto Payload
-
-O piloto migra primeiro a gestão editorial da Owner News. `cms/` é o serviço
-Payload/Next separado; a leitura continua entrando pela API Express. O Editor CMS
-central (`/cms.html`) permanece o hub por capacidade para knowledge, academy,
-academy_lesson, benefit, announcement e reminder. Entidades, ativação, currículo
-e progresso continuam pertencendo aos respectivos domínios; não são migrados por
-este piloto. Descrição, materiais e capa da Academy são conteúdo CMS.
-
-O CMS exige Node 24 como exceção aprovada de arquitetura. Código novo compartilhado
-por API/cron conserva APIs compatíveis com Node 18; executar os checks em Node 24
-não comprova execução integral da stack em Node 18.
-
-`npm run verify` cobre testes offline Portal/CMS e TypeScript sem cache incremental,
-sem iniciar serviços, jobs ou migrations. Build CMS, audit e SBOM são etapas
-separadas. Integração real usa configuração explícita e bancos descartáveis
-distintos; o runner não pode converter ausência de fixtures/runtime em sucesso.
-O guard portátil inicial está implementado; a suíte de aceitação HTTP/Firebase e
-sua preparação ainda precisam ser integradas. Veja o
-[runbook](../operations/payload-owner-news.md) e a
-[matriz](../reviews/2026-10-02-payload-owner-news-acceptance.md).
-
 ## Decisões
 
 - Portal e Brain permanecem em repositórios diferentes.
 - API e cron continuam como pacotes CommonJS independentes.
 - O frontend continua estático enquanto essa solução atender ao produto.
 - Serviços só devem ser separados ou reescritos quando existir pressão real.
+
+## Domínios mantidos sem CMS (OWN-41)
+
+Knowledge, Benefits, Reminders e Academy usam suas próprias tabelas, payloads,
+rotas e projeções. Esses domínios não consultam `cms_documents`,
+`cms_revisions` ou `cms_assets`, não usam o lock editorial `7193029` e não
+chamam `/api/cms`. O runtime CMS foi removido da API e do cron na OWN-42; suas
+migrations, uploads, documentos, revisões e assets históricos continuam
+preservados, sem rota, job, grant runtime ou readiness estrutural. A separação é
+de runtime, não uma limpeza destrutiva de dados.
+
+`/uploads/cms-private` continua respondendo 404 explicitamente para impedir que
+bytes históricos sejam servidos pelo mount genérico de uploads. O verificador de
+migrations tolera a ausência ou presença das tabelas editoriais e, quando elas
+existem, exige que `portal_api` e `portal_cron` não tenham privilégios nelas.
+
+### Contrato documental do runtime atual (OWN-45)
+
+O runtime ativo é composto por Knowledge, Academy, Benefits, Reminders, autenticação,
+administração, AutoCard, Cards Pós e integrações explicitamente habilitadas. Esses
+domínios usam rotas, payloads, projeções e tabelas próprias. CMS, Payload CMS, Owner
+News, enquetes, editor editorial, importadores e materiais editoriais não são
+dependências executáveis do Portal atual.
+
+As migrations `015`, `019`, `034` e `035`, suas tabelas e uploads editoriais
+históricos continuam versionados e podem existir em bancos antigos. A migration
+`033_academy_learning` e as tabelas próprias de aprendizagem continuam sendo parte
+do runtime Academy. A preservação editorial é para compatibilidade/auditoria, não
+um consumidor runtime. As URLs antigas recebem 404 controlado quando aplicável;
+nenhuma tabela ou byte histórico é apagado por este gate.
+
+Knowledge permanece como texto simples (`title`, `category`, `content`) e, após
+autenticação e autorização, rejeita campos PDF legados antes de SQL, transação ou
+auditoria. PDF ativo retirado por ausência de rota própria. Benefits e Reminders renderizam e
+entregam `description`/`instructions` próprias com texto seguro. Academy usa a
+árvore `academy` → `academy_modules` → `academy_lessons`, audiência por cargo,
+mídia própria, progresso por UID/media version e fallback visual da própria
+marca; não existe fluxo editorial, capa ou material CMS no fluxo mantido.
 
 ## Players de aulas da Academy
 
@@ -86,7 +102,7 @@ controller de progresso; os adapters não montam a interface da sala.
 `academy-root`, sem reconstruir o shell. `createAcademyAPI(page)` expõe
 `list(query)`, `categories()`, `continueCourses()`, `course(id, preview)` e
 `lesson(id, preview)`; leituras usam `page.bindAPI`. Cada transição cria um
-lifecycle descartável. Aula acrescenta escopo filho para CMS, player e progresso.
+lifecycle descartável. Aula acrescenta escopo filho para player e progresso.
 
 O catálogo consulta `group=initial` e `group=role` separadamente, cada um com
 limite 20, categoria e offset. `initial_category`, `initial_offset`,
@@ -147,24 +163,26 @@ exigindo URL HTTP(S). A formação visual (`initial`/`role`) é independente do 
 
 - `academy_course_job_titles`: associação curso/cargo; cargo referenciado não pode
   ser excluído, e a associação é removida com o curso.
-- `academy_modules` → `academy_lessons`: currículo com ordenação e publicação
+- `academy_modules` → `academy_lessons`: currículo com ordenação e ativação
   explícita (módulos e aulas inativos por padrão). A aula exige uma fonte YouTube
   ou arquivo HTTPS, mutuamente exclusivas.
 - `academy_lesson_progress`: chave `(user_uid, lesson_id, media_version)`, posição
   de 0 a 86400 segundos e conclusão com timestamp consistente. Exclusão do usuário
   ou da aula remove o progresso; exclusão do curso remove a árvore por cascata.
-- `cms_documents` aceita `academy_lesson`, além dos tipos anteriores.
+- A migration histórica mantém `cms_documents` compatível com `academy_lesson`
+  para dados e revisões antigos; o runtime atual da Academy não lê nem grava
+  essa tabela.
 
-Somente `portal_api` recebe CRUD nas quatro novas tabelas. O cron mantém seu
-acesso às revisões CMS para retenção, sem acesso ao progresso. O `schema.sql`
-inclui a estrutura Academy, mas **não registra 033 como aplicada**: no bootstrap,
-a migration 015 ainda precisa criar o CMS antes de 033 ampliar seu CHECK.
+Somente `portal_api` recebe CRUD nas quatro novas tabelas. O cron não acessa o
+progresso nem as tabelas CMS históricas. O `schema.sql` inclui a estrutura
+Academy, mas **não registra 033 como aplicada**: no bootstrap, a migration 015
+ainda precisa criar o CMS antes de 033 ampliar seu CHECK.
 As regras editoriais, elegibilidade e atualização de versão de mídia pertencem
 à camada de aplicação; essa migration entrega a estrutura relacional.
 
 ### Políticas, validação e leitura de progresso
 
-O catálogo em `api/academy/catalog.js` aplica audiência e publicação válida antes
+O catálogo em `api/academy/catalog.js` aplica audiência e atividade válida antes
 de total, categorias e paginação. `GET /api/academy` mantém array e
 `X-Total-Count`, aceita `group=initial|role` e acrescenta capa/contagens/progresso
 sem remover os campos legados. Metadados do currículo e progresso são carregados
@@ -172,24 +190,20 @@ em lote para a página selecionada. Formação inicial e por cargo não possuem
 pré-requisitos entre si. Categorias refletem o mesmo conjunto público autorizado.
 
 `GET /api/academy/:id` entrega curso e currículo; `GET /api/academy/lessons/:id`
-entrega mídia, descrição/material publicado, progresso da versão atual e vizinhos
-do currículo visível. Curso, módulo e aula precisam estar ativos; documento CMS
-existente sem publicação válida impede fallback legado. `all=true` é preview
+entrega mídia, descrição própria, progresso da versão atual e vizinhos do
+currículo visível. Curso, módulo e aula precisam estar ativos. `all=true` é preview
 explícito com `manageAcademy`, inclusive nas categorias. A lista de fontes
 `GET /api/academy/lessons?all=true` é exclusiva de gestores e inclui aulas inativas
-para edição CMS. O tipo `academy_lesson` está registrado nas permissões, fontes,
-rotas e leitor do CMS, com `manageAcademy` e origem `academy_lessons`. O leitor
-genérico considera a atividade da aula, do módulo e do curso nas duas projeções;
-o catálogo continua validando a publicação e audiência do curso no client bloqueado.
+para gestão da própria árvore. A autorização considera a atividade da aula, do
+módulo e do curso; não há projeção editorial ou fallback CMS.
 
 `authorizeLessonInTransaction(db,user,lessonId)` usa somente o client recebido,
-com lock CMS `7193029` seguido de curso → módulo → aula, rechecando ancestrais,
-audiência e blocos publicados. Nunca chama leitores que abrem conexões do pool.
-O currículo também lê e bloqueia a hierarquia em lote nessa ordem, dentro da fase
-protegida pelo CMS: revalida cursos/audiência/publicação e busca módulos/aulas
+com locks de linha curso → módulo → aula, rechecando ancestrais e audiência.
+Nunca chama leitores que abrem conexões do pool. O currículo também lê e bloqueia
+a hierarquia em lote nessa ordem: revalida cursos/audiência/atividade e busca módulos/aulas
 atuais antes de projetar mídia, vizinhos ou contagens. Somente fontes existentes
-e autorizadas sem documento podem usar descrição legada; snapshots anteriores ao
-lock não são convertidos em conteúdo legado após exclusão ou mudança de vínculo.
+e autorizadas retornam descrição e mídia próprias; snapshots anteriores ao lock
+não são convertidos em conteúdo após exclusão ou mudança de vínculo.
 
 O harness `tests/helpers/academy-integration.mjs` monta as rotas reais e substitui
 apenas pool/autenticação externa, sem alterar cache global. Para integração real,
@@ -198,14 +212,16 @@ use um banco **descartável já migrado até 033 e com Academy vazio**, configur
 `node --test scripts/test-academy.mjs`. Fixtures têm UUIDs próprios, são serializadas
 por advisory lock de teste e removidas por ID no teardown. O script recusa execução
 sem opt-in ou em produção. Não inicia serviços nem aplica migrations. Testes HTTP
-com doubles de SQL e política/CMS reais rodam em `npm run verify`; integração com
-PostgreSQL permanece uma verificação separada, dependente do ambiente autorizado.
+montam as rotas Academy reais, exercitam a política de autorização real com doubles
+controlados de SQL/autenticação e confirmam negativamente que `/api/cms` retorna 404
+em `npm run verify`; integração com PostgreSQL permanece uma verificação separada,
+dependente do ambiente autorizado.
 
 `api/academy/access.js` separa cargo profissional de `role`: audiência restrita
 exige `job_title_active === true` e associação ao cargo atual. Mesmo um gestor
 precisa dessa audiência na leitura normal; somente `{ preview: true }` usa
 `can(user, 'manageAcademy')` para ler curso inativo ou fora da audiência.
-`canReadCourse` verifica atividade e audiência, não publicação editorial CMS.
+`canReadCourse` verifica atividade e audiência, não estado editorial CMS.
 
 `api/academy/validation.js` expõe validators puros que retornam objeto normalizado
 ou `null`. O payload de curso aceita apenas `title`, `category`, `description`,
@@ -216,7 +232,7 @@ metadados atuais e `job_title_ids` carregados da associação; campos omitidos s
 preservados. Novos cursos são inativos. Internos usam URL nula; externos exigem
 HTTP(S), mantendo compatibilidade com URLs legadas. Conversão explícita para
 interno limpa a URL externa anterior na mutação, inclusive quando o editor reenviar
-o link antigo; preserva ID e documento CMS.
+o link antigo; preserva o ID e os dados próprios da árvore.
 
 O payload de aula aceita `title`, `description`, `order`, `active` e
 `media: { type: 'youtube'|'file', url }`; título e mídia são obrigatórios.
@@ -239,16 +255,11 @@ dependem de banco/catálogo e não são inferidas pelo validator puro.
 ### Gestão transacional de cursos e currículo
 
 `api/academy/mutations.js` recebe exclusivamente o client de `withAudit`, sem abrir
-conexões ou transações aninhadas. Todas as escritas entram pelo lock CMS `7193029`
-e bloqueiam curso → módulo → aula, nessa ordem. Contagens incluem inativos e são
-checadas sob lock do curso; cargos novos exigem existência/atividade com `FOR SHARE`.
-A ativação de curso interno exige módulo e aula ativos, mídia válida e publicação
-válida do curso e da aula (incluindo assets); sem documento CMS, vale o conteúdo
-simples legado. Agendamentos vencidos do curso e das aulas são processados pelo
-promotor CMS no mesmo client antes da checagem, inclusive retirada de agendamentos
-inválidos sem substituir uma publicação anterior válida. Rascunhos não são
-publicados automaticamente. Rejeição da ativação ou falha de auditoria reverte
-toda a transação, inclusive promoções/retiradas realizadas durante a checagem.
+conexões ou transações aninhadas. Todas as escritas bloqueiam a árvore própria
+curso → módulo → aula, nessa ordem, sem advisory lock editorial. Contagens incluem
+inativos e são checadas sob lock do curso; cargos novos exigem existência/atividade
+com `FOR SHARE`. A ativação de curso interno exige módulo e aula ativos e mídia
+válida. Rejeição da ativação ou falha de auditoria reverte toda a transação.
 
 POST/PUT/DELETE de cursos e as rotas abaixo exigem `manageAcademy` e registram
 auditoria na mesma transação; falha de auditoria reverte a mutação inteira:
@@ -264,12 +275,10 @@ Reordenação exige conjunto completo do pai sem duplicatas; falha retorna
 Mudar a origem normalizada do vídeo incrementa `media_version`; editar título,
 ordem ou outra representação do mesmo ID YouTube não incrementa.
 
-Exclusão remove primeiro os documentos CMS das aulas descendentes e, no caso do
-curso, sua apresentação, antes da origem. Cascatas removem revisões/currículo/
-progresso. Arquivos e assets compartilhados ficam com a retenção existente.
-`deleteCmsSource` encaminha Academy/aulas para essas mesmas operações completas.
-Os testes locais executam domínio e HTTP reais com seams de DB; o script de
-integração inclui corridas nos limites, ordenação, rollback e arquivos compartilhados.
+Exclusão remove somente a árvore própria; cascatas removem currículo e progresso,
+sem tocar documentos, revisões, assets ou bytes históricos do CMS. Os testes locais
+executam domínio e HTTP reais com seams de DB e incluem corridas nos limites,
+ordenação, rollback e preservação de linhas históricas.
 
 `api/academy/progress.js` contém `readProgress`, `summarizeProgress` e `saveProgress`.
 A leitura parametriza usuário autenticado, aula e versão; ausência retorna
@@ -284,14 +293,14 @@ tipado para as rotas HTTP de leitura e gestão.
 
 `PUT /api/academy/lessons/:id/progress` aceita somente `media_version`,
 `expected_version`, `position_seconds` (inteiro 0..86400) e `completed` opcional.
-UID vem da autenticação. Uma única conexão transacional autoriza com locks
-CMS → curso → módulo → aula antes da escrita compare-and-swap. Primeira escrita
+UID vem da autenticação. Uma única conexão transacional autoriza com locks de linha
+curso → módulo → aula antes da escrita compare-and-swap. Primeira escrita
 usa versão esperada zero; colisões retornam `409 progress_conflict`, mídia antiga
 retorna `409 media_changed`. Omissão de `completed` preserva conclusão/data;
 `false` explícito limpa a data. Nunca há conclusão automática pelo tempo assistido.
 `GET /api/academy/continue?limit=3` lista cursos iniciados e incompletos por última
 atividade autorizada da mídia atual, independente da primeira página do catálogo.
-O limite aceita 1..100. Curso/aula sem publicação válida não entra no cálculo.
+O limite aceita 1..100. Curso, módulo ou aula inativo não entra no cálculo.
 Somente o PUT no pathname exato de progresso tem limite 120/15 min/UID; demais
 mutações mantêm 60/15 min e limites globais continuam vigentes.
 
@@ -315,8 +324,12 @@ não confirmado. Integração de player/views pertence à etapa seguinte.
 ### Verificação descartável
 
 `npm run test:migrations` mantém os requisitos `MIGRATION_TEST_DISPOSABLE=true`,
-`MIGRATION_DATABASE_URL` e as senhas dos papéis de teste (`PORTAL_API_DB_PASSWORD`
-e `PORTAL_CRON_DB_PASSWORD`, pelo menos 16 caracteres). Nunca apontar para produção.
+`MIGRATION_DATABASE_URL`, `MIGRATION_TEST_CLUSTER_ID` e as senhas dos papéis de
+teste (`PORTAL_API_DB_PASSWORD` e `PORTAL_CRON_DB_PASSWORD`, pelo menos 16
+caracteres). `MIGRATION_TEST_CLUSTER_ID` deve ser o `system_identifier` retornado
+por `SELECT system_identifier FROM pg_control_system()` no cluster descartável;
+o harness confere essa identidade antes de consultar ou mutar o ledger. Nunca
+apontar para produção.
 Para validar os dois caminhos, usar duas bases vazias descartáveis previamente
 autorizadas, uma para cada execução:
 
@@ -326,12 +339,15 @@ autorizadas, uma para cada execução:
   033 ausentes, insere o curso legado e executa as migrations pendentes.
 
 Ambos recusam bases com tabelas em `public`, sem apagar tabelas para preparar o
-teste. Sem `MIGRATION_TEST_SETUP`, permanece o fluxo usual de migrations sobre a
-base descartável fornecida. As verificações cobrem repetição sem reaplicar ledger,
+teste. Sem `MIGRATION_TEST_SETUP`, o harness falha antes de abrir o pool; o fluxo
+usual do migrator é separado dos testes de integração. Os cenários PostgreSQL
+fresh/bootstrap, upgrade e readiness foram executados no cluster descartável
+aprovado da OWN-43. As verificações cobrem repetição sem reaplicar ledger,
 defaults, restrições de mídia, isolamento do progresso por usuário/versão,
 cascatas, FK de cargo, tipos CMS e privilégios reais. Os fixtures de comportamento
-Academy são revertidos por transação. Nesta entrega, a execução PostgreSQL dos
-dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
+Academy são revertidos por transação. Nesta entrega, fresh/bootstrap, upgrade e
+ readiness foram executados no cluster PostgreSQL descartável e separado da
+ produção; isso não constitui homologação de runtime produtivo.
 
 ## Navegação persistente do frontend
 
@@ -341,7 +357,7 @@ dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
   topbar, `.main-content` e o próprio `main#main-content`.
 - A preparação obtém o HTML, importa o módulo ES em cache e aguarda as folhas de
   estilo e bibliotecas necessárias. A API valida `/users/me` antes de montar;
-  Admin, CMS e ferramentas também verificam as permissões retornadas. Sólides
+  Admin e ferramentas também verificam as permissões retornadas. Sólides
   exige vínculo ativo. Snapshot visual nunca fornece o perfil usado na montagem.
   Falha de preparação conserva a página anterior e oferece retry.
 - Cada módulo de página exporta `mount(page)`, síncrono, com estado local novo
@@ -352,9 +368,10 @@ dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
 - `page.listen`, `timeout`, `frame`, `image`, `wait`, `objectURL` e `cleanup`
   registram recursos de vida limitada. `dispose()` aborta loaders, remove
   listeners, cancela timers/frames, desconecta observers registrados e revoga
-  blobs. `renderBlocks(..., { signal })` limpa mídia privada explicitamente;
-  seu observer também cobre substituições internas de conteúdo.
-- `page.beforeLeave()` protege CMS, ferramentas e enquadramento do perfil.
+  blobs. Os módulos mantidos limpam seus próprios recursos sem usar renderer
+  editorial ou mídia privada CMS.
+- `page.beforeLeave()` protege formulários mantidos, ferramentas e enquadramento
+  do perfil.
   Formulários e diálogos usam as guardas de `ui.js`. Mutações pendentes bloqueiam
   navegação/logout e submissões duplicadas da mesma operação; confirmar descarte
   não autoriza abandonar uma gravação ou upload em andamento.
@@ -383,7 +400,7 @@ dois caminhos permanece pendente: o usuário optou por não iniciar serviços.
 Checks de comportamento: `tests/unit/persistent-navigation.test.mjs`,
 `tests/unit/navigation-review-regressions.test.mjs` e
 `tests/unit/auth-stability.test.mjs`, junto dos testes existentes de CMS, perfil,
-filtros, PDF, Owner News e AutoCard.
+filtros, PDF e AutoCard.
 
 ### Evidência local — 22/09/2026
 
@@ -392,8 +409,9 @@ filtros, PDF, Owner News e AutoCard.
   zero novas navegações de documento e identidade preservada de `document`,
   `.sidebar`, `.topbar` e `.main-content`.
 - Durante esse percurso, 447 frames observados e nenhum com Admin oculto.
-- Verificados detalhe/voltar da Owner News, abas administrativas, Back/Forward
-  entre áreas, resposta 503 na revalidação preservando a página/permissões e retry.
+- Verificados detalhe/voltar da publicação editorial histórica, abas administrativas,
+  Back/Forward entre áreas, resposta 503 na revalidação preservando a
+  página/permissões e retry.
 - Confirmados cancelamento e descarte de edições no Perfil, CMS e nos dois
   editores; cancelar Back no formulário novo do CMS conservou os campos.
 - Exportações reais PNG no AutoCard e PDF nos Cards Pós funcionaram após
@@ -408,7 +426,14 @@ política central de autorização, renderização segura, migrations SQL, ledge
 idempotente de notificações, least privilege, readiness e deploy recuperável.
 As fases e critérios estão em [`../product/roadmap.md`](../product/roadmap.md).
 
-## CMS e conteúdo publicado
+## CMS e conteúdo publicado — histórico preservado (OWN-45)
+
+> **Registro histórico — Owner News removido em 3 de novembro de 2026 (OWN-40).**
+> As seções editoriais abaixo documentam decisões, contratos e evidências de uma
+> capacidade anterior. Não descrevem rotas, módulos ou content types disponíveis
+> no runtime atual dos domínios mantidos. Migrations, dados e histórico editorial
+> foram preservados sem consumidores executáveis nesses domínios; a auditoria
+> documental ampla fica para a OWN-45.
 
 ### Enquetes Owner News (P2)
 
@@ -633,142 +658,6 @@ independentes e cleanup do reader. Escopo exclusivamente sintético/local;
   `tests/unit/owner-news-polls-frontend.test.mjs` cobre o módulo real no DOM do
   harness, com requests controlados e fixtures sintéticas.
 
-### Controle de sessão e autoridade editorial Payload
-
-A migration `036_payload_editorial_control` cria `cms_editor_sessions` e
-`owner_news_authority` no banco do Portal. O bootstrap aplica essa migration pelo
-runner normal; `schema.sql` não a marca como aplicada. A reaplicação preserva as
-sessões e o singleton existente, inicialmente `{mode: 'legacy', epoch: 1}`.
-
-- Sessões guardam somente SHA-256 hexadecimal minúsculo (64 caracteres), UID,
-  expiração, revogação e criação. Excluir o usuário remove suas sessões por cascata.
-  `api/editorial-session/store.js` recebe o client do chamador:
-  `createSessionRecord(db,{hash,uid,expiresAt})` retorna `{uid,expiresAt}`;
-  `findSessionRecord(db,hash)` retorna esse objeto ou `null` para hash ausente,
-  revogado ou expirado (`expires_at <= NOW()`); datas são `Date` do driver `pg`.
-  `revokeSessionRecord(db,hash)` retorna booleano: `true` só na primeira revogação
-  de um registro existente; repetição/ausência retorna `false` sem alterar a data.
-- Cada criação limpa no máximo **100** expirados, ordenados por expiração/hash,
-  com `FOR UPDATE SKIP LOCKED`, na mesma instrução SQL da inserção. O futuro POST
-  de sessão consumirá esse helper. O store não cria cookies nem executa cron.
-- `api/owner-news/authority.js` expõe `writerAllowed(mode,writer)`: apenas
-  `legacy/legacy` e `payload/payload` autorizam; `frozen` e `payload_frozen`
-  bloqueiam ambos. `getAuthority(db,{forUpdate=false})` retorna `{mode,epoch}`,
-  sem cache. Configuração ausente/inválida gera `AuthorityError` com
-  `status=503`, `code='news_authority_unavailable'`; erros SQL, inclusive tabela
-  ausente, propagam. Não há fallback automático para legado.
-- `getAuthority(db,{forUpdate:true})` adquire advisory lock CMS **7193029** e
-  depois a linha singleton `FOR UPDATE`. `assertNewsWriter(db,writer)` usa essa
-  leitura bloqueante, retorna `{mode,epoch}` se permitido e lança
-  `AuthorityError(409,'news_read_only')` caso contrário. O chamador fornece um
-  client dentro de transação (`withAudit` nas mutações auditadas) e só depois
-  bloqueia documentos. Trocas de modo também devem seguir CMS → autoridade →
-  documentos. Nenhum helper abre pool ou transação própria.
-- `portal_api` recebe CRUD de sessões e SELECT/UPDATE da autoridade; não pode
-  inserir/excluir o singleton. `portal_cron` tem somente SELECT da autoridade e
-  nenhum acesso a sessões. Leituras do cron usam `getAuthority(db)`; decisões de
-  escrita no cron devem usar `writerAllowed` sob seu lock CMS existente. A leitura
-  `forUpdate` e `assertNewsWriter` exigem o papel API com UPDATE, não o cron.
-  A referência `changed_by` fica nula ao excluir o usuário, preservando o modo.
-
-Os testes sem banco cobrem contrato, decisões e ordem das chamadas.
-Constraints, grants efetivos e comportamento SQL constam dos cenários descartáveis
-de `scripts/test-migrations.mjs`, com execução **pendente de autorização de banco**.
-Os helpers CommonJS novos usam APIs disponíveis em Node 18; a verificação local
-usa Node 24, conforme o runtime dos manifests existentes.
-
-### Autenticação editorial revogável (Payload Task 3)
-
-`loadActivePortalUser(db,decoded)` centraliza o perfil ativo usado pelo Bearer e
-pela sessão: email verificado, cadastro existente/aprovado, disabled boolean/string,
-`firebase_enable_pending` e join de cargo. Preserva os reasons 403 e os limites
-de escrita existentes (60/15 min; progresso Academy PUT exato, 120/15 min).
-
-As rotas são montadas antes do parser CMS legado e usam JSON de **16 KiB** e
-`Cache-Control: no-store`. Configuração CMS opcional é validada na fronteira da
-requisição, sem impedir o startup da API legada:
-
-- `POST /api/cms/session`: Bearer validado com `verifyIdToken(token,true)`, conta
-  ativa, `can(user,'manageKnowledge')` e Origin exata. Usa uma conexão/transação
-  dedicada; advisory lock `(7193030,hashtext(uid))` serializa emissões entre processos.
-  Aguarda antes da única chamada ao provedor, até 1,1s após a última inserção
-  confirmada do UID (inclusive revogada); `created_at` usa `clock_timestamp()`,
-  não o início da transação. Lock timeout 3s e statement timeout 5s limitam a espera
-  SQL. Chama `createSessionCookie(token,{expiresIn:7200000})`, verifica que o hash
-  difere do anterior e de qualquer hash persistido, revoga o anterior (inclusive
-  na troca de conta) e insere o novo na mesma transação. Só após commit responde
-  **201 `{uid,expiresAt}`** e Set-Cookie. Guarda somente SHA-256; falha controlada
-  reverte a transação, preservando a credencial anterior. Não há retry de mutação,
-  revival/upsert de hash, mudança de duração ou wrapping da cookie. A cookie bruta
-  nunca entra em JSON/logs. A unicidade do Firebase assinado de produção
-  permanece não comprovada; colisão ainda resulta em 503 seguro, não idempotência.
-- `GET /api/cms/session`: somente cookie; responde **200 `{uid,expiresAt}`**, sem
-  emissão/renovação. Resolução usa hash ativo, `verifySessionCookie(cookie,true)`,
-  igualdade do UID validado com o UID armazenado e perfil/permissão atuais.
-- `DELETE /api/cms/session`: sem Bearer, com Origin exata; revoga o hash e expira
-  a cookie após sucesso, **204** inclusive em repetição/ausência. Falha de DB
-  responde 503 e não confirma logout nem expira a cookie.
-- Cookie: `__Host-ownerinc-editorial`, HttpOnly, Secure, SameSite=Lax, Path=/,
-  duas horas. Somente `NODE_ENV=development` + HTTP loopback usa
-  `ownerinc-editorial-dev`, sem Secure. Nenhuma origem ausente, diferente ou
-  `Sec-Fetch-Site: cross-site` autoriza mutação. Nome duplicado é rejeitado.
-
-O prefixo privado `/api/internal/editorial` exige `Authorization: Bearer
-PAYLOAD_TO_PORTAL_SECRET` em todos os endpoints, por comparação de hashes de
-comprimento fixo em tempo constante. Não aceita esse segredo como login Payload:
-
-| Endpoint | Entrada | Saída |
-|---|---|---|
-| POST `/session/resolve` | `{cookie}` | `{actor,expiresAt}` |
-| POST `/session/revoke` | `{cookie}` | 204 idempotente |
-| POST `/actor/check` | `{uid}` | `{actor}` |
-| GET `/authority` | nenhuma | `{mode,epoch}` |
-
-Essa fronteira privada é montada antes do limite público de 300 requests/15 min/IP.
-Depois da autenticação de serviço, aplica quotas agregadas **por processo**, em
-janelas de um minuto: 3000 resoluções, 300 revogações, 600 checagens de ator e
-120 leituras de autoridade. Cada operação tem um bucket de chave constante;
-`X-Forwarded-For` e UIDs do body não definem quotas. Credenciais de serviço recusadas
-têm um bucket separado de 60/min e não gastam a capacidade autenticada. Exceder
-uma quota responde 429 antes do parser/DB/Firebase, sem impedir as outras operações;
-o CMS traduz esse throttle em 503 controlado. As quotas públicas e Bearer por UID
-permanecem vigentes. Dimensionamento real/múltiplos processos ficam no aceite integrado.
-
-`actor` é `{uid,email,name,canManageNews:true}`, montado no servidor; expiração
-é ISO UTC. Jobs checam `firebaseAuth.getUser(uid)` (existência, UID, email verificado,
-disabled) e perfil/permissão atuais, independentemente da sessão do navegador.
-401 indica sessão inválida/expirada/revogada; 403 indica conta ou permissão negada;
-503 `editorial_unavailable` indica dependência/configuração indisponível. Autoridade
-indisponível usa 503 `news_authority_unavailable`. Erros 5xx mantêm a mensagem genérica
-do Portal e apenas reasons permitidos; corpos/token/causas das dependências não são
-repassados. Credencial interna incorreta usa 401 `editorial_service_unauthorized`,
-que o client CMS trata como **503**, não revogação da pessoa.
-
-No CMS, a estratégia customizada revalida por request (timeout 5s, sem retry,
-`redirect:'error'`, `cache:'no-store'`). Só então lê/cria `portal-editors` com
-`overrideAccess:true`, por `portalUid` único, relendo após conflito de unicidade.
-`portalActor` e `portalExpiresAt` são exclusivamente runtime. Admin exige a
-capacidade atual; leitura da projeção é apenas da própria conta; mutações públicas
-são negadas. Senhas/first-user/API keys são desabilitados; refresh nativo é negado
-para não emitir JWT Payload independente. A fronteira REST preserva 401/403/503
-mesmo com o catch de estratégias do framework 3.90.2, sem alterar seu núcleo.
-
-`cms/src/proxy.ts` aplica Origin exata e rejeição de `Sec-Fetch-Site: cross-site`
-antes do dispatch Next em todo `/editorial/:path*`, inclusive ações nativas do
-layout que não passam pelo `serverFunction` customizado (como a cookie de idioma).
-Todos os métodos mutantes são protegidos, com ou sem header `next-action`; GET,
-HEAD e OPTIONS prosseguem sem mutação pelo proxy. Recusas não emitem Set-Cookie;
-configuração ausente/inválida retorna 503. Permanecem os guards locais REST/action
-e a autorização Portal por request. Esse scaffold não inclui CSP/infra da Task 13.
-
-Login nativo encaminha para `/editorial-entry.html`; GET logout encaminha para
-`/editorial-entry.html?logout=1`, sem mutação. POST logout nativo usa `afterLogout`
-para revogação/expiração confirmadas. **Task 9** ainda entrega essa página, entrada
-Bearer, logout do Portal, retry e observação de troca de UID entre abas. Migrations
-dos campos Payload pertencem à tarefa de schema subsequente. Tests HTTP usam os
-handlers/políticas reais com doubles externos; DB/Firebase/browser/Nginx reais
-permanecem pendentes e não são declarados como aceite de autenticação.
-
 ### Persistência editorial (E2)
 
 - Migration `034_owner_news_editorial` acrescenta `cms_revisions.editorial` JSONB
@@ -795,8 +684,9 @@ permanecem pendentes e não são declarados como aceite de autenticação.
   executa o runner duas vezes; `scripts/test-owner-news-integration.mjs` verifica
   handlers Express, publicação, SQL NULL, agendamento, perfil e constraints com
   fixtures sintéticas removidas em `finally`. Exigem `NODE_ENV=development`,
-  `MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_DATABASE_URL` e senhas dos papéis
-  pelo mecanismo privado local.
+  `MIGRATION_TEST_DISPOSABLE=true`, `MIGRATION_DATABASE_URL`,
+  `MIGRATION_TEST_CLUSTER_ID` e senhas dos papéis pelo mecanismo privado local;
+  a integração também verifica o marcador do cluster antes de inserir fixtures.
 
 ### Publicação e ciclo de vida existentes
 
@@ -805,7 +695,7 @@ permanecem pendentes e não são declarados como aceite de autenticação.
   blocos e assets validados; documento sem publicação válida não reativa o texto
   legado. Busca e resumo usam a projeção textual centralizada de
   `blocksToText`/`validateBlocks`.
-- O Editor CMS mantém revisões imutáveis. Publicação e agendamento resolvem o
+- Os contratos CMS mantêm revisões imutáveis. Publicação e agendamento resolvem o
   `draft_revision_id` sob lock transacional e rejeitam seleção obsoleta com
   `409`; o cancelamento de agendamento preserva um draft posterior e
   despublicar arquiva tanto `published` quanto `scheduled`.

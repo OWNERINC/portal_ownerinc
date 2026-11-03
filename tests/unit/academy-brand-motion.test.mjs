@@ -92,15 +92,17 @@ test('completion motion is finite and cancelled by the classroom signal', async 
   assert.equal(animations[0].cancelled, true);
 });
 
-test('view integration protects CMS covers and prevents filter remount entry replay', async () => {
+test('Academy cover integration uses the own brand asset fallback', async () => {
   const view = await readFile('public/academy/view-utils.js', 'utf8');
   const app = await readFile('public/academy/app.js', 'utf8');
   const catalog = await readFile('public/academy/catalog-view.js', 'utf8');
-  assert.match(view, /course\.cover_asset_id \?\s*\{ 'data-authoritative-cover': 'true' \}/);
+  assert.match(view, /course\.icon_key/);
   assert.match(view, /data-brand-fallback/);
   assert.match(app, /catalogEntryPending/);
   assert.match(catalog, /reducedMotion: !entryMotion/);
   assert.match(catalog, /academyCatalogFocus/);
   assert.match(catalog, /aria-busy/);
-  assert.match(view, /if \(course\.cover_asset_id\)/);
+  assert.doesNotMatch(view, /cover_asset_id|content_blocks|\/api\/cms|cms-block-renderer/);
+  assert.doesNotMatch(app, /cover_asset_id|content_blocks|\/api\/cms|cms-block-renderer/);
+  assert.doesNotMatch(catalog, /cover_asset_id|content_blocks|\/api\/cms|cms-block-renderer/);
 });

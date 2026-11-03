@@ -184,25 +184,3 @@ test('Firebase account reconciliation holds the row and identity locks through t
   assert.equal(await reconcileFirebaseAccountStatus('uid-1', 'request-id'), false);
   assert.ok(steps.includes('ROLLBACK'));
 });
-
-test('public content routes provide server-side filters and category metadata', async () => {
-  const [knowledge, academy, benefits] = await Promise.all([
-    readFile('api/routes/knowledge.js', 'utf8'),
-    readFile('api/routes/academy.js', 'utf8'),
-    readFile('api/routes/benefits.js', 'utf8'),
-  ]);
-  assert.match(knowledge, /router\.get\('\/categories'/);
-  assert.match(knowledge, /publishedBodyText/);
-  assert.doesNotMatch(knowledge, /CMS_BODY_SQL/);
-  assert.match(knowledge, /btrim\(knowledge_base\.category\) = \$\$\{values\.length\}/);
-  assert.match(knowledge, /router\.get\('\/:id'/);
-  assert.match(knowledge, /pdf_asset_id/);
-  assert.match(knowledge, /syncKnowledgePdf/);
-  assert.doesNotMatch(knowledge, /DELETE FROM cms_documents/);
-  assert.match(academy, /router\.get\('\/categories'/);
-  assert.match(academy, /listCourses\(pool, req.user/);
-  const catalog = await readFile('api/academy/catalog.js', 'utf8');
-  assert.match(catalog, /btrim\(a\.category\) = \$\{parameter\(query.category\)\}/);
-  assert.match(benefits, /router\.get\('\/categories'/);
-  assert.match(benefits, /btrim\(benefits\.category\) = \$1/);
-});

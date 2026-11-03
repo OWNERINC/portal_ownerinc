@@ -46,14 +46,15 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Retenção: o histórico segue a política de dados internos e deve ser mantido
   ou excluído conforme decisão do responsável por DHO e validação jurídica.
 
-## CMS Editorial
+## Dados editoriais históricos
 
-- Revisões são imutáveis e permanecem vinculadas ao documento para auditoria.
-- Assets privados sem referência em qualquer revisão são removidos diariamente
-  após 30 dias por padrão; o prazo pode ser ajustado por
-  `CMS_ASSET_ORPHAN_RETENTION_DAYS` entre 1 e 3650 dias.
-- Uma falha ao remover o arquivo mantém o registro para nova tentativa e é
-  registrada no log operacional.
+- Revisões, documentos, votos e assets antigos permanecem preservados para
+  auditoria/compatibilidade; não são lidos ou publicados pelo runtime atual.
+- O job de retenção de assets CMS e a configuração
+  `CMS_ASSET_ORPHAN_RETENTION_DAYS` pertencem ao fluxo histórico e não são
+  executados pelo cron atual.
+- Nenhuma exclusão de tabela, linha ou upload histórico é autorizada pela OWN-45;
+  uma decisão futura de limpeza exigirá gate e autorização próprios.
 
 ## Academy e dados de aprendizagem
 
@@ -71,8 +72,8 @@ substitui orientação jurídica nem o registro formal das bases legais.
   anterior pode permanecer para auditoria técnica.
 - Excluir usuário, aula, módulo ou curso remove o progresso correspondente por
   cascata transacional. Exclusão de usuário também segue o fluxo de anonimização
-  e retenções gerais acima; assets CMS compartilhados seguem a retenção de
-  referências.
+  e retenções gerais acima; assets editoriais históricos permanecem fora desse
+  fluxo.
 - O Portal não usa progresso para decisão trabalhista, avaliação automática ou
   emissão de certificado. Posição de vídeo não equivale a conclusão: somente a
   ação manual confirmada pelo servidor registra conclusão.

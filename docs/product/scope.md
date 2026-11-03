@@ -7,7 +7,8 @@
 - Perfil do colaborador e foto.
 - Base de conhecimento.
 - Academia interna com catálogo elegível, formação inicial e por cargo, currículo,
-  player de mídia, materiais editoriais, conclusão manual e retomada individual.
+  player de mídia própria, conteúdo e materiais da própria Academy, conclusão
+  manual e retomada individual; não há apresentação CMS/editorial no runtime.
 - Lembretes e notificações por email.
 
 ## Fora do escopo atual
@@ -15,6 +16,9 @@
 - Ownerinc Brain e suas operações de conteúdo.
 - `ownerinc-novo-agente` e integrações com Discord ou IA.
 - Atendimento ao cliente e campanhas externas.
+- CMS, Payload CMS, Owner News, enquetes e editores editoriais no runtime.
+- A URL `/announcements.html` e as rotas editoriais antigas como páginas do produto;
+  elas retornam 404 controlado e permanecem apenas como compatibilidade histórica.
 - Aplicativo móvel nativo.
 - WhatsApp enquanto a integração não estiver configurada e validada.
 - Catálogo de Benefícios na experiência inicial; a rota e o CRUD administrativo
@@ -26,8 +30,9 @@
 - O Gate 0 de exposição insegura está concluído no código, conforme o roadmap.
 - Homologações com Firebase, SMTP, VPS, restauração real e dispositivos de
   acessibilidade continuam como validações operacionais externas.
-- Para a Academy, a matriz final também mantém pendentes a execução contra
-  PostgreSQL/Firebase real, o navegador autenticado servido pelo Nginx e a
+- O OWN-43 validou migrations, ledger, grants e readiness em um cluster PostgreSQL
+  descartável separado. Permanecem externas a homologação full-stack com
+  PostgreSQL/Firebase oficiais, o navegador autenticado servido pelo Nginx e a
   reprodução/erro real de YouTube e MP4. Nenhuma dessas pendências deve ser
   descrita como aprovada por checks locais ou fixtures.
 

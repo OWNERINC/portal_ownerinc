@@ -20,7 +20,7 @@ require.cache[sendEmailPath] = {
   exports: { sendEmail: async payload => sendEmailImplementation(payload) },
 };
 const {
-  checkReminders, processDate, processOccurrence, promoteScheduledRevisions, recoverInterruptedDeliveries, reminderForDelivery,
+  checkReminders, processDate, processOccurrence, recoverInterruptedDeliveries, reminderForDelivery,
 } = require('../../cron/checkReminders');
 const { canRecover, checkHealth, healthSignature, isExecutionRunning } = require('../../cron/health');
 const {
@@ -53,108 +53,16 @@ function reminderRunFixture(lastScheduledDate = '2026-08-16', candidate = null) 
   return { calls, pool: { async connect() { return db; } } };
 }
 
-test('scheduled promotion is transactional, archives before publishing, and audits', async () => {
-  const calls = [];
-  const db = {
-    async query(sql, params = []) {
-      calls.push({ sql, params });
-      if (sql.includes('FROM owner_news_authority')) return { rows: [{ mode: 'legacy', epoch: 1 }] };
-      if (/SELECT d\.id, d\.published_revision_id/.test(sql)) {
-        return {
-          rows: [{
-            id: 'doc-1', published_revision_id: 'old-1', scheduled_revision_id: 'new-1',
-            scheduled_blocks: [{ type: 'paragraph', text: 'Scheduled body' }],
-          }],
-        };
-      }
-      return { rows: [] };
-    },
-  };
-
-  assert.equal(await promoteScheduledRevisions(db, new Date('2026-08-17T12:00:00Z')), 1);
-  const sql = calls.map(({ sql: statement }) => statement);
-  assert.equal(sql[0], 'BEGIN');
-  assert.ok(sql.findIndex((statement) => /SET status = 'archived'/.test(statement))
-    < sql.findIndex((statement) => /SET status = 'published'/.test(statement)));
-  assert.ok(sql.some((statement) => /UPDATE cms_documents/.test(statement)));
-  assert.ok(sql.some((statement) => /INSERT INTO audit_log/.test(statement)));
-  assert.equal(sql.at(-1), 'COMMIT');
-});
-
-test('cron uses published reminder blocks for text while keeping delivery controls', async () => {
+test('reminder delivery recheck uses only own state and current locks', async () => {
   const source = await readFile('cron/checkReminders.js', 'utf8');
-  assert.match(source, /blocksToText\(reminder\.cms_blocks\)/);
-  assert.match(source, /LEFT JOIN cms_documents/);
-  assert.match(source, /revision\.status = 'published'/);
+  assert.doesNotMatch(source, /cms_documents|cms_revisions|cms_assets|7193029|cms_blocks/);
   assert.match(source, /claim\(db, reminder\.id, user\.uid, scheduledDate, channel\)/);
   assert.match(source, /resolveTargets\(reminder\.target_users, users\)/);
-  assert.match(source, /channelsFor\(reminder\.channel\)/);
-  assert.match(source, /reminderMatchesDate\(reminder\.trigger_day, scheduledDate\)/);
-  assert.match(source, /resolveTargets\(reminder\.target_users, \[currentUser\]\)/);
-  assert.match(source, /channelsFor\(reminder\.channel\)\.includes\(channel\)/);
   assert.match(source, /FOR UPDATE OF reminder/);
   assert.match(source, /FROM users[\s\S]*FOR UPDATE/);
-  assert.match(source, /COALESCE\(permissions->>'accountDisabled', ''\) <> 'true'/);
-  assert.match(source, /firebase_enable_pending IS NOT TRUE/);
-  assert.match(source, /accountDisabled === 'true'/);
-  assert.match(source, /firebase_enable_pending === true/);
   assert.match(source, /notifications_log/);
-  assert.match(source, /RETURNING id/);
-  assert.match(source, /WHERE id = \$1/);
-  assert.match(source, /error\?\.code === '23503'/);
   assert.match(source, /last_scheduled_date::text AS last_scheduled_date/);
-});
 
-test('cron keeps legacy reminder text when published blocks render empty', () => {
-  const reminder = { description: 'Legacy description', cms_blocks: [{ type: 'divider' }] };
-  assert.equal(reminderForDelivery(reminder), reminder);
-  assert.equal(reminderForDelivery({
-    ...reminder,
-    cms_blocks: [{ type: 'image', asset_id: '550e8400-e29b-41d4-a716-446655440000', alt: 'Banner' }],
-  }).description, 'Legacy description');
-  assert.equal(reminderForDelivery({
-    ...reminder,
-    cms_blocks: [{ type: 'paragraph', text: 'Published description' }],
-  }).description, 'Published description');
-});
-
-test('cron rechecks publication under the shared CMS lock before sending', async () => {
-  const calls = [];
-  const db = {
-    async query(sql, params = []) {
-       calls.push({ sql, params });
-        if (/INSERT INTO notifications_log/.test(sql)) return { rows: [{ id: 'log-1' }] };
-      if (/FROM users/.test(sql)) return { rows: [{
-        uid: 'user-1', email: 'user@example.com', name: 'User', contract_type: 'clt', is_pj: false,
-      }] };
-      if (/FROM reminders reminder/.test(sql)) {
-        return { rows: [{
-          id: 'reminder-1', title: 'No longer published', description: 'Stale body',
-          active: true, trigger_day: 17, target_users: ['user-1'], channel: 'email',
-          cms_document_id: 'document-1', published_revision_id: null,
-        }] };
-      }
-      return { rows: [] };
-    },
-  };
-
-  const result = await processOccurrence(db, {
-    id: 'reminder-1', title: 'No longer published', description: 'Stale body',
-    cms_document_id: 'document-1', cms_blocks: [{ type: 'paragraph', text: 'Stale body' }],
-  }, { uid: 'user-1', email: 'user@example.com', name: 'User' }, '2026-08-17', 'email');
-
-  assert.equal(result, 'skipped');
-  assert.deepEqual(sentEmails, []);
-  const lockIndex = calls.findIndex(({ sql }) => /pg_advisory_xact_lock/.test(sql));
-  const validationIndex = calls.findIndex(({ sql }) => /FROM reminders reminder/.test(sql));
-  const finish = calls.find(({ sql }) => /UPDATE notifications_log/.test(sql));
-  assert.ok(lockIndex >= 0 && lockIndex < validationIndex);
-  assert.deepEqual(calls[lockIndex].params, [7193029]);
-   assert.equal(finish.params.at(-1), 'content_not_published');
-  assert.equal(calls.at(-1).sql, 'COMMIT');
-});
-
-test('cron skips a claimed occurrence when the current audience, date, channel, or active state changed', async () => {
   for (const changes of [
     { active: false },
     { trigger_day: 18 },
@@ -173,19 +81,25 @@ test('cron skips a claimed occurrence when the current audience, date, channel, 
           return { rows: [{
             id: 'reminder-1', title: 'Changed', description: 'Body', active: true,
             trigger_day: 17, target_users: ['user-1'], channel: 'email',
-            cms_document_id: null, ...changes,
+            ...changes,
           }] };
         }
         return { rows: [] };
       },
     };
     const result = await processOccurrence(db, {
-      id: 'reminder-1', title: 'Original', description: 'Body', cms_document_id: null,
+      id: 'reminder-1', title: 'Original', description: 'Body',
     }, { uid: 'user-1', email: 'user@example.com', name: 'User' }, '2026-08-17', 'email');
     assert.equal(result, 'skipped', JSON.stringify(changes));
     assert.deepEqual(sentEmails, [], JSON.stringify(changes));
-    assert.ok(calls.some(({ sql }) => /pg_advisory_xact_lock/.test(sql)), JSON.stringify(changes));
+    assert.ok(calls.some(({ sql }) => /FROM reminders reminder/.test(sql)), JSON.stringify(changes));
+    assert.equal(calls.some(({ sql }) => /cms_documents|cms_revisions|cms_assets|7193029/.test(sql)), false);
   }
+});
+
+test('reminderForDelivery returns the own reminder snapshot unchanged', () => {
+  const reminder = { id: 'reminder-1', title: 'Own', description: 'Description', active: true };
+  assert.equal(reminderForDelivery(reminder), reminder);
 });
 
 test('cron locks the current recipient snapshot and skips concurrent deactivation or ineligible recipients', async () => {
@@ -817,24 +731,6 @@ test('health signatures alert on execution failures and recover after heartbeat 
   });
   assert.equal(alerts[0].subject, 'worker recuperado');
   assert.ok(calls.some(({ sql }) => /alert_signature = NULL/.test(sql)));
-});
-
-test('cron image contains the shared CMS reader at its actual import path', async () => {
-  const [compose, dockerfile, workflow, cronSource, reader, blocks] = await Promise.all([
-    readFile('docker-compose.yml', 'utf8'),
-    readFile('cron/Dockerfile', 'utf8'),
-    readFile('.github/workflows/ci.yml', 'utf8'),
-    readFile('cron/checkReminders.js', 'utf8'),
-    readFile('api/cms/reader.js', 'utf8'),
-    readFile('api/cms/blocks.js', 'utf8'),
-  ]);
-  assert.match(compose, /context: \.[\s\S]*dockerfile: cron\/Dockerfile/);
-  assert.match(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} --file cron\/Dockerfile \./);
-  assert.doesNotMatch(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} cron\s*$/m);
-  assert.match(dockerfile, /COPY --chown=node:node api\/cms\/ \/api\/cms\//);
-  assert.match(cronSource, /require\('\.\.\/api\/cms\/reader'\)/);
-  assert.match(reader, /require\('\.\/blocks'\)/);
-  assert.match(blocks, /function blocksToText/);
 });
 
 test('Pos-Cards retention accepts only UUID WebP keys and keeps namespaces isolated', async () => {

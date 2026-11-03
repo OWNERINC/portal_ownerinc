@@ -1,9 +1,8 @@
 # Portal Ownerinc
 
 Portal interno da Ownerinc para perfis, base de conhecimento, Academy (catálogo e
-jornada de aprendizagem interna), Owner News e
-lembretes. O catálogo de benefícios permanece disponível como rota futura, fora
-da navegação inicial.
+jornada de aprendizagem interna) e lembretes. O catálogo de benefícios permanece
+disponível como rota futura, fora da navegação inicial.
 
 ## Arquitetura
 
@@ -15,8 +14,12 @@ da navegação inicial.
   `/autocard/` permanece como redirect compatível para bookmarks antigos.
 - `public/cards-pos.html` e `public/cards-pos/`: página e módulo isolado dos
   Cards Pós, separado do AutoCard.
-- `public/announcements.html`: Owner News, publicação editorial interna que
-  substitui Anúncios, mantendo o endereço e o CMS existentes.
+- `public/`: páginas estáticas das áreas mantidas pelo Portal; a antiga URL
+  `/announcements.html` não é mais uma página do produto e responde 404
+  controlado.
+- O runtime atual não inclui CMS, Owner News, editor editorial, enquetes ou
+  Payload CMS. Migrations, tabelas, uploads e documentos editoriais antigos
+  permanecem preservados como histórico sem consumidores executáveis.
 - `api/`: API Express, autorização e persistência PostgreSQL.
 - `cron/`: processamento diário de lembretes e notificações.
 - `firebase-emulator/`: imagem do Auth Emulator usada apenas no perfil local.
@@ -49,21 +52,6 @@ npm run verify
 
 O comando valida sintaxe JavaScript, testes, scripts shell, configuração do
 Compose quando Docker estiver disponível e possíveis segredos versionados.
-Inclui também testes unitários e typecheck offline de `cms/`; execute antes
-`npm run bootstrap` para instalar os três pacotes (API, cron e CMS). Os checks
-usam Node 24; o CMS é a exceção aprovada à regra de compatibilidade Node 18 do
-código compartilhado da API/cron. `npm test` executa os testes offline Portal/CMS.
-
-`npm run security` inclui o CMS no audit de dependências de produção e
-`npm run sbom` gera um SPDX por pacote. Esses comandos acessam ferramentas de
-dependências separadamente de `verify`; um scanner de segredos não é um audit.
-
-O runner `npm run test:payload` ainda está em integração: possui guard de alvos
-descartáveis, mas retorna código 2 enquanto a suíte real não estiver implementada.
-`--check-config` valida somente configuração/diretórios e não comprova serviços.
-Preparação de bancos, migrations e runtime é uma etapa separada e autorizada.
-Consulte o [runbook Payload](docs/operations/payload-owner-news.md) e a
-[matriz de aceite](docs/reviews/2026-10-02-payload-owner-news-acceptance.md).
 
 ## Contratos de UI e prevenção de quebras
 
@@ -97,9 +85,9 @@ HTML.
 - [Auditoria de UI/UX](docs/design/2026-07-20-ui-ux-audit.md)
 - [Relatório de implementação](docs/reports/2026-07-20-roadmap-implementation.md)
 - [Fluxo de dados](docs/architecture/data-flow.md)
-- [Importação privada da Owner News](docs/operations/owner-news-import.md)
-- [Ponte de leitura Payload da Owner News](docs/operations/owner-news-payload-read-bridge.md)
-- [Pendências e plano de conclusão do Payload](docs/operations/payload-pendencias-e-plano-de-conclusao-2026-10-14.md)
+- [Histórico da importação privada da Owner News](docs/operations/owner-news-import.md)
+  (fluxo removido do runtime; mantido apenas como registro)
+- [Arquitetura do Portal sem editorial](docs/architecture/portal-without-editorial.md)
 - [Deploy](docs/operations/deployment.md)
 - [Checklist de release V1](docs/operations/v1-release-checklist.md)
 - [Status final da V1](docs/operations/2026-08-12-v1-final-status.md)

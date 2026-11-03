@@ -1,22 +1,15 @@
 # V1 Release Checklist
 
-## Gate E — Payload Owner News
-
-- [x] Código, migration, CLI privado, guards, testes e workflow implementados.
-- [x] Autoridade one-way; não existe rollback para legacy.
-- [x] Activation exige preflight após freeze e aprovação posterior ao preflight inicial.
-- [x] Payload writer exige observação persistida em conexão nova.
-- [x] Evidence privada é produzida/assinada no host via FD 9; workflow não fabrica proof.
-- [x] Approval posterior refaz checkout de main e observações dentro de deadline absoluto.
-- [x] Migration 037 preserva upgrades nos quatro modos e deixa validação global staged explícita.
-- [ ] Evidência PostgreSQL/Linux real do protocolo e fault injection.
-- [ ] Aprovação dos Environments e janela de produção.
-- [ ] Cutover executado (fora do escopo desta entrega).
-
 Use esta lista para separar o que foi validado localmente do que exige
 homologação com serviços e infraestrutura reais. Marque cada item com data,
 responsável e evidência; não marque uma validação externa usando apenas
 `npm run verify`.
+
+> **Nota OWN-45:** o CMS/Owner News não faz parte do runtime atual. As seções
+> `CMS Drag and Drop` e `CMS Release Follow-up` abaixo são registros históricos
+> de validação e preservação; não são passos para reativar, publicar ou operar
+> editorial no Portal. Migrations, tabelas, uploads e relatórios históricos devem
+> permanecer preservados.
 
 > **Homologação de 30/09/2026:** consulte o
 > [relatório de entrega por critério](../reviews/2026-09-30-issue-delivery.md).
@@ -82,7 +75,7 @@ responsável e evidência; não marque uma validação externa usando apenas
 - [ ] Nenhuma tela pública perde registros por limite silencioso de 50 itens.
 - [ ] Admin consegue navegar o histórico completo de auditoria.
 
-## CMS Drag and Drop
+## CMS Drag and Drop — registro histórico preservado
 
 - [x] Verificação estática cobre os cinco tipos de conteúdo CMS e o mapeamento de permissões.
 - [x] Contratos de rascunho, publicação, agendamento, fallback, assets protegidos, editor responsivo e renderer seguro passam em `npm run verify`.
@@ -90,7 +83,7 @@ responsável e evidência; não marque uma validação externa usando apenas
   `cms_documents` usa fallback. Scheduled vencido só é promovido após validação de
   blocos e assets; scheduled inválido é arquivado e auditado.
 - [x] Edição legacy de PDF substitui/remove somente o único bloco PDF identificável;
-  artigos com múltiplos PDFs exigem o Editor CMS.
+  artigos com múltiplos PDFs permanecem sem seleção visual nesta etapa do Portal.
 - [ ] Teste da migration CMS e validação da segunda execução requerem `MIGRATION_DATABASE_URL`.
 - [ ] Aceitação autenticada de criação, prévia, publicação, agendamento, fallback e PDF protegido permanece pendente.
 - [ ] Deploy e validação no ambiente live estão fora desta auditoria.
@@ -240,7 +233,7 @@ S3 e restore off-host; e o relato #38 sem card/PDF e ambiente originais. Consult
 o [relatório consolidado de entrega](../reviews/2026-09-30-issue-delivery.md) e
 as issues para os hashes, request IDs sanitizados e limites de cada evidência.
 
-## CMS Release Follow-up
+## CMS Release Follow-up — registro histórico preservado
 
 - [x] Cron image build context includes the shared CMS reader and block validator
   at the import path used by `cron/checkReminders.js`.
@@ -260,8 +253,9 @@ as issues para os hashes, request IDs sanitizados e limites de cada evidência.
   separately limited to 50 MiB in the API and 51 MiB at Nginx for multipart
   overhead. Multer returns 400 for unexpected/multiple files and 413 for the
   file-size limit.
-- [x] Authenticated announcement detail returns only a published announcement
-  revision and the frontend links list entries to that detail request.
+- [x] Historical announcement detail contract was restricted to published
+  revisions before Owner News was removed in OWN-40; the current API no longer
+  mounts the route and returns a controlled 404.
 - [ ] PostgreSQL migration execution and authenticated/live acceptance still
   require the missing operational database URL and environment.
 

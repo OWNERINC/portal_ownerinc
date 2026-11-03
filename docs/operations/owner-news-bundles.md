@@ -1,5 +1,10 @@
 # Preparação de pacotes editoriais privados — A1
 
+> **Documento histórico — não executar.** Owner News foi removido do runtime em
+> 3 de novembro de 2026 (OWN-40); os scripts e bibliotecas descritos abaixo foram
+> removidos. Este registro permanece apenas para preservar a procedência do
+> acervo histórico, sem instruir novas importações ou alterações de dados.
+
 `scripts/prepare-owner-news-bundle.mjs` valida e empacota um manifesto privado
 revisado. Não abre conexão com banco, não aplica drafts e não publica. A aplicação
 transacional usa o [importador A2](owner-news-import.md#pacote-revisado--a2), após

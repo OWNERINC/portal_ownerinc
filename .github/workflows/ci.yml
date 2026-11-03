@@ -2,241 +2,23 @@ name: CI
 
 on:
   workflow_dispatch:
-    inputs:
-      cms_image_only:
-        description: Publish only the CMS image from this branch; skip API/cron release and production deployment
-        required: false
-        type: boolean
-        default: false
-      publish_candidate_only:
-        description: Publish a complete API/cron/CMS candidate from this branch after disposable API-v2 session acceptance; skip production deployment
-        required: false
-        type: boolean
-        default: false
-      production_approval_sha256:
-        description: Exact protected production approval digest (required only for candidate publication)
-        required: false
-        type: string
-      production_inventory_identity:
-        description: Exact protected production inventory identity (required only for candidate publication)
-        required: false
-        type: string
-      request_expires_at:
-        description: Ten-digit UTC epoch expiry, no more than 24 hours ahead (candidate publication only)
-        required: false
-        type: string
-      request_nonce:
-        description: Unique 64-hex production request nonce (candidate publication only)
-        required: false
-        type: string
-      manual_runtime_only:
-        description: Run only the disposable Payload manual-runtime recovery proof; publish and deploy nothing
-        required: false
-        type: boolean
-        default: false
   pull_request:
   push:
     branches: [main]
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
-  dispatch-input-contract:
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Reject conflicting publication modes
-        env:
-          CMS_IMAGE_ONLY: ${{ inputs.cms_image_only }}
-          PUBLISH_CANDIDATE_ONLY: ${{ inputs.publish_candidate_only }}
-          MANUAL_RUNTIME_ONLY: ${{ inputs.manual_runtime_only }}
-        run: |
-          set -euo pipefail
-          selected=0
-          for value in "$CMS_IMAGE_ONLY" "$PUBLISH_CANDIDATE_ONLY" "$MANUAL_RUNTIME_ONLY"; do
-            if [[ "$value" == true ]]; then selected=$((selected + 1)); fi
-          done
-          if ((selected > 1)); then
-            echo 'Select only one manual CI mode.' >&2
-            exit 1
-          fi
-      - name: Require main and closed production binding for candidate publication
-        if: inputs.publish_candidate_only == true
-        env:
-          APPROVAL_SHA256: ${{ inputs.production_approval_sha256 }}
-          INVENTORY_IDENTITY: ${{ inputs.production_inventory_identity }}
-          EXPIRES_AT: ${{ inputs.request_expires_at }}
-          REQUEST_NONCE: ${{ inputs.request_nonce }}
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF" = refs/heads/main
-          [[ "$APPROVAL_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$INVENTORY_IDENTITY" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$EXPIRES_AT" =~ ^[1-9][0-9]{9}$ ]]
-          [[ "$REQUEST_NONCE" =~ ^[0-9a-f]{64}$ ]]
-          now=$(date +%s)
-          (( EXPIRES_AT > now && EXPIRES_AT <= now + 86400 ))
-
-  payload-manual-runtime:
-    needs: dispatch-input-contract
-    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.manual_runtime_only == true && inputs.cms_image_only != true && inputs.publish_candidate_only != true
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout exact manual-runtime candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            api/package-lock.json
-            cms/package-lock.json
-      - name: Prepare dependencies and pinned PostgreSQL image
-        timeout-minutes: 8
-        run: |
-          set -euo pipefail
-          test "$RUNNER_ENVIRONMENT" = github-hosted
-          test -z "${DOCKER_HOST:-}"
-          test -z "${DOCKER_CONTEXT:-}"
-          test "$(docker context show)" = default
-          npm --prefix api ci
-          npm --prefix cms ci
-          docker pull postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
-          docker image inspect postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 >/dev/null
-      - name: Run isolated disposable manual runtime proof
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          mapfile -t ipv4_defaults < <(ip -4 route show default)
-          mapfile -t ipv6_defaults < <(ip -6 route show default)
-          ((${#ipv4_defaults[@]} + ${#ipv6_defaults[@]} > 0))
-          restore_routes() {
-            local route
-            for route in "${ipv4_defaults[@]}"; do sudo ip -4 route replace $route; done
-            for route in "${ipv6_defaults[@]}"; do sudo ip -6 route replace $route; done
-          }
-          trap restore_routes EXIT
-          for route in "${ipv4_defaults[@]}"; do sudo ip -4 route del $route; done
-          for route in "${ipv6_defaults[@]}"; do sudo ip -6 route del $route; done
-          test -z "$(ip -4 route show default)"
-          test -z "$(ip -6 route show default)"
-          PAYLOAD_MANUAL_RUNTIME_PRIVATE_PARENT="$RUNNER_TEMP" \
-            PAYLOAD_MANUAL_RUNTIME_DISPOSABLE=1 \
-            node scripts/integration/payload-manual-runtime.mjs
-
-  isolated-b0-recovery:
-    needs: dispatch-input-contract
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout exact B0 candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Set up B0 Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-      - name: Prepare pinned isolated B0 images
-        timeout-minutes: 5
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$RUNNER_ENVIRONMENT" = github-hosted
-          test -z "${DOCKER_HOST:-}"
-          test -z "${DOCKER_CONTEXT:-}"
-          test "$(docker context show)" = default
-          sudo -n env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root python3 --version
-          test "$(sudo -n env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root docker context inspect default --format '{{json .Endpoints.docker.Host}}')" = '"unix:///var/run/docker.sock"'
-          node --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          for (const [name, digest] of [
-            ['postgres', '57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'],
-            ['nginx', '4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752'],
-          ]) {
-            const response = await fetch(`https://mirror.gcr.io/v2/library/${name}/manifests/sha256:${digest}`, {
-              headers: { Accept: 'application/vnd.oci.image.index.v1+json' },
-              signal: AbortSignal.timeout(30_000), redirect: 'error',
-            });
-            if (!response.ok) throw new Error(`Pinned CI mirror unavailable: ${name}`);
-            const raw = Buffer.from(await response.arrayBuffer());
-            if (createHash('sha256').update(raw).digest('hex') !== digest) throw new Error('Pinned CI mirror digest mismatch');
-          }
-          NODE
-          # Same bounded mirror reload as validate; no services exist in this job.
-          sudo python3 - <<'PYTHON'
-          import json, os
-          filename = '/etc/docker/daemon.json'
-          config = {}
-          if os.path.exists(filename):
-              with open(filename) as source:
-                  config = json.load(source)
-          if not isinstance(config, dict):
-              raise ValueError('Invalid runner daemon configuration')
-          config['registry-mirrors'] = ['https://mirror.gcr.io']
-          with open(filename, 'w') as target:
-              json.dump(config, target)
-              target.write('\n')
-          PYTHON
-          sudo dockerd --validate --config-file=/etc/docker/daemon.json
-          sudo systemctl kill --kill-whom=main --signal=HUP docker.service
-          mirror_ready=false
-          for attempt in {1..15}; do
-            if [[ "$(docker info --format '{{json .RegistryConfig.Mirrors}}')" == '["https://mirror.gcr.io/"]' ]]; then
-              mirror_ready=true
-              break
-            fi
-            sleep 1
-          done
-          test "$mirror_ready" = true
-          # Canonical references retain the exact RepoDigests required by the executor.
-          for image in \
-            postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 \
-            nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752; do
-            sudo -n env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root docker pull "$image"
-            sudo -n env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root docker image inspect "$image" >/dev/null
-          done
-      - name: Run required native isolated B0 recovery
-        timeout-minutes: 6
-        run: |
-          set -euo pipefail
-          test "$RUNNER_TEMP" = /home/runner/work/_temp
-          sudo -n env -i PATH="$PATH" HOME=/root \
-            GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
-            PAYLOAD_REQUIRE_NATIVE_B0_RECOVERY=1 PAYLOAD_B0_RECOVERY_DISPOSABLE=1 \
-            node --test tests/unit/payload-install-recovery.test.mjs
-      - name: Upload nonqualifying B0 schema discrepancy
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: nonqualifying-isolated-b0-schema-discrepancy
-          path: ${{ runner.temp }}/payload-b0-schema-diagnostic/schema-discrepancy.json
-          if-no-files-found: warn
-          retention-days: 7
-
   validate:
-    needs: [dispatch-input-contract, isolated-b0-recovery]
-    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.manual_runtime_only == true) && (needs.isolated-b0-recovery.result == 'success' || (!(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true) && needs.isolated-b0-recovery.result == 'skipped')) }}
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true && 150 || 90 }}
+    outputs:
+      api_image: ${{ steps.publish.outputs.api_image }}
+      cron_image: ${{ steps.publish.outputs.cron_image }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     services:
       postgres:
-        # Service pulls precede checkout/steps: use the byte-identical public cache.
-        image: mirror.gcr.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_DB: portal_test
           POSTGRES_USER: portal_admin
@@ -249,11 +31,6 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - name: Reject conflicting publication modes
-        if: github.event_name == 'workflow_dispatch' && ((inputs.cms_image_only == true && inputs.publish_candidate_only == true) || (inputs.manual_runtime_only == true && (inputs.cms_image_only == true || inputs.publish_candidate_only == true)))
-        run: |
-          echo 'cms_image_only and publish_candidate_only cannot both be true' >&2
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -262,147 +39,27 @@ jobs:
           cache-dependency-path: |
            api/package-lock.json
            cron/package-lock.json
-           cms/package-lock.json
-      - name: Verify pinned CI mirrors and configure runner pulls
-        timeout-minutes: 5
-        env:
-          POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
-        run: |
-          set -euo pipefail
-          test "$RUNNER_ENVIRONMENT" = github-hosted
-          test -z "${DOCKER_HOST:-}"
-          test -z "${DOCKER_CONTEXT:-}"
-          test "$(docker context show)" = default
-          # Check raw index bytes, not tags or registry-provided digest headers.
-          node --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          const pins = [
-            ['postgres', '57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'],
-            ['nginx', '4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752'],
-            ['node', 'c921b97d4b74f51744057454b306b418cf693865e73b8100559189605f6955b8'],
-            ['node', '9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f3638b26f128c69ac2'],
-            ['golang', '107301490755aa2ea1b0b43788b6e62cff2faae45a538028b193becc06aaffba'],
-          ];
-          for (const [name, digest] of pins) {
-            const response = await fetch(`https://mirror.gcr.io/v2/library/${name}/manifests/sha256:${digest}`, {
-              headers: { Accept: 'application/vnd.oci.image.index.v1+json' },
-              signal: AbortSignal.timeout(30_000), redirect: 'error',
-            });
-            if (!response.ok) throw new Error(`Pinned CI mirror unavailable: ${name}@sha256:${digest}`);
-            const raw = Buffer.from(await response.arrayBuffer());
-            if (createHash('sha256').update(raw).digest('hex') !== digest) throw new Error('Pinned CI mirror digest mismatch');
-            console.log(`Verified CI mirror: ${name}@sha256:${digest}`);
-          }
-          NODE
-          # Merge only the mirror setting in this ephemeral hosted runner.
-          sudo python3 - <<'PYTHON'
-          import json, os
-          filename = '/etc/docker/daemon.json'
-          config = {}
-          if os.path.exists(filename):
-              with open(filename) as source:
-                  config = json.load(source)
-          if not isinstance(config, dict):
-              raise ValueError('Invalid runner daemon configuration')
-          config['registry-mirrors'] = ['https://mirror.gcr.io']
-          with open(filename, 'w') as target:
-              json.dump(config, target)
-              target.write('\n')
-          PYTHON
-          sudo dockerd --validate --config-file=/etc/docker/daemon.json
-          # SIGHUP reloads registry mirrors without restarting the PostgreSQL service.
-          sudo systemctl kill --kill-whom=main --signal=HUP docker.service
-          mirror_ready=false
-          for attempt in {1..15}; do
-            if [[ "$(docker info --format '{{json .RegistryConfig.Mirrors}}')" == '["https://mirror.gcr.io/"]' ]]; then
-              mirror_ready=true
-              break
-            fi
-            sleep 1
-          done
-          test "$mirror_ready" = true
-          test "$(docker inspect --format '{{.State.Health.Status}}' "$POSTGRES_SERVICE_ID")" = healthy
-      - name: Prepare isolated CI registry auth and pull pinned bases
-        timeout-minutes: 15
-        run: node scripts/prepare-ci-registry-pulls.mjs
       - run: npm run bootstrap
       - run: npm run verify
-      - name: Test preauthority CI setup with native Linux root
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
-        run: |
-          set -euo pipefail
-          sudo env PATH="$PATH" HOME=/root node --test tests/unit/payload-preauthority-ci-setup.test.mjs
-          NODE_BIN="$(readlink -f -- "$(command -v node)")"
-          test -f "$NODE_BIN" && test -x "$NODE_BIN"
-          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
-            PAYLOAD_REQUIRE_NATIVE_TRUST=1 "$NODE_BIN" --test \
-            tests/unit/payload-candidate-trust-provisioning.test.mjs
-          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
-            PAYLOAD_REQUIRE_NATIVE_PREPARATION=1 "$NODE_BIN" --test \
-            tests/unit/payload-preparation-authentication.test.mjs
-      - name: Qualify legacy security observer with isolated PostgreSQL 16
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
-        timeout-minutes: 6
-        env:
-          PAYLOAD_REQUIRE_NATIVE_LEGACY_SECURITY: "1"
-          PAYLOAD_LEGACY_SECURITY_DISPOSABLE: "1"
-        run: node --test tests/unit/payload-legacy-security-pg16.test.mjs
-      - name: Qualify isolated Portal fence topology
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
-        timeout-minutes: 6
-        env:
-          PAYLOAD_REQUIRE_NATIVE_FENCE_TOPOLOGY: "1"
-          PAYLOAD_FENCE_TOPOLOGY_DISPOSABLE: "1"
-        run: node --test tests/unit/payload-fence-topology.test.mjs
-      - name: Test route delivery with production Nginx image
-        run: |
-          docker run --rm \
-            --mount "type=bind,source=${PWD},target=/repo,readonly" \
-            --workdir /repo \
-            --entrypoint sh \
-            nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752 \
-            -c 'command -v nginx && apk add --no-cache nodejs && node --test tests/unit/nginx-route-delivery.test.mjs'
-      - name: Install isolated route browser tooling
-        run: |
-          npm install --prefix "$RUNNER_TEMP/portal-route-browser" --no-save --package-lock=false playwright@1.62.1
-          node "$RUNNER_TEMP/portal-route-browser/node_modules/playwright/cli.js" install --with-deps chromium
-      - name: Test route mounts through Nginx in Chromium
-        timeout-minutes: 10
-        run: |
-          container="portal-route-qa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          route_state="$RUNNER_TEMP/portal-route-state-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          install -D -m 0444 nginx/editorial-route.promoted.conf "$route_state/browser-promoted/include.conf"
-          printf '%s\n' 'include /etc/nginx/editorial-route-state/browser-promoted/include.conf;' > "$route_state/active.conf"
-          chmod 0444 "$route_state/active.conf"
-          trap 'docker rm --force "$container" >/dev/null 2>&1 || true; rm -rf "$route_state"' EXIT
-          docker run --detach --name "$container" \
-            --publish 127.0.0.1::80 \
-            --mount "type=bind,source=${PWD}/public,target=/usr/share/nginx/html,readonly" \
-            --mount "type=bind,source=${PWD}/nginx/nginx.conf,target=/etc/nginx/conf.d/default.conf,readonly" \
-            --mount "type=bind,source=${route_state},target=/etc/nginx/editorial-route-state,readonly" \
-            nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
-          address=$(docker port "$container" 80/tcp)
-          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-connrefused \
-            --retry-delay 1 --max-time 5 --retry-max-time 30 \
-            --output /dev/null "http://${address}/index.html"
-          node scripts/test-route-recovery-browser.mjs \
-            --base-url "http://${address}" \
-            --playwright-module "$RUNNER_TEMP/portal-route-browser/node_modules/playwright/index.mjs"
-      - name: Build CMS with synthetic build-only configuration
-        env:
-          CMS_BUILD_ONLY: "true"
-          NEXT_TELEMETRY_DISABLED: "1"
-        run: npm --prefix cms run build
       - name: Create migration setup databases
         env:
           PGPASSWORD: integration-test-admin-password
         run: |
           psql --host=127.0.0.1 --username=portal_admin --dbname=portal_test --set=ON_ERROR_STOP=1 --command="CREATE DATABASE portal_test_upgrade OWNER portal_admin"
           psql --host=127.0.0.1 --username=portal_admin --dbname=portal_test --set=ON_ERROR_STOP=1 --command="CREATE DATABASE portal_test_bootstrap OWNER portal_admin"
+          psql --host=127.0.0.1 --username=portal_admin --dbname=portal_test --set=ON_ERROR_STOP=1 --command="CREATE DATABASE portal_test_readiness OWNER portal_admin"
+      - name: Capture disposable PostgreSQL cluster identity
+        env:
+          PGPASSWORD: integration-test-admin-password
+        run: |
+          cluster_id=$(psql --host=127.0.0.1 --username=portal_admin --dbname=portal_test --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="SELECT system_identifier FROM pg_control_system()")
+          test "$cluster_id" -eq "$cluster_id"
+          echo "MIGRATION_TEST_CLUSTER_ID=$cluster_id" >> "$GITHUB_ENV"
       - name: Test migrations against PostgreSQL
         env:
           NODE_ENV: test
           MIGRATION_TEST_DISPOSABLE: "true"
+          MIGRATION_TEST_SETUP: bootstrap
           MIGRATION_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
           PORTAL_API_DB_PASSWORD: integration-test-api-password
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
@@ -425,19 +82,14 @@ jobs:
           PORTAL_API_DB_PASSWORD: integration-test-api-password
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
         run: npm run test:migrations
-      - name: Test Owner News integration against PostgreSQL
+      - name: Test migration readiness without editorial relations
         env:
           NODE_ENV: test
           MIGRATION_TEST_DISPOSABLE: "true"
-          MIGRATION_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
+          MIGRATION_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test_readiness
           PORTAL_API_DB_PASSWORD: integration-test-api-password
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
-        run: node scripts/test-owner-news-integration.mjs
-      - name: Test CMS ownership helper against PostgreSQL 16
-        env:
-          CMS_OWNERSHIP_HELPER_TEST_DISPOSABLE: "true"
-          CMS_OWNERSHIP_HELPER_TEST_DATABASE_URL: postgresql://portal_admin:integration-test-admin-password@127.0.0.1:5432/portal_test
-        run: cd cms && node --import tsx tests/integration/ownership-helper-pg16.mjs
+        run: npm run test:migration-readiness
       - name: Test Academy integration against PostgreSQL
         env:
           NODE_ENV: test
@@ -447,32 +99,9 @@ jobs:
           PORTAL_CRON_DB_PASSWORD: integration-test-cron-password
         run: node scripts/test-academy.mjs
       - name: Build production images
-        env:
-          # The daemon-integrated builder uses the verified runner mirror config.
-          BUILDX_BUILDER: default
         run: |
-          set -euo pipefail
-          docker buildx inspect default | grep --extended-regexp '^Driver:[[:space:]]+docker$'
           docker build --tag ownerinc-portal-api:${GITHUB_SHA} api
           docker build --tag ownerinc-portal-cron:${GITHUB_SHA} --file cron/Dockerfile .
-          docker build --tag ownerinc-portal-cms:${GITHUB_SHA} --file cms/Dockerfile .
-      - name: Test editorial admin session v2 against disposable PostgreSQL and Firebase Auth
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true
-        timeout-minutes: 15
-        env:
-          NODE_ENV: test
-          MIGRATION_TEST_DISPOSABLE: "true"
-          PORTAL_TEST_API_IMAGE: ownerinc-portal-api:${{ github.sha }}
-          PORTAL_TEST_FIREBASE_PROJECT_ID: demo-ownerinc-${{ github.run_id }}-${{ github.run_attempt }}
-        run: node scripts/test-editorial-admin-session-integration.mjs
-      - name: Upload redacted API-v2 failure report
-        if: ${{ always() && inputs.publish_candidate_only == true && failure() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: editorial-admin-session-failure-report
-          path: ${{ runner.temp }}/editorial-admin-session-report.json
-          if-no-files-found: ignore
-          retention-days: 7
       - name: Scan API image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -487,14 +116,6 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
-      - name: Scan CMS image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          version: v0.75.0
-          image-ref: ownerinc-portal-cms:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
       - name: Reject high or critical production dependency vulnerabilities
         run: npm run security
       - name: Generate SPDX SBOMs
@@ -503,301 +124,37 @@ jobs:
         with:
           name: sbom-spdx
           path: '*.spdx.json'
-      - name: Save validated images for the isolated publisher
-        if: >-
-          (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-          github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
-        run: |
-          set -euo pipefail
-          images=(ownerinc-portal-cms:${GITHUB_SHA})
-          if [[ "${{ inputs.cms_image_only }}" != true ]]; then
-            images+=(ownerinc-portal-api:${GITHUB_SHA} ownerinc-portal-cron:${GITHUB_SHA})
-          fi
-          docker save --output validated-production-images.tar "${images[@]}"
-      - name: Transfer validated images to the isolated publisher
-        if: >-
-          (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-          github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true) ||
-          (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: validated-production-images-${{ github.run_id }}-${{ github.run_attempt }}
-          path: validated-production-images.tar
-          if-no-files-found: error
-          retention-days: 1
-
-  publish-images:
-    name: Publish immutable images
-    needs: validate
-    if: >-
-      !cancelled() && needs.validate.result == 'success' &&
-      (((github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      github.ref == 'refs/heads/main' && inputs.cms_image_only != true && inputs.publish_candidate_only != true) ||
-      (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.cms_image_only == true && inputs.publish_candidate_only != true) ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_candidate_only == true && inputs.cms_image_only != true))
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      api_image: ${{ steps.publish.outputs.api_image }}
-      cron_image: ${{ steps.publish.outputs.cron_image }}
-      cms_image: ${{ steps.publish.outputs.cms_image }}
-    steps:
-      - name: Download only the validated image bundle
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
-        with:
-          name: validated-production-images-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Load exact validated images
-        run: |
-          set -euo pipefail
-          test -f validated-production-images.tar
-          docker load --input validated-production-images.tar
-          docker image inspect ownerinc-portal-cms:${GITHUB_SHA} >/dev/null
-          if [[ "${{ inputs.cms_image_only }}" != true ]]; then
-            docker image inspect ownerinc-portal-api:${GITHUB_SHA} ownerinc-portal-cron:${GITHUB_SHA} >/dev/null
-          fi
-      - name: Authenticate isolated publisher to GHCR
+      - name: Authenticate to GHCR
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push validated immutable digests only
+      - name: Publish immutable images
         id: publish
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         env:
           REGISTRY: ghcr.io/ownerinc
         run: |
-          set -euo pipefail
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-          api_image= cron_image=
-          if [[ "${{ inputs.cms_image_only }}" != true ]]; then
-            for service in api cron; do
-              docker tag ownerinc-portal-${service}:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-${service}:${GITHUB_SHA}
-              docker push ${REGISTRY}/ownerinc-portal-${service}:${GITHUB_SHA}
-            done
-            api_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA})
-            cron_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA})
-            [[ "$api_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-api@sha256:[0-9a-f]{64}$ ]]
-            [[ "$cron_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cron@sha256:[0-9a-f]{64}$ ]]
-            printf '%s\n%s\n' "$api_image" "$cron_image" > image-digests.txt
-          fi
-          docker tag ownerinc-portal-cms:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
-          docker push ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA}
-          cms_image=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cms:${GITHUB_SHA})
-          [[ "$cms_image" =~ ^ghcr\.io/ownerinc/ownerinc-portal-cms@sha256:[0-9a-f]{64}$ ]]
-          printf '%s\n' "$cms_image" > cms-image-digest.txt
-          printf '%s\n' "$GITHUB_SHA" > cms-image-source.txt
-          echo "api_image=$api_image" >> "$GITHUB_OUTPUT"
-          echo "cron_image=$cron_image" >> "$GITHUB_OUTPUT"
-          echo "cms_image=$cms_image" >> "$GITHUB_OUTPUT"
-      - name: Upload normal release digest evidence
-        if: inputs.cms_image_only != true && inputs.publish_candidate_only != true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          docker tag ownerinc-portal-api:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
+          docker tag ownerinc-portal-cron:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
+          docker push ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
+          docker push ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
+          docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA} > image-digests.txt
+          docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA} >> image-digests.txt
+          echo "api_image=$(sed -n '1p' image-digests.txt)" >> "$GITHUB_OUTPUT"
+          echo "cron_image=$(sed -n '2p' image-digests.txt)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         with:
           name: image-digests
           path: image-digests.txt
-      - name: Upload CMS digest evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cms-image-digest
-          path: |
-            cms-image-digest.txt
-            cms-image-source.txt
-
-  qualify-payload-candidate:
-    name: Qualify Payload candidate
-    needs: [validate, publish-images]
-    if: >-
-      !cancelled() && needs.validate.result == 'success' && needs.publish-images.result == 'success' &&
-      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
-      inputs.publish_candidate_only == true && inputs.cms_image_only != true
-    runs-on: ubuntu-latest
-    timeout-minutes: 140
-    permissions:
-      contents: read
-      packages: read
-    outputs:
-      commit: ${{ steps.install_handoff.outputs.commit }}
-      run_id: ${{ steps.install_handoff.outputs.run_id }}
-      run_attempt: ${{ steps.install_handoff.outputs.run_attempt }}
-      api_image: ${{ steps.install_handoff.outputs.api_image }}
-      cron_image: ${{ steps.install_handoff.outputs.cron_image }}
-      cms_image: ${{ steps.install_handoff.outputs.cms_image }}
-      candidate_artifact_id: ${{ steps.install_handoff.outputs.candidate_artifact_id }}
-      candidate_artifact_digest: ${{ steps.install_handoff.outputs.candidate_artifact_digest }}
-      candidate_sha256: ${{ steps.install_handoff.outputs.candidate_sha256 }}
-      qualified_artifact_id: ${{ steps.install_handoff.outputs.qualified_artifact_id }}
-      qualified_artifact_digest: ${{ steps.install_handoff.outputs.qualified_artifact_digest }}
-      qualified_sha256: ${{ steps.install_handoff.outputs.qualified_sha256 }}
-      report_artifact_id: ${{ steps.install_handoff.outputs.report_artifact_id }}
-      report_artifact_digest: ${{ steps.install_handoff.outputs.report_artifact_digest }}
-      report_sha256: ${{ steps.install_handoff.outputs.report_sha256 }}
-      approval_sha256: ${{ steps.install_handoff.outputs.approval_sha256 }}
-      inventory_identity: ${{ steps.install_handoff.outputs.inventory_identity }}
-      expires_at: ${{ steps.install_handoff.outputs.expires_at }}
-      nonce: ${{ steps.install_handoff.outputs.nonce }}
-      install_dispatch_artifact_id: ${{ steps.upload_install_handoff.outputs.artifact-id }}
-      install_dispatch_artifact_digest: ${{ steps.upload_install_handoff.outputs.artifact-digest }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            api/package-lock.json
-            cron/package-lock.json
-            cms/package-lock.json
-      - run: npm run bootstrap
-      - name: Capture complete immutable release candidate manifest
-        env:
-          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
-          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
-          CMS_IMAGE: ${{ needs.publish-images.outputs.cms_image }}
-          PRODUCTION_APPROVAL_SHA256: ${{ inputs.production_approval_sha256 }}
-          PRODUCTION_INVENTORY_IDENTITY: ${{ inputs.production_inventory_identity }}
-          REQUEST_EXPIRES_AT: ${{ inputs.request_expires_at }}
-          REQUEST_NONCE: ${{ inputs.request_nonce }}
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ && "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
-          for value in "$API_IMAGE" "$CRON_IMAGE" "$CMS_IMAGE"; do
-            [[ "$value" =~ ^ghcr\.io/ownerinc/ownerinc-portal-(api|cron|cms)@sha256:[0-9a-f]{64}$ ]]
-          done
-          node <<'NODE'
-          const fs = require('node:fs');
-          const candidate = {
-            schemaVersion: 2, commit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID,
-            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-            images: { api: process.env.API_IMAGE, cron: process.env.CRON_IMAGE, cms: process.env.CMS_IMAGE },
-            authorization: { environment: 'production', approvalSha256: process.env.PRODUCTION_APPROVAL_SHA256,
-              inventoryIdentity: process.env.PRODUCTION_INVENTORY_IDENTITY, expiresAt: process.env.REQUEST_EXPIRES_AT,
-              nonce: process.env.REQUEST_NONCE },
-          };
-          fs.writeFileSync('candidate.json', `${JSON.stringify(candidate, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-          NODE
-      - name: Upload unqualified candidate image manifest
-        id: upload_candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: payload-release-candidate
-          path: candidate.json
-          if-no-files-found: error
-          retention-days: 30
-      - name: Authenticate qualification pulls from GHCR
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull exact published candidate image digests for root-owned fixture
-        env:
-          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
-          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
-          CMS_IMAGE: ${{ needs.publish-images.outputs.cms_image }}
-        run: |
-          set -euo pipefail
-          docker pull "$API_IMAGE"
-          docker pull "$CRON_IMAGE"
-          docker pull "$CMS_IMAGE"
-          docker pull postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
-          docker pull nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
-          test "$(sudo env -i PATH="$PATH" HOME=/root docker context inspect --format '{{json .Endpoints.docker.Host}}')" = '"unix:///var/run/docker.sock"'
-          sudo env -i PATH="$PATH" HOME=/root docker image inspect --format '{{.Id}}' \
-            "$API_IMAGE" "$CRON_IMAGE" "$CMS_IMAGE" \
-            postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 \
-            nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
-      - name: Run disposable four-store preauthority recovery on published digests
-        timeout-minutes: 120
-        env:
-          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
-          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
-          CMS_IMAGE: ${{ needs.publish-images.outputs.cms_image }}
-          RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
-          RECOVERY_PROGRESS: ${{ runner.temp }}/payload-preauthority-recovery-progress.json
-        run: |
-          set -euo pipefail
-          sudo env -i \
-            PATH="$PATH" HOME=/root \
-            API_IMAGE="$API_IMAGE" CRON_IMAGE="$CRON_IMAGE" CMS_IMAGE="$CMS_IMAGE" \
-            GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            RUNNER_TEMP="$RUNNER_TEMP" PAYLOAD_RECOVERY_REPORT="$RECOVERY_REPORT" \
-            PAYLOAD_RECOVERY_PROGRESS="$RECOVERY_PROGRESS" node scripts/test-payload-preauthority-recovery.mjs
-      - name: Upload redacted preauthority recovery report
-        id: upload_recovery_report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: payload-preauthority-recovery-report
-          path: ${{ runner.temp }}/payload-preauthority-recovery-report.json
-          if-no-files-found: ignore
-          retention-days: 30
-      - name: Upload nonqualifying recovery diagnostic progress
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: payload-preauthority-recovery-progress
-          path: ${{ runner.temp }}/payload-preauthority-recovery-progress.json
-          if-no-files-found: ignore
-          retention-days: 30
-      - name: Create recovery-qualified candidate manifest
-        env:
-          RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
-          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
-          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
-          CMS_IMAGE: ${{ needs.publish-images.outputs.cms_image }}
-          PRODUCTION_APPROVAL_SHA256: ${{ inputs.production_approval_sha256 }}
-          PRODUCTION_INVENTORY_IDENTITY: ${{ inputs.production_inventory_identity }}
-          REQUEST_EXPIRES_AT: ${{ inputs.request_expires_at }}
-          REQUEST_NONCE: ${{ inputs.request_nonce }}
-        run: node scripts/qualify-payload-candidate.mjs --candidate candidate.json --report "$RECOVERY_REPORT" --output qualified-candidate.json
-      - name: Upload recovery-qualified candidate manifest
-        id: upload_qualified
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: payload-recovery-qualified-candidate
-          path: qualified-candidate.json
-          if-no-files-found: error
-          retention-days: 30
-      - name: Create exact qualified private-install handoff
-        id: install_handoff
-        env:
-          RECOVERY_REPORT: ${{ runner.temp }}/payload-preauthority-recovery-report.json
-          INSTALL_DISPATCH_OUTPUT: install-dispatch.json
-          CANDIDATE_ARTIFACT_ID: ${{ steps.upload_candidate.outputs.artifact-id }}
-          CANDIDATE_ARTIFACT_DIGEST: ${{ steps.upload_candidate.outputs.artifact-digest }}
-          QUALIFIED_ARTIFACT_ID: ${{ steps.upload_qualified.outputs.artifact-id }}
-          QUALIFIED_ARTIFACT_DIGEST: ${{ steps.upload_qualified.outputs.artifact-digest }}
-          REPORT_ARTIFACT_ID: ${{ steps.upload_recovery_report.outputs.artifact-id }}
-          REPORT_ARTIFACT_DIGEST: ${{ steps.upload_recovery_report.outputs.artifact-digest }}
-        run: node scripts/create-payload-install-dispatch.mjs
-      - name: Upload exact qualified private-install handoff
-        id: upload_install_handoff
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: payload-private-install-dispatch
-          path: install-dispatch.json
-          if-no-files-found: error
-          retention-days: 30
 
   deploy-production:
     name: Deploy production
-    needs: [validate, publish-images]
-    if: >-
-      !cancelled() &&
-      needs.validate.result == 'success' && needs.publish-images.result == 'success' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      github.ref == 'refs/heads/main' &&
-      inputs.cms_image_only != true &&
-      inputs.publish_candidate_only != true
+    needs: validate
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -810,8 +167,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Package the exact validated commit
         env:
-          API_IMAGE: ${{ needs.publish-images.outputs.api_image }}
-          CRON_IMAGE: ${{ needs.publish-images.outputs.cron_image }}
+          API_IMAGE: ${{ needs.validate.outputs.api_image }}
+          CRON_IMAGE: ${{ needs.validate.outputs.cron_image }}
         run: |
           printf '%s\n%s\n' "$API_IMAGE" "$CRON_IMAGE" > .ci-images
           git archive --format=tar --add-virtual-file=".ci-commit:${GITHUB_SHA}" --output=portal-release.tar "${GITHUB_SHA}"

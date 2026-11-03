@@ -16,7 +16,7 @@ const userDoc = (uid = 'a', overrides = {}) => ({
 const visualSnapshot = (uid = 'a', overrides = {}) => ({
   version: 2, uid, firebaseStorageKey: firebaseKey, savedAt: Date.now() - 86400000,
   user: { uid }, role: 'admin', permissions: { manageUsers: true, manageKnowledge: true },
-  autocardAccess: true, posCardsAccess: true, cmsAccess: true, ...overrides,
+  autocardAccess: true, posCardsAccess: true, ...overrides,
 });
 const response = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'Content-Type': 'application/json' },
@@ -68,7 +68,6 @@ function harness({ uid = 'a', persistedUid = uid, snapshot = visualSnapshot(uid)
     onAuthStateChanged: (_auth, callback) => { listeners.push(callback); return () => {}; },
     signOut: async () => { signouts += 1; changeUser(null); await signOutImpl?.(); },
     updateProfile: async () => {},
-    revokeEditorialSession: async () => {}, // Transport covered by editorial-entry tests.
     fetch: async (...args) => {
       requests.push(args);
       return fetchImpl ? fetchImpl(...args) : response(userDoc(auth.currentUser.uid));
@@ -140,7 +139,6 @@ test('concurrent validations share one request, subsequent validation refreshes 
   assert.equal(h.document.documentElement.dataset.portalRole, 'viewer');
   assert.equal(h.document.documentElement.dataset.autocardAccess, 'false');
   assert.equal(h.document.documentElement.dataset.posCardsAccess, 'false');
-  assert.equal(h.document.documentElement.dataset.cmsAccess, 'false');
   assert.match(h.redirects.at(-1), /dashboard\.html/);
 });
 
@@ -261,11 +259,10 @@ test('Firebase UID mismatch is removed at module load, before readiness or any p
   assert.equal(h.api.getCachedUserSnapshot().uid, 'b');
 });
 
-test('remote logout clears visible content immediately and redirects after editorial revocation', async () => {
+test('remote logout without requests clears visible private content and redirects immediately', async () => {
   const h = harness();
   await h.api.requireAuth();
   h.changeUser(null);
-  await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.main.children.length, 0);
   assert.equal(h.sessionStorage.getItem(snapshotKey), null);
   assert.equal(h.api.getCachedUserSnapshot(), null);
@@ -392,17 +389,10 @@ test('non-rendering validation preserves the current view on outages and fetch h
   await assert.rejects(h.api.getCurrentUserDoc(), /offline/);
   assert.deepEqual(h.main.children, ['existing content']);
 
-  const headers = new Headers({
-    'X-Total-Count': '42',
-    'X-Owner-News-Next-Cursor': 'opaque-cursor',
-    'X-Owner-News-Read-State': 'degraded',
-  });
+  const headers = new Headers({ 'X-Total-Count': '42' });
   const paged = harness({ fetchImpl: () => new Response('[{"id":1}]', { headers }) });
   const page = await paged.api.fetchAPIPage('/api/users?limit=1');
   assert.equal(page.total, 42);
-  assert.equal(page.nextCursor, 'opaque-cursor');
-  assert.equal(page.readState, 'degraded');
-  assert.equal('headers' in page, false);
   assert.equal(page.data[0].id, 1);
   assert.equal(paged.requests[0][1].headers.Authorization, 'Bearer token-a');
   const noContent = harness({ fetchImpl: () => new Response(null, { status: 204 }) });
@@ -411,13 +401,4 @@ test('non-rendering validation preserves the current view on outages and fetch h
   const url = await asset.api.fetchAPIAsset('/api/assets/one');
   assert.match(url, /^blob:/);
   URL.revokeObjectURL(url);
-
-  const invalidMetadata = harness({ fetchImpl: () => new Response('[]', { headers: {
-    'X-Owner-News-Read-State': 'unknown',
-  } }) });
-  const invalidPage = await invalidMetadata.api.fetchAPIPage('/api/announcements');
-  assert.equal(invalidPage.data.length, 0);
-  assert.equal(invalidPage.total, null);
-  assert.equal(invalidPage.nextCursor, null);
-  assert.equal(invalidPage.readState, null);
 });

@@ -1,6 +1,6 @@
 # Inventário da Implementação Funcional
 
-Atualizado em 1º de outubro de 2026.
+Atualizado em 3 de novembro de 2026 (OWN-45).
 
 Este documento relaciona as capacidades descritas no `README.md` e no brief do
 produto com o que está efetivamente implementado no código. Roadmap, intenção e
@@ -12,22 +12,6 @@ serviços externos. Resultados reais das correções de setembro e aceites por l
 ficam no [registro da sessão principal](../reviews/2026-09-29-portal-corrections-acceptance.md).
 Checks automatizados e homologação com fixtures locais não comprovam produção,
 entrega externa de e-mail, conteúdo oficial ou uso em dispositivo físico.
-
-### Piloto Payload — atualização de verificação em 6 de outubro de 2026
-
-O wiring local de CI/checks passa a incluir bootstrap, testes unitários, typecheck,
-audit de produção e SBOM do CMS. A execução consolidada desse wiring ainda aguarda
-integração; não é evidência de CI hospedada verde nem de prontidão de produção.
-O guard portátil de integração está implementado, mas a suíte ponta-a-ponta ainda
-não: o runner padrão retorna código 2, sem declarar aceite. A matriz distingue
-essas lacunas de cenários implementados porém não executados.
-
-O Editor CMS central continua atendendo as seis áreas por capacidade. O piloto
-Payload é Owner News primeiro; prévia clássica embutida e prévia Payload de revisão
-salva em outra aba são jornadas distintas. Campos amigáveis, destinos de retorno e
-navegação pendente dependem do aceite correspondente. O bloqueio de histórico
-Task9 (8 casos RED registrados) permanece aberto até correção e prova revisadas.
-Consulte a [matriz Payload](../reviews/2026-10-02-payload-owner-news-acceptance.md).
 
 ## Legenda
 
@@ -56,52 +40,30 @@ Consulte a [matriz Payload](../reviews/2026-10-02-payload-owner-news-acceptance.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Destaque Owner News | Operacional | Consulta `kind=article`, prioriza capa explícita e resumo editorial, e abre leitura sobreposta por URL direta. Preserva estados de carregamento, vazio, erro/retry e conteúdo. Sem matéria, mostra estado compacto e “Acessar áreas”; “Ler publicação” só existe com notícia. `public/js/dashboard.js`, `public/dashboard.html` |
+| Destaque Owner News | Removido em OWN-40 | O Dashboard não consulta mais conteúdo editorial nem abre leitor sobreposto; preserva lembretes, Academy, links rápidos e seus estados de loading, vazio, erro/retry e descarte. `public/js/dashboard.js`, `public/dashboard.html` |
 | Conteúdo por contrato PJ/CLT | Não implementada no Dashboard | Os atalhos atuais não variam por contrato. Não há fluxo de nota fiscal PJ no Dashboard; Sólides permanece desligada na V1. `public/js/dashboard.js` |
 | Próximos lembretes | Operacional | Endpoint autenticado calcula no servidor as ocorrências dos próximos sete dias com regra de fim do mês e audiência individual; o dashboard não depende de uma primeira página arbitrária. `public/js/dashboard.js`, `api/routes/reminders.js` |
 | Links rápidos | Operacional | Atalhos para Base de Conhecimento, Lembretes e Academy, iguais para os contratos PJ/CLT; Sólides permanece fora desses atalhos. `public/js/dashboard.js` |
 | Destaques da Academy | Operacional | Exibe até três cursos com estados de carregamento, vazio, erro e nova tentativa. `public/js/dashboard.js` |
 
-## Owner News
+## Owner News (removido do runtime)
 
-Atualização desta área: 30 de setembro de 2026.
+Atualização desta área: 3 de novembro de 2026 (OWN-40).
 
-| Funcionalidade | Estado | Implementação e evidência |
-| --- | --- | --- |
-| Publicação editorial contínua | Operacional | Substitui Anúncios na navegação e no CMS, mantendo `announcements.html` e `/api/announcements`. Destaque automático da mais recente, capas privadas, resumo, estimativa de leitura e cards responsivos. `public/js/announcements.js`, `public/css/owner-news.css` |
-| Editorias e leitura | Operacional | Catálogo de artigos com 24 itens, categorias/contagens server-side e abertura publicada. Leitor sobreposto com URL direta, anterior/próxima na mesma entrada, Voltar/Escape e Back/Forward. Conserva DOM, foco do card e rolagem do catálogo. `public/js/owner-news/navigation.js`, `public/js/announcements.js` |
-| Composição e mídia | Operacional | Prévia e reader compartilham resumo, autoria, origem/data civil, capa, blocos tipográficos e PDF complementar. Datas de publicação em São Paulo. Retry separado de detalhe, vizinhos, imagem e PDF; mídia privada cancelada/revogada na troca/saída. Títulos longos permitem crescimento do hero. `public/js/owner-news/reader-view.js`, `public/js/cms-block-renderer.js` |
-| Publicação administrativa | Operacional | Reutiliza `announcement`, permissão `manageKnowledge`, revisões e agendamento do Editor CMS; metadados da mesma revisão e Página inicial com publicação explícita. Legado continua acessível por ID, inclusive PDF sem minutos inventados. `public/js/cms.js` |
-| Enquete persistente | Operacional local | Bloco independente após a terceira matéria em Todas/página inicial, sem alterar contagens ou offsets. Uma escolha por usuário autenticado; repetir a mesma opção é idempotente e outra opção recebe 409. Resultados vêm do banco; falha ambígua reconcilia por GET e conserva somente reenvio da mesma escolha. Rascunho com 2–6 opções, publicação explícita congela pergunta/opções, encerramento não reabre e nova publicação substitui a seleção atual. `public/js/owner-news/poll.js`, `api/owner-news/polls.js` |
-| Migração da referência | Operacional local | Importadas 19 matérias publicadas e 24 mídias privadas no ambiente local autorizado; 24/24 assets retornaram HTTP 200 autenticado. Importador com dry-run, identidade determinística e reconciliação sem sobrescrita. Não aplicado em produção. `scripts/import-owner-news.mjs`, `docs/operations/owner-news-import.md` |
+Owner News foi removido integralmente do Portal executável. A página
+`/announcements.html`, as rotas `/api/announcements`, o content type `announcement`,
+os leitores/editoriais, enquetes, consumidores do Dashboard, navegação e
+importadores não fazem mais parte do runtime. As URLs antigas retornam 404
+controlado, sem fallback SPA. Migrations, tabelas, votos, documentos, uploads,
+verificações e relatórios históricos foram preservados deliberadamente; eles não
+constituem uma capacidade disponível no produto atual.
 
-Validação E7: histórico assíncrono com router/ui reais; browser autenticado na
-stack isolada com CSP normal, publicações e assets sintéticos removidos ao final.
-Confirmados retry de mídia sem perder texto, retorno ao mesmo card/posição,
-Dashboard → reader e layout sem overflow horizontal até 320×320. A amostra não
-constitui auditoria completa por tecnologia assistiva. O erro HTTP preexistente
-identificado no browser é `/favicon.ico` (404).
-
-Validação P4: harness monta o componente e coordenador reais, com transporte
-injetado, cobrindo clique duplo, 409, commit tardio, retry, foco, paginação e
-descarte. Integração PostgreSQL local confirma concorrência da mesma escolha,
-escolhas distintas e usuários distintos, lock compartilhado entre voto/encerramento
-e agregados após exclusão de usuário. Browser local autenticado, CSP normal:
-voto real com resposta perdida e reconciliação, reload, idempotência, conflito e
-encerramento; artigos sintéticos via transporte para inspeção do mosaico. Seis
-opções/pergunta longa verificadas em 1440, 390, 359 e 320 px, sem overflow;
-duas colunas em 390 px e uma abaixo de 360 px. Fixtures de enquete removidas.
-Não constitui auditoria completa por tecnologia assistiva.
-
-Validação integrada A3: 30 artigos sintéticos importados como draft e publicados
-na stack isolada; PNG lida através do volume real da API com HTTP/MIME/bytes/hash
-conferidos como editor e dois colaboradores, com negação antes de publicar.
-CMS autosave/prévia/publicação/agendamento, enquetes multi-sessão, histórico/foco,
-PDF sintético inline e layouts 1440×900, 1024×768 e 390×844 passaram. Fixtures
-removidas. As cinco candidatas reais continuam `needs_review`, o PDF real está
-adiado e a publicação no destino final permanece pendente. O aceite A3 não
-revalida a importação histórica de 19 matérias citada acima. Evidência e limites:
-[relatório A3](../reports/2026-09-30-owner-news-acceptance.md).
+As áreas mantidas (Knowledge, Academy, Benefits e Reminders) continuam disponíveis
+com contratos próprios; CMS genérico, renderer de blocos, Payload CMS e Owner News
+não são capacidades do runtime. Os detalhes de implementação e os aceites
+anteriores da publicação editorial permanecem somente como documentação histórica
+em [arquitetura](../architecture/overview.md), [API](../architecture/owner-news-api.md)
+e [relatório A3](../reports/2026-09-30-owner-news-acceptance.md).
 
 ## AutoCard
 
@@ -147,15 +109,15 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Listar e ler artigos | Operacional | Possui loading, vazio, erro, retry, paginação com contagem correta e leitura por ID; quando há documento CMS, somente a revisão publicada validada compõe o corpo. Uma fonte sem documento mantém o texto legado. `public/js/knowledge.js`, `api/cms/reader.js`, `api/routes/knowledge.js` |
-| Busca por título e conteúdo | Operacional | Busca no título e no corpo efetivamente publicado, filtrando candidatos após a projeção validada centralizada em `blocksToText`; bloco CMS inválido não vira texto bruto nem reativa o legacy. Persiste `q`, categoria e offset na URL. `public/js/knowledge.js`, `api/cms/reader.js`, `api/routes/knowledge.js` |
+| Listar e ler artigos | Operacional | Possui loading, vazio, erro, retry, paginação com contagem correta e leitura por ID usando o texto simples próprio de Knowledge. `public/js/knowledge.js`, `api/routes/knowledge.js` |
+| Busca por título e conteúdo | Operacional | Busca no título e no corpo próprio, com categoria e offset persistidos na URL; não consulta documentos, revisões ou assets CMS. `public/js/knowledge.js`, `api/routes/knowledge.js` |
 | Filtro por categoria | Operacional | Lista categorias no servidor e aplica o filtro na consulta paginada. `public/js/knowledge.js`, `api/routes/knowledge.js` |
 | Link direto para artigo | Operacional | `article` na URL e histórico Back/Forward selecionam o detalhe. `public/js/knowledge.js` |
-| CRUD de artigos | Operacional | Criar, editar e excluir com validação, transação, auditoria e `manageKnowledge`. A edição legada atualiza metadados, fonte e PDF sem substituir parágrafos/blocos CMS; leitura usa renderização segura da revisão publicada. `api/routes/knowledge.js`, `api/cms/sources.js`, `public/js/knowledge.js`, `public/js/cms-block-renderer.js` |
-| Edição simples e Editor CMS | Operacional | O editor simples mantém título, categoria e anexo PDF. Sem gerenciamento CMS, o texto simples continua editável; com `cms_managed=true`, o campo corpo fica desabilitado e é omitido do payload para preservar os blocos. A ajuda oferece `./cms.html` somente a administrador com permissão editorial da área, orientando selecionar Base de Conhecimento e o documento existente, sem deep link não implementado. Corpo/blocos, revisões, publicação e agendamento ficam no CMS; o link mantém os guards de alterações, gravação, upload e limpeza de PDF. `public/knowledge.html`, `public/js/knowledge.js` |
-| Anexo PDF no artigo | Parcial | Gestores podem enviar, substituir e remover o anexo; o asset fica privado, auditado e é exibido em leitor embutido com abertura em nova aba. Interface e upload aceitam até 100 MiB, mas a associação pelo editor simples ainda valida até 50 MiB em `syncKnowledgePdf`: não há garantia ponta a ponta de 100 MiB. Alterações legadas preservam o corpo CMS e só alteram o único PDF sem ambiguidade; múltiplos PDFs exigem o Editor CMS. A retenção só remove arquivo sem referências. `public/js/knowledge.js`, `api/routes/cms-assets.js`, `api/cms/knowledge.js`, `cron/cms-asset-retention.js` |
-| Draft, revisão e rich text | Operacional | Editor CMS mantém revisões imutáveis, publica/agendada somente o draft atual sob lock, retorna `409` para seleção obsoleta, cancela agendamento sem descartar draft posterior e despublica também o scheduled pendente. Scheduled vencido com bloco/asset inválido é arquivado e auditado sem substituir a publicação. A lista administrativa possui paginação por total. `api/routes/cms.js`, `api/cms/revisions.js`, `api/cms/reader.js`, `public/js/cms.js` |
-| Linguagem e salvamento do CMS | Operacional | Histórico exibe Rascunho/Publicado/Agendado/Arquivado, a área `knowledge` aparece como Base de Conhecimento e o painel como Configuração e publicação. Tradução apenas de apresentação: enums, payloads, URLs, classes e ações permanecem técnicos; código desconhecido aparece como texto seguro. Salvar rascunho e autosave não publicam: Publicar/Agendar continuam ações explícitas. `public/cms.html`, `public/js/cms.js` |
+| CRUD de artigos | Operacional | Criar, editar e excluir texto simples com validação, transação, auditoria e `manageKnowledge`; campos PDF/editoriais antigos são rejeitados antes de SQL. `api/routes/knowledge.js`, `public/js/knowledge.js` |
+| Edição simples e conteúdo estruturado | Operacional | O editor próprio mantém título, categoria e corpo de texto; não há entrada visual de CMS, blocos, renderer ou transporte editorial. `public/knowledge.html`, `public/js/knowledge.js` |
+| Anexo PDF no artigo | Removido no runtime | A superfície e a associação de PDF foram retiradas; referências de asset e bytes históricos permanecem preservadas e inacessíveis pelo runtime atual. `api/routes/knowledge.js`, `tests/unit/own41-domain-contract.test.mjs` |
+| Draft, revisão e rich text | Histórico preservado | Revisões, blocos e rich text pertencem aos contratos CMS históricos; não há rota, job, grant ou interface ativa que os consuma. `api/db/migrations/015_cms_editor.sql`, `docs/architecture/owner-news-api.md` |
+| Linguagem e salvamento do CMS | Histórico preservado | Estados editoriais e ações de publicação permanecem documentados para rastreabilidade, mas a interface e o runtime foram removidos. `docs/architecture/overview.md` |
 
 ## Academy
 
@@ -163,7 +125,7 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 | --- | --- | --- |
 | Catálogo por formação e categoria | Operacional local | Usuários comuns recebem somente cursos ativos e elegíveis, com grupos inicial/cargo independentes, categorias server-side, paginação e filtros restauráveis pela URL; total e categorias são calculados após autorização. `api/academy/catalog.js`, `api/academy/access.js`, `public/academy/` |
 | Currículo e mídia | Operacional local | Cursos têm módulos e aulas publicados explicitamente; aulas aceitam YouTube normalizado ou MP4/WebM HTTPS, com versão de mídia. O player tem retry, sem autoplay e limpeza de lifecycle. Reprodução de provedor real permanece pendente. `api/academy/`, `public/academy/player.js` |
-| Materiais e capa CMS | Operacional local | `academy_lesson` integra descrição/materiais; a primeira imagem publicada da apresentação define a capa, com fallback ao vetor original. Documento sem publicação válida não reativa texto legado. `api/cms/`, `public/js/cms.js` |
+| Conteúdo e mídia próprios | Operacional local | `academy_lesson` usa descrição e mídia próprias da Academy; a interface usa `icon_key` e o vetor original da marca como fallback visual, sem capa por aula. A gestão não consulta CMS nem reativa documentos editoriais. `api/academy/`, `public/academy/` |
 | CRUD, ordenação e ativação | Operacional local | Gestão exige `manageAcademy`, usa cargos reais, lock transacional, auditoria, reordenação por ID e validação de publicação/eligibilidade. PostgreSQL real e corridas full-stack permanecem pendentes. `api/academy/mutations.js`, `public/academy/manage-view.js` |
 | Progresso e retomada individual | Operacional local | Posição é salva por UID/aula/versão, com CAS, conflitos 409, conclusão somente manual, continuidade independente do primeiro catálogo e reset quando a mídia muda. A persistência real entre sessões/contas aguarda banco/auth. `api/academy/progress.js`, `public/academy/progress-controller.js` |
 | Matrícula, certificado e relatórios gerenciais | Fora do escopo | Não há matrícula formal, certificado, quiz, gamificação ou relatório de aprendizagem para gestores. A jornada é de acesso elegível e progresso individual. |
@@ -180,10 +142,10 @@ o mesmo arquivo; PNG, JPEG e WebP devem ter ao menos 500 × 500 px e até 3 MB.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Listagem segmentada | Operacional | Filtra ativos e audiência `all`, `pj`, `clt` ou UID no servidor; página possui paginação e não entrega descrição legada quando o documento CMS não tem publicação válida. `api/routes/reminders.js`, `api/cms/reader.js`, `public/js/reminders.js` |
+| Listagem segmentada | Operacional | Filtra ativos e audiência `all`, `pj`, `clt` ou UID no servidor; a página usa descrição e instruções próprias, sem leitura editorial. `api/routes/reminders.js`, `public/js/reminders.js` |
 | CRUD de lembretes | Operacional | Validação, auditoria, ativação e canal de email para `manageReminders`; canais ainda não disponíveis na UI não são aceitos em novas alterações. `api/routes/reminders.js`, `public/js/reminders.js` |
 | Público individual | Operacional | Formulário permite informar UIDs explícitos, preserva a audiência na edição e rejeita valores vazios, duplicados, malformados ou acima do limite. `api/route-utils.js`, `cron/scheduling.js`, `public/js/reminders.js` |
-| Agendamento mensal | Operacional | Worker roda no fuso de São Paulo; dias 29 a 31 usam o último dia de meses curtos, o catch-up é limitado a sete dias, não alcança data anterior à criação e lembretes CMS sem publicação válida não usam fallback legado. `cron/index.js`, `cron/scheduling.js`, `cron/checkReminders.js` |
+| Agendamento mensal | Operacional | Worker roda no fuso de São Paulo; dias 29 a 31 usam o último dia de meses curtos, o catch-up é limitado a sete dias e não alcança data anterior à criação. O envio usa somente o lembrete próprio. `cron/index.js`, `cron/scheduling.js`, `cron/checkReminders.js` |
 | Envio por email | Operacional | Resend SMTP com registro prévio, isolamento por destinatário, classificação de códigos/resultados, até três tentativas contabilizadas no ledger para falhas transitórias conhecidas e resultado ambíguo tratado conservadoramente. Depende de credenciais externas válidas. `cron/checkReminders.js`, `cron/mailTransport.js`, `cron/sendEmail.js` |
 | Ledger e idempotência | Operacional | Uma ocorrência por lembrete, usuário, data civil e canal, com estados `pending`, `sending`, `sent`, `failed` e `skipped`; tentativas, `sending` interrompido e `sending`/`pending` órfãos após remoção de lembrete/destinatário são recuperados com motivo e contadores preservados. `api/db/schema.sql`, `cron/checkReminders.js` |
 | Histórico de entregas | Operacional | Interface autenticada expõe lembrete, destinatário, motivo específico de skip/falha, tentativas, filtros e paginação server-side; links usam a âncora pública validada do conteúdo quando disponível. `api/routes/reminders.js`, `public/js/reminders.js` |

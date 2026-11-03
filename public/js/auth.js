@@ -1,5 +1,4 @@
 import { auth } from './firebase-config.js';
-import { revokeEditorialSession } from './editorial-session-watch.js';
 import { onAuthStateChanged, signOut, updateProfile }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
@@ -53,11 +52,6 @@ function applyPosCardsNavigation(user) {
   document.documentElement.dataset.posCardsAccess = String(user?.pos_cards_access === true);
 }
 
-function applyCmsNavigation(user) {
-  const cmsPermissions = ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders'];
-  document.documentElement.dataset.cmsAccess = String(cmsPermissions.some(permission => can(user, permission)));
-}
-
 function cacheAuthSnapshot(user) {
   // Visual hints only: no profile fields or token, and no authorization lifetime.
   visualSnapshot = {
@@ -70,8 +64,6 @@ function cacheAuthSnapshot(user) {
     user: { uid: user.uid },
     autocardAccess: user?.autocard_access === true,
     posCardsAccess: user?.pos_cards_access === true,
-    cmsAccess: ['manageKnowledge', 'manageAcademy', 'manageBenefits', 'manageReminders']
-      .some(permission => can(user, permission)),
   };
   try {
     sessionStorage.setItem(AUTH_SNAPSHOT_KEY, JSON.stringify(visualSnapshot));
@@ -106,7 +98,6 @@ function applyNavigation(user) {
   applyVerifiedRole(user);
   applyAutoCardNavigation(user);
   applyPosCardsNavigation(user);
-  applyCmsNavigation(user);
   document.documentElement.dataset.authSnapshot = 'true';
 }
 
@@ -118,7 +109,6 @@ function clearVerifiedRole() {
   delete document.documentElement.dataset.portalRole;
   delete document.documentElement.dataset.authSnapshot;
   delete document.documentElement.dataset.autocardAccess;
-  delete document.documentElement.dataset.cmsAccess;
   delete document.documentElement.dataset.posCardsAccess;
   setAuthState('error');
   try {
@@ -145,7 +135,7 @@ function syncSession() {
   if (previousUid && !wasDenied) {
     // Firebase also reports logout/account changes made in another tab.
     document.querySelector('main')?.replaceChildren();
-    void finishSessionExit(previousUid, () => redirectToLogin('session'), false);
+    redirectToLogin('session');
   }
 }
 
@@ -191,24 +181,9 @@ async function endSession(reason) {
   const uid = sessionUid;
   clearVerifiedRole();
   document.querySelector('main')?.replaceChildren();
-  await finishSessionExit(uid, () => redirectToLogin(reason));
-}
-
-async function finishSessionExit(uid, redirect, signOutPortal = true) {
-  try {
-    await revokeEditorialSession();
-    // No second signOut against an account that changed during DELETE/retry.
-    if (signOutPortal && auth.currentUser?.uid === uid) await signOut(auth);
-    if (!auth.currentUser || auth.currentUser.uid === uid || !signOutPortal) redirect();
-  } catch {
-    const main = document.querySelector('main') || document.body;
-    const status = document.createElement('section'); status.setAttribute('role', 'alert');
-    const text = document.createElement('p');
-    text.textContent = 'Não foi possível confirmar o encerramento da sessão. O conteúdo foi ocultado. Tente novamente.';
-    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Tentar encerrar novamente';
-    retry.addEventListener('click', () => { retry.disabled = true; void finishSessionExit(uid, redirect, signOutPortal); });
-    status.append(text, retry); main.replaceChildren(status);
-  }
+  await signOut(auth).catch(() => {});
+  // Do not redirect a different account that signed in while signOut settled.
+  if (!auth.currentUser || (auth.currentUser.uid === uid && sessionDenied)) redirectToLogin(reason);
 }
 
 async function handleAuthenticationFailure(path, response) {
@@ -276,15 +251,7 @@ async function requestAPI(path, options = {}, session) {
   const data = res.status === 204 ? null : await res.json();
   assertCurrentSession(session);
   const totalHeader = res.headers.get('X-Total-Count');
-  const totalValue = totalHeader === null ? null : Number(totalHeader);
-  const nextCursorHeader = res.headers.get('X-Owner-News-Next-Cursor');
-  const readStateHeader = res.headers.get('X-Owner-News-Read-State');
-  return {
-    data,
-    total: Number.isFinite(totalValue) && totalValue >= 0 ? totalValue : null,
-    nextCursor: typeof nextCursorHeader === 'string' && nextCursorHeader ? nextCursorHeader : null,
-    readState: ['complete', 'degraded'].includes(readStateHeader) ? readStateHeader : null,
-  };
+  return { data, total: totalHeader === null ? null : Number(totalHeader) };
 }
 
 export async function fetchAPIAsset(path, options = {}) {
@@ -399,7 +366,8 @@ export async function logout() {
   const uid = auth.currentUser?.uid;
   clearVerifiedRole();
   document.querySelector('main')?.replaceChildren();
-  await finishSessionExit(uid, () => { window.location.href = './login.html'; });
+  await signOut(auth);
+  if (!auth.currentUser || (auth.currentUser.uid === uid && sessionDenied)) window.location.href = './login.html';
 }
 
 // One subscription for the persistent module, including Firebase's cross-tab

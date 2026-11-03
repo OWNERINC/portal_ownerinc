@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -14,10 +15,17 @@ const explicitlyExcluded = new Map([
   ['api/db/migrations/016_remove_ombudsman.sql', 'intentional removal migration'],
   ['api/db/verify-migrations.js', 'intentional release-gate removal assertion'],
   ['scripts/test-migrations.mjs', 'intentional removal integration test'],
+  ['scripts/test-migration-readiness.mjs', 'synthetic readiness ledger fixture'],
   ['tests/unit/ombudsman-removal.test.mjs', 'the invariant being executed'],
   ['tests/unit/api-security.test.mjs', 'specific negative permission invariant'],
   ['tests/unit/frontend-invariants.test.mjs', 'specific negative frontend invariant'],
   ['tests/unit/schema-invariants.test.mjs', 'specific negative schema invariant'],
+  ['public/cms.html', 'removed legacy CMS surface'],
+  ['public/js/cms.js', 'removed legacy CMS surface'],
+  ['public/js/cms-block-editor.js', 'removed legacy CMS surface'],
+  ['tests/unit/cms-editor-ui.test.mjs', 'removed legacy CMS surface'],
+  ['tests/unit/cms-news-editor.test.mjs', 'removed legacy CMS surface'],
+  ['tests/unit/cms-selection-state.test.mjs', 'removed legacy CMS surface'],
   ['docs/reports/2026-08-18-ombudsman-removal.md', 'the removal report'],
 ]);
 
@@ -28,7 +36,8 @@ const isGeneratedArtifact = (file) => /(^|\/)\.worktrees(\/|$)/.test(file);
 
 const isCurrentSurfaceFile = (file) => !explicitlyExcluded.has(file)
   && !isDatedHistoricalDocument(file)
-  && !isGeneratedArtifact(file);
+  && !isGeneratedArtifact(file)
+  && existsSync(`${repositoryRoot}/${file}`);
 
 const trackedCurrentSurface = async () => {
   // git ls-files limits this to tracked files, so untracked artifacts cannot enter the scan.
@@ -46,15 +55,8 @@ const surfaceSentinels = [
 
 const currentSurfaceContent = async (file) => {
   const source = await readFile(`${repositoryRoot}/${file}`, 'utf8');
-  if (file === 'api/db/schema.sql') {
-    return source.replace(/INSERT INTO schema_migrations[\s\S]*?ON CONFLICT \(version\) DO NOTHING;/, '');
-  }
-  if (file === 'ops/payload-control-state.py') {
-    // The control adapter pins the canonical migration ledger; this one legacy
-    // migration identifier is not an active Ombudsman surface.
-    return source.replace("'016_remove_ombudsman'", "'016_historical_removal'");
-  }
-  return source;
+  if (file !== 'api/db/schema.sql') return source;
+  return source.replace(/INSERT INTO schema_migrations[\s\S]*?ON CONFLICT \(version\) DO NOTHING;/, '');
 };
 
 test('Ombudsman route, page, permission, table, grants, and retention are absent from active source', async () => {

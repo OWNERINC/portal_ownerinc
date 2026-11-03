@@ -6,7 +6,6 @@ const pages = [
   ['knowledge', 'Base de Conhecimento', 'book-open'],
   ['reminders', 'Lembretes', 'bell'],
   ['academy', 'Academy', 'graduation-cap'],
-  ['announcements', 'Owner News', 'megaphone'],
   ['profile', 'Meu Perfil', 'user'],
 ];
 
@@ -16,12 +15,8 @@ const generatedPages = [
   ['reminders.html', 'reminders', 'Lembretes'],
   ['academy.html', 'academy', 'Academy'],
   ['benefits.html', 'benefits', 'Benefícios'],
-  ['announcements.html', 'announcements', 'Owner News'],
-  ['news-preview.html', 'news-preview', 'Prévia editorial'],
-  ['editorial-entry.html', 'editorial-entry', 'Painel editorial'],
   ['profile.html', 'profile', 'Meu Perfil'],
   ['admin.html', 'admin', 'Painel Admin'],
-  ['cms.html', 'cms', 'Editor CMS'],
   ['autocard.html', 'autocard', 'AutoCard'],
   ['cards-pos.html', 'cards-pos', 'Cards Pós'],
   ['solides.html', 'solides', 'Sólides'],
@@ -35,7 +30,6 @@ const iconPaths = {
   'chevrons-left': '<path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/>',
   eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7C3.38 8.55 7.22 5 12 5s8.62 3.55 9.94 6.65a1 1 0 0 1 0 .7C20.62 15.45 16.78 19 12 19s-8.62-3.55-9.94-6.65Z"/><circle cx="12" cy="12" r="3"/>',
   'eye-off': '<path d="m3 3 18 18"/><path d="M10.58 10.58a2 2 0 0 0 2.83 2.83"/><path d="M9.88 4.24A9.7 9.7 0 0 1 12 4c4.78 0 8.62 3.55 9.94 6.65a1 1 0 0 1 0 .7 14.7 14.7 0 0 1-3.17 4.36M6.61 6.61A14.7 14.7 0 0 0 2.06 11.3a1 1 0 0 0 0 .7C3.38 15.45 7.22 19 12 19c1.04 0 2.05-.18 2.99-.5"/>',
-  'file-edit': '<path d="M4 13.5V20h6.5L19 11.5 12.5 5Z"/><path d="m15 6 3 3"/><path d="M14 4h6v6"/>',
   gift: '<rect width="18" height="5" x="3" y="8" rx="1"/><path d="M12 8v13M3 13h18M12 8H7.5a2.5 2.5 0 1 1 2.5-2.5V8Zm0 0h4.5a2.5 2.5 0 1 0-2.5-2.5V8Z"/>',
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 22V12h6v10"/>',
   'layout-template': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18M9 21V9"/>',
@@ -79,7 +73,6 @@ function sidebar(current) {
     <ul class="sidebar-nav">
 ${items}
 ${navItem('admin.html', 'Admin', 'settings-2', 'admin-link', current === 'admin', 'admin-link')}
-${navItem('cms.html', 'Editor CMS', 'file-edit', 'cms-link', current === 'cms')}
 ${navItem('autocard.html', 'AutoCard', 'layout-template', 'autocard-link', current === 'autocard')}
 ${navItem('cards-pos.html', 'Cards Pós', 'badge-check', 'pos-cards-link', current === 'cards-pos')}
     </ul>
@@ -88,8 +81,6 @@ ${navItem('cards-pos.html', 'Cards Pós', 'badge-check', 'pos-cards-link', curre
 
 function topbar(current, title) {
   const actions = {
-    admin: '<a href="./cms.html" class="cms-entry-link btn btn-ghost btn-sm">Abrir Editor CMS</a>',
-    cms: '<span id="save-state" class="cms-save-state" role="status" aria-live="polite">Selecione um documento</span>',
     knowledge: '<button id="btn-new" class="btn btn-primary" type="button" style="display:none">Novo artigo</button>',
     reminders: '<button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Novo lembrete</button>',
   }[current];

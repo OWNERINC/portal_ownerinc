@@ -23,7 +23,6 @@
     root.dataset.portalRole = snapshot.role;
     root.dataset.autocardAccess = String(snapshot.autocardAccess === true);
     root.dataset.posCardsAccess = String(snapshot.posCardsAccess === true);
-    root.dataset.cmsAccess = String(snapshot.cmsAccess === true);
   } catch (_) {
     // Session storage can be unavailable in hardened browser modes.
   }

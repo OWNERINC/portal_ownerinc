@@ -53,13 +53,6 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT, INSERT, UPDATE, DELETE ON job_titles TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON autocard_cards, autocard_media TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON pos_cards, pos_card_media TO portal_api;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON cms_documents, cms_revisions, cms_assets TO portal_api;
-    GRANT SELECT, INSERT, UPDATE ON owner_news_home TO portal_api;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON owner_news_polls, owner_news_poll_options, owner_news_poll_votes TO portal_api;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON cms_editor_sessions TO portal_api;
-    GRANT SELECT, UPDATE ON owner_news_authority TO portal_api;
-    GRANT SELECT, INSERT ON owner_news_authority_transitions TO portal_api;
-    GRANT SELECT ON owner_news_authority TO portal_cron;
     GRANT SELECT, INSERT, UPDATE ON audit_log TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON user_import_jobs, user_import_rows TO portal_api;
     GRANT SELECT, UPDATE ON users, reminders TO portal_cron;
@@ -69,8 +62,6 @@ async function grantRuntimeAccess(client) {
     GRANT SELECT, DELETE ON autocard_media TO portal_cron;
     GRANT SELECT ON pos_cards TO portal_cron;
     GRANT SELECT, DELETE ON pos_card_media TO portal_cron;
-    GRANT SELECT, UPDATE ON cms_documents, cms_revisions TO portal_cron;
-    GRANT SELECT, UPDATE, DELETE ON cms_assets TO portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON audit_log TO portal_cron;
     GRANT DELETE ON user_import_jobs TO portal_cron;
     GRANT SELECT (expires_at) ON user_import_jobs TO portal_cron;
@@ -102,4 +93,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { grantRuntimeAccess, MIGRATION_LOCK, provisionRoles };
+module.exports = { grantRuntimeAccess, MIGRATION_LOCK, provision, provisionRoles };

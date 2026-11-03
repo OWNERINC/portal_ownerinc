@@ -1,5 +1,10 @@
 # Sol Advisor — release integration report
 
+> **Relatório histórico — superseded by OWN-40.** Este documento registra a
+> composição anterior que incluía Owner News. A capacidade foi removida do
+> runtime em 3 de novembro de 2026; referências a módulos, scripts, migrations e
+> checks abaixo são evidência histórica, não instruções para o checkout atual.
+
 ## Result
 
 Integrated `origin/main@43b9126` (Academy) with

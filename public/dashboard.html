@@ -5,11 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0F0F0F">
   <title>Dashboard — Portal Ownerinc</title>
-  <link rel="stylesheet" href="./css/owner-news.css">
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
-  <link rel="stylesheet" href="./css/cms.css">
   <link rel="stylesheet" href="./css/dashboard-home.css">
   <script src="./js/auth-shell.js"></script>
 </head>
@@ -34,10 +32,8 @@
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./announcements.html" title="Owner News"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Owner News</span></a></li>
       <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
       <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
-      <li class="cms-link"><a href="./cms.html" title="Editor CMS"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#file-edit"></use></svg><span>Editor CMS</span></a></li>
       <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
       <li class="pos-cards-link"><a href="./cards-pos.html" title="Cards Pós"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg><span>Cards Pós</span></a></li>
     </ul>
@@ -54,28 +50,11 @@
     <header class="topbar"><span class="topbar-title">Dashboard</span></header>
     <!-- /generated:portal-topbar -->
     <main class="page-body dashboard-home" id="main-content" tabindex="-1" data-route-pending>
-      <section class="dashboard-hero" data-state="loading" aria-busy="true" aria-labelledby="dashboard-hero-title">
-        <img src="./assets/logo-branco.svg" alt="Owner News" width="1600" height="700" hidden>
-        <div class="dashboard-hero-copy">
-          <p id="dashboard-hero-eyebrow" class="dashboard-eyebrow">Owner News</p>
-          <h1 id="dashboard-hero-title">Owner News</h1>
-          <p id="dashboard-hero-description" class="dashboard-hero-description" role="status">Carregando publicações…</p>
-          <a class="dashboard-button dashboard-button-primary" href="#quick-links" hidden>Acessar áreas</a>
-          <button id="dashboard-hero-retry" class="dashboard-button dashboard-button-primary" type="button" hidden>Tentar novamente</button>
-          <p id="dashboard-hero-meta" class="dashboard-hero-meta"></p>
-        </div>
-      </section>
-
-      <section id="dashboard-news-section" class="dashboard-section" aria-labelledby="announcements-heading" hidden>
-        <div class="dashboard-section-heading">
-          <div>
-            <p class="dashboard-section-kicker">Últimas publicações</p>
-            <h2 id="announcements-heading">Owner News</h2>
-          </div>
-          <a class="dashboard-section-link" href="./announcements.html">Ver todos</a>
-        </div>
-        <div id="announcements-preview" class="dashboard-story-rail" aria-live="polite"></div>
-      </section>
+      <header class="dashboard-intro">
+        <p class="dashboard-section-kicker">Visão geral</p>
+        <h1>Dashboard</h1>
+        <p>Encontre rapidamente as áreas e os conteúdos mais importantes para a sua rotina.</p>
+      </header>
 
       <section class="dashboard-section" aria-labelledby="areas-heading">
         <div class="dashboard-section-heading">

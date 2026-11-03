@@ -1,7 +1,7 @@
 import { fetchAPI, fetchAPIPage } from '../js/auth.js';
 import { element } from '../js/ui.js';
 
-export function createCurriculumEditor({ root, page, courseId, initialCourse = null, onSaved = () => {}, ensureLessonDocument = async () => null }) {
+export function createCurriculumEditor({ root, page, courseId, initialCourse = null, onSaved = () => {} }) {
   const request = page.bindAPI({ fetchAPI, fetchAPIPage });
   let dirty = false, saving = false, disposed = false, course = initialCourse;
   const controller = new AbortController();
@@ -21,12 +21,7 @@ export function createCurriculumEditor({ root, page, courseId, initialCourse = n
     const media = element('input', { className: 'academy-manager-input', value: lesson.media_type === 'youtube' ? `https://www.youtube.com/watch?v=${lesson.youtube_video_id}` : lesson.media_url || '', maxlength: '2048', 'aria-label': `Vídeo da aula ${lesson.title}` });
     const active = element('input', { type: 'checkbox', checked: lesson.active, 'aria-label': `Aula ativa ${lesson.title}` });
     const saveButton = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Salvar aula' });
-    const material = element('a', { className: 'academy-button academy-button-small', href: '#', text: 'Materiais' });
     saveButton.addEventListener('click', async () => { markDirty(); const result = await save(`/api/academy/lessons/${encodeURIComponent(lesson.id)}`, 'PUT', { title: title.value.trim(), description: lesson.description || '', order: lesson.order, active: active.checked, media: { type: /youtube\.com|youtu\.be/i.test(media.value) ? 'youtube' : 'file', url: media.value.trim() } }); if (result && !disposed) await reload(); });
-    let documentBusy = false;
-    material.addEventListener('click', async event => { event.preventDefault(); if (disposed || documentBusy) return; documentBusy = true; material.setAttribute('aria-busy', 'true'); material.setAttribute('aria-disabled', 'true');
-      try { const id = await ensureLessonDocument(lesson, request, { signal: controller.signal }); if (!disposed && id) window.location.href = `./cms.html?type=academy_lesson&document=${encodeURIComponent(id)}`; } catch (error) { if (!disposed && error?.name !== 'AbortError') feedback.textContent = 'Não foi possível abrir os materiais. Tente novamente.'; } finally { documentBusy = false; material.removeAttribute('aria-busy'); material.removeAttribute('aria-disabled'); }
-    });
     const up = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Subir', 'aria-label': `Mover aula ${lesson.title} para cima` });
     const down = element('button', { className: 'academy-button academy-button-small', type: 'button', text: 'Descer', 'aria-label': `Mover aula ${lesson.title} para baixo` });
     const module = course.modules.find(item => item.lessons?.some(itemLesson => itemLesson.id === lesson.id));
@@ -38,7 +33,7 @@ export function createCurriculumEditor({ root, page, courseId, initialCourse = n
       await save(`/api/academy/modules/${encodeURIComponent(module.id)}/lessons/order`, 'PUT', { ids }); await reload();
     };
     up.addEventListener('click', () => void move(-1)); down.addEventListener('click', () => void move(1));
-    return element('li', { className: 'academy-manager-item' }, [title, media, active, saveButton, material, up, down]);
+    return element('li', { className: 'academy-manager-item' }, [title, media, active, saveButton, up, down]);
   }
   function render() {
     if (!course || disposed) return;

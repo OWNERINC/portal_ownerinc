@@ -83,26 +83,10 @@ export class FixtureNode extends Node {
 
 // Entire production mounts and their local modules run with the real lifecycle.
 // Only DOM, browser rendering/export libraries and external transports are doubles.
-export async function installAuthTransport(h, uid = 'editor-a') {
-  const listeners = [], requests = [], created = [], redirects = [];
-  const account = uid => uid ? { uid, getIdToken: async () => `fixture-${uid}` } : null;
-  const auth = { currentUser: account(uid), authStateReady: async () => {}, app: { name: '[DEFAULT]', options: { apiKey: 'fixture' } } };
-  const values = new Map();
-  const changeUser = uid => { auth.currentUser = account(uid); listeners.forEach(fn => fn(auth.currentUser)); };
-  h.window.location.replace = url => redirects.push(url);
-  h.context.URL.createObjectURL = () => { const url = `blob:auth-${created.length}`; created.push(url); return url; };
-  Object.assign(h.context, { auth,
-    sessionStorage: { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) },
-    onAuthStateChanged: (_auth, fn) => { listeners.push(fn); return () => {}; },
-    signOut: async () => changeUser(null), updateProfile: async () => {}, revokeEditorialSession: async () => {},
-    fetch: (path, options = {}) => { const request = { path, options, ...deferred() }; requests.push(request); return request.promise; },
-  });
-  const source = (await readFile('public/js/auth.js', 'utf8')).replace(/^import[\s\S]*?;\s*/gm, '').replace(/^export /gm, '');
-  vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, { fetchAPI, fetchAPIAsset, can }); })();`, h.context);
-  return { requests, changeUser, created, redirects };
-}
-
-export async function createFeedbackHarness(name, { expose = '', fonts = Promise.resolve(), mount = true, modules = [], state = null, url = `https://portal.test/${name}.html` } = {}) {
+export async function createFeedbackHarness(name, {
+  expose = '', fonts = Promise.resolve(), mount = true, modules = [],
+  url = `https://portal.test/${name}.html`,
+} = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
   doc.createElement = tag => new FixtureNode(tag, doc);
@@ -114,7 +98,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   doc.documentElement = doc.querySelector('html'); doc.body = doc.querySelector('body'); doc.activeElement = doc.body;
   const window = new FixtureNode('window', doc);
   let currentURL = new URL(url), cursor = 0;
-  const entries = [{ url: currentURL.href, state }];
+  const entries = [{ url: currentURL.href, state: null }];
   const location = {};
   for (const key of ['href', 'origin', 'pathname', 'search', 'hash']) Object.defineProperty(location, key, { get: () => currentURL[key] });
   const popstate = (next, state) => {
@@ -133,7 +117,10 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   Object.assign(window, { history, location, matchMedia: () => ({ matches: false }), innerHeight: 900, scrollY: 0, scrollTo(x, y) { this.scrollY = y; }, confirm: () => true });
   const requests = [], revoked = [], frames = new Map(), timers = new Map(), observers = [], captures = [];
   let resourceId = 0;
-  const transport = kind => (path, options = {}) => { const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise; };
+  const transport = kind => (path, options = {}) => {
+    if (/\/api\/cms/i.test(path)) throw new Error(`Forbidden maintained-domain request: ${path}`);
+    const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise;
+  };
   const context = vm.createContext({
     document: doc, window, fixtureLocation: location, console, AbortController, DOMException, URLSearchParams, TextEncoder, structuredClone,
     Event: TestEvent, URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
@@ -152,19 +139,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/js/ui.js', 'clear, element, safeHttpUrl, setBusy, showState, openDialog, closeDialog, setDialogCloseGuard');
-  await load('public/js/owner-news/asset-path.mjs', 'cmsAssetEndpoint, validateAssetScope, validateNewsSourceScope');
-  await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
-  await load('public/js/owner-news/content-contract.js', 'validateNewsBlocks, validateRichNodes, newsBlocksToText');
-  await load('public/js/owner-news/rich-content.js', 'renderRichContent');
-  if (name === 'announcements' && mount) {
-    await load('public/js/pagination.js', 'readOffset, renderPagination, renderCursorPagination, setPaginationBusy');
-    await load('public/js/cms-block-renderer.js', 'blocksToText, renderBlocks, cleanupRenderedBlocks, validateBlocks');
-    await load('public/js/owner-news/model.js', 'getNewsPresentation, normalizeEditorial, estimateNewsReadTime');
-    await load('public/js/owner-news/catalog.js', 'renderNewsCard, composeNewsFeed, renderNewsCategories, renderNewsOpening');
-    await load('public/js/owner-news/poll.js', 'createNewsPoll');
-    await load('public/js/owner-news/reader-view.js', 'renderNewsArticle');
-    await load('public/js/owner-news/navigation.js', 'createNewsNavigation');
-  }
+  if (name === 'reminders' && mount) await load('public/js/pagination.js', 'readOffset, renderPagination, setPaginationBusy');
   if (name === 'autocard') {
     await load('public/autocard/crop.js', 'DEFAULT_MEDIA_CROP, cropRenderStyle, cropStyle, dragMediaCrop, normalizeMediaCrop');
     await load('public/autocard/asset-catalog.js', 'searchAssets');
@@ -180,7 +155,7 @@ export async function createFeedbackHarness(name, { expose = '', fonts = Promise
   }
   for (const module of modules) await load(module.path, module.exports);
   if (mount) {
-    const path = ['dashboard', 'announcements'].includes(name) ? `public/js/${name}.js` : `public/${name}/app.js`;
+    const path = ['dashboard', 'reminders'].includes(name) ? `public/js/${name}.js` : `public/${name}/app.js`;
     let source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
     const end = source.lastIndexOf('}');
     source = `${source.slice(0, end)}\n${expose}\n${source.slice(end)}`;

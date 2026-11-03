@@ -11,16 +11,6 @@ release_id=${3:?release id required}
 
 shared="$root/shared"
 previous=$(readlink -f "$root/current" 2>/dev/null || true)
-if [[ -f $release/scripts/release-manifest.sh ]]; then
-  . "$release/scripts/release-manifest.sh"
-  load_release_manifest "$release/.image-env"
-  if [[ $RELEASE_FORMAT == payload-v1 ]]; then
-    exec bash "$release/scripts/payload-release.sh" "$root" "$release" "$release_id"
-  fi
-fi
-if [[ -n $previous && -f $previous/.image-env ]] && grep -Eq '^CMS_IMAGE=|^RELEASE_FORMAT=payload-v1$' "$previous/.image-env"; then
-  echo 'Refusing release below the Payload application floor' >&2; exit 2
-fi
 ln -s "$shared/.env" "$release/.env"
 
 image_registry=$(sed -n 's/^IMAGE_REGISTRY=//p' "$shared/.env" | tail -n 1)
@@ -123,7 +113,7 @@ done
 [[ $(docker inspect --format '{{.Config.Image}}' "$cron_container") == "$CRON_IMAGE" ]] || { echo "New cron image digest mismatch." >&2; false; }
 docker compose --profile notifications --project-directory "$release" up -d --no-deps nginx
 published=$(docker compose --profile notifications --project-directory "$release" port nginx 80 | tail -n 1)
-SMOKE_EDITORIAL_MODE=redirect BASE_URL="http://$published" bash "$release/scripts/smoke.sh"
+BASE_URL="http://$published" bash "$release/scripts/smoke.sh"
 if ! CRON_BOOTSTRAP_ONLY=false docker compose --profile notifications --project-directory "$release" up -d --force-recreate --no-deps cron; then
   echo "New cron could not be started after the release became current." >&2
   false

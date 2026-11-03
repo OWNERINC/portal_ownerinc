@@ -8,7 +8,6 @@
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
-  <link rel="stylesheet" href="./css/cms.css">
   <link rel="stylesheet" href="./css/knowledge.css">
   <script src="./js/auth-shell.js"></script>
 </head>
@@ -32,10 +31,8 @@
       <li><a href="./knowledge.html" class="active" aria-current="page" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./announcements.html" title="Owner News"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#megaphone"></use></svg><span>Owner News</span></a></li>
       <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
       <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
-      <li class="cms-link"><a href="./cms.html" title="Editor CMS"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#file-edit"></use></svg><span>Editor CMS</span></a></li>
       <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
       <li class="pos-cards-link"><a href="./cards-pos.html" title="Cards Pós"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg><span>Cards Pós</span></a></li>
     </ul>
@@ -102,7 +99,7 @@
       <span class="modal-title" id="modal-article-title">Novo Artigo</span>
       <button class="modal-close" id="modal-article-close" type="button" aria-label="Fechar">×</button>
     </div>
-    <p class="form-help" id="article-editor-help">Neste editor, você pode alterar título, categoria e anexo PDF.</p>
+    <p class="form-help" id="article-editor-help">Neste editor, você pode alterar título, categoria e texto simples.</p>
     <div class="form-group">
       <label class="form-label" for="f-title">Título</label>
       <input class="form-input" id="f-title" name="title" type="text" required placeholder="Ex.: Política de viagens…" autocomplete="off" aria-describedby="article-editor-help">
@@ -113,16 +110,8 @@
     </div>
     <div class="form-group">
       <label class="form-label" for="f-content">Conteúdo</label>
-      <textarea class="form-textarea" id="f-content" name="content" rows="8" required placeholder="Conteúdo em texto simples…" aria-describedby="f-content-help article-cms-help"></textarea>
-      <p class="form-help" id="f-content-help">Artigos sem gerenciamento pelo CMS mantêm o conteúdo em texto simples editável neste campo.</p>
-      <p class="form-help" id="article-cms-help" hidden></p>
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="f-pdf">PDF do artigo</label>
-      <input class="form-input" id="f-pdf" name="pdf" type="file" accept="application/pdf" aria-describedby="article-editor-help f-pdf-status">
-      <input type="hidden" id="f-pdf-state" name="pdf_state" value="">
-      <p class="form-help" id="f-pdf-status" role="status" aria-live="polite">Opcional. O arquivo será exibido dentro do artigo após o salvamento.</p>
-      <button class="btn btn-ghost btn-sm knowledge-pdf-remove" type="button" id="f-pdf-remove" hidden>Remover PDF</button>
+      <textarea class="form-textarea" id="f-content" name="content" rows="8" required placeholder="Conteúdo em texto simples…" aria-describedby="f-content-help"></textarea>
+      <p class="form-help" id="f-content-help">Artigos sem gerenciamento editorial mantêm o conteúdo em texto simples editável neste campo.</p>
     </div>
     <div style="display:flex; gap:8px; justify-content:flex-end">
       <button class="btn btn-ghost" type="button" id="modal-article-cancel">Cancelar</button>

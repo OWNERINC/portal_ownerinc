@@ -12,7 +12,6 @@ const { isRetryableUnsent, reminderContentUrl } = require('../../cron/checkRemin
 const {
   classifySmtpCode, classifySmtpError, classifySmtpResult, smtpResponseCode,
 } = require('../../cron/mailTransport');
-const { reminderContentPath } = require('../../api/cms/blocks');
 const { targetUsers } = require('../../api/route-utils');
 const { retentionDays } = require('../../cron/retention');
 const { autocardMediaRetentionDays, isSafeStorageKey } = require('../../cron/autocard-media-retention');
@@ -101,8 +100,6 @@ test('reminder audiences reject empty or malformed UIDs and keep the public cont
   assert.equal(targetUsers(['has space']), false);
   assert.equal(targetUsers(['valid.uid', 'valid.uid']), false);
   const id = '550e8400-e29b-41d4-a716-446655440000';
-  assert.equal(reminderContentPath(id.toUpperCase()), '/reminders.html#reminder-550e8400-e29b-41d4-a716-446655440000');
-  assert.equal(reminderContentPath('not-an-id'), null);
   assert.equal(reminderContentUrl(id, { PORTAL_PUBLIC_URL: 'https://portal.example.test', NODE_ENV: 'production' }), 'https://portal.example.test/reminders.html#reminder-550e8400-e29b-41d4-a716-446655440000');
   assert.throws(() => reminderContentUrl(id, { PORTAL_PUBLIC_URL: 'http://portal.example.test', NODE_ENV: 'production' }), /Invalid PORTAL_PUBLIC_URL/);
 });

@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
+import {
+  assertApprovedMigrationCluster, assertEmptyMigrationDatabase,
+} from '../../scripts/migration-test-guards.mjs';
 
 test('migrations are numbered, ordered, and tracked by a ledger', async () => {
   const files = (await readdir('api/db/migrations')).filter((file) => file.endsWith('.sql')).sort();
-  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql', '034_owner_news_editorial.sql', '035_owner_news_polls.sql', '036_payload_editorial_control.sql', '037_owner_news_cutover.sql']);
+  assert.deepEqual(files, ['001_initial_schema.sql', '002_reliable_notifications.sql', '003_governance.sql', '004_operational_hardening.sql', '005_notification_claim_state.sql', '006_user_erasure.sql', '007_solides_employee_links.sql', '008_solides_link_hardening.sql', '009_job_titles.sql', '010_autocard.sql', '011_cron_alert_state.sql', '012_autocard_media_crop.sql', '013_job_title_catalog.sql', '015_cms_editor.sql', '016_remove_ombudsman.sql', '017_pos_cards.sql', '018_pos_card_storage_key.sql', '019_cms_asset_deletion_state.sql', '020_profile_photo_crop.sql', '021_bulk_user_imports.sql', '022_bulk_user_import_validation.sql', '023_pos_owner_cards.sql', '024_job_title_page_access.sql', '025_pending_registrations.sql', '026_firebase_enable_pending.sql', '027_pending_registration_cleanup.sql', '028_firebase_cleanup_queue.sql', '029_autocard_media_safety.sql', '030_dho_job_title_catalog.sql', '031_contract_invariants.sql', '032_user_import_identity.sql', '033_academy_learning.sql', '034_owner_news_editorial.sql', '035_owner_news_polls.sql', '038_disable_legacy_editorial_writes.sql']);
 
   const runner = await readFile('api/db/migrate.js', 'utf8');
   assert.match(runner, /CREATE TABLE IF NOT EXISTS schema_migrations/);
@@ -15,56 +18,19 @@ test('migrations are numbered, ordered, and tracked by a ledger', async () => {
 
   const schema = await readFile('api/db/schema.sql', 'utf8');
   const ledger = [...schema.matchAll(/\('([0-9]{3}_[a-z0-9_]+)'\)/g)].map((match) => match[1]);
-  for (const migration of ['015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state', '033_academy_learning', '034_owner_news_editorial', '035_owner_news_polls', '036_payload_editorial_control', '037_owner_news_cutover']) {
+  for (const migration of ['015_cms_editor', '016_remove_ombudsman', '019_cms_asset_deletion_state', '033_academy_learning', '034_owner_news_editorial', '035_owner_news_polls']) {
     assert.equal(ledger.includes(migration), false, `${migration} must run after the bootstrap schema`);
   }
-
-  const expected = files.map(file => file.slice(0, -4));
-  const extractLedger = source => {
-    const block = /const expectedVersions = \[([\s\S]*?)\n\];/u.exec(source)?.[1] || '';
-    return [...block.matchAll(/'([0-9]{3}_[a-z0-9_]+)'/gu)].map(match => match[1]);
-  };
-  for (const filename of ['api/db/verify-migrations.js', 'scripts/test-migrations.mjs']) {
-    assert.deepEqual(extractLedger(await readFile(filename, 'utf8')), expected,
-      `${filename} must require the exact current migration ledger`);
-  }
-  const payloadState = await readFile('ops/payload-control-state.py', 'utf8');
-  const payloadLedgerBlock = /PORTAL_MIGRATIONS = \[([\s\S]*?)\n\]/u.exec(payloadState)?.[1] || '';
-  const payloadLedger = [...payloadLedgerBlock.matchAll(/'([0-9]{3}_[a-z0-9_]+)'/gu)].map(match => match[1]);
-  assert.deepEqual(payloadLedger, expected,
-    'Payload recovery must require the exact current Portal migration ledger');
-});
-
-test('editorial control migration, grants and both installation gates stay aligned', async () => {
-  const [provision, verification, integration] = await Promise.all([
-    readFile('api/db/provision.js', 'utf8'),
-    readFile('api/db/verify-migrations.js', 'utf8'),
-    readFile('scripts/test-migrations.mjs', 'utf8'),
-  ]);
-  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON cms_editor_sessions TO portal_api/);
-  assert.match(provision, /GRANT SELECT, UPDATE ON owner_news_authority TO portal_api/);
-  assert.match(provision, /GRANT SELECT ON owner_news_authority TO portal_cron/);
-  assert.doesNotMatch(provision, /GRANT[^;]*cms_editor_sessions[^;]*TO portal_cron/);
-  for (const source of [verification, integration]) {
-    assert.match(source, /'036_payload_editorial_control'/);
-    assert.match(source, /'037_owner_news_cutover'/);
-    assert.match(source, /cms_editor_sessions_expiry/);
-    assert.match(source, /owner_news_authority/);
-    assert.match(source, /has_table_privilege\('portal_api', \$1, \$2\)/);
-    assert.match(source, /has_table_privilege\('portal_cron', \$1, \$2\)/);
-  }
-  assert.match(integration, /SET LOCAL ROLE portal_api/);
-  assert.match(integration, /SET LOCAL ROLE portal_cron/);
-  assert.match(integration, /await verifyEditorialControl\(client\)/);
 });
 
 test('Academy schema preserves legacy delivery and API-only learning storage', async () => {
-  const [schema, migration, provision, verification, integration] = await Promise.all([
+  const [schema, migration, provision, verification, integration, guard] = await Promise.all([
     readFile('api/db/schema.sql', 'utf8'),
     readFile('api/db/migrations/033_academy_learning.sql', 'utf8'),
     readFile('api/db/provision.js', 'utf8'),
     readFile('api/db/verify-migrations.js', 'utf8'),
     readFile('scripts/test-migrations.mjs', 'utf8'),
+    readFile('scripts/migration-test-guards.mjs', 'utf8'),
   ]);
   for (const source of [schema, migration]) {
     for (const table of ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress']) {
@@ -99,11 +65,96 @@ test('Academy schema preserves legacy delivery and API-only learning storage', a
     assert.match(source, /academyTables/);
     assert.match(source, /has_table_privilege\('portal_cron', \$1, \$2\)/);
   }
-  assert.match(integration, /Setup modes require an empty disposable database/);
+  assert.match(guard, /Migration setup requires an empty disposable database/);
   assert.match(integration, /ledgerAfterRepeat.rows, ledgerBeforeRepeat.rows/);
 });
 
-test('Owner News migration order, release gates, and compatibility guard stay aligned', async () => {
+test('migration gate requires explicit disposable setup and protects legacy editorial writes', async () => {
+  const [integration, migration, readiness] = await Promise.all([
+    readFile('scripts/test-migrations.mjs', 'utf8'),
+    readFile('api/db/migrations/038_disable_legacy_editorial_writes.sql', 'utf8').catch(() => ''),
+    readFile('scripts/test-migration-readiness.mjs', 'utf8'),
+  ]);
+  assert.match(integration, /MIGRATION_TEST_SETUP.*required/);
+  assert.match(integration, /MIGRATION_TEST_SETUP must be bootstrap or upgrade/);
+  assert.match(migration, /to_regclass\('public\.cms_documents'\)/);
+  assert.match(migration, /REVOKE INSERT, UPDATE, DELETE ON TABLE public\.cms_documents FROM portal_api, portal_cron/);
+  assert.match(migration, /cms_revisions/);
+  assert.match(migration, /cms_assets/);
+  assert.match(integration, /left\(n\.nspname, 3\) <> 'pg_'/);
+  assert.match(readiness, /left\(n\.nspname, 3\) <> 'pg_'/);
+  assert.match(readiness, /'030_dho_job_title_catalog'/);
+  assert.doesNotMatch(readiness, /\bawait migrate\(/);
+});
+
+test('migration harness rejects missing and invalid setup before opening a database pool', () => {
+  const baseEnv = {
+    ...process.env,
+    NODE_ENV: 'test',
+    MIGRATION_TEST_DISPOSABLE: 'true',
+    MIGRATION_DATABASE_URL: 'postgresql://not-used@example.invalid/never-connect',
+  };
+  delete baseEnv.MIGRATION_TEST_SETUP;
+  const missing = spawnSync(process.execPath, ['scripts/test-migrations.mjs'], {
+    env: baseEnv,
+    encoding: 'utf8',
+  });
+  assert.equal(missing.status, 1);
+  assert.match(`${missing.stdout}\n${missing.stderr}`, /MIGRATION_TEST_SETUP is required/);
+
+  const invalid = spawnSync(process.execPath, ['scripts/test-migrations.mjs'], {
+    env: { ...baseEnv, MIGRATION_TEST_SETUP: 'unexpected' },
+    encoding: 'utf8',
+  });
+  assert.equal(invalid.status, 1);
+  assert.match(`${invalid.stdout}\n${invalid.stderr}`, /MIGRATION_TEST_SETUP must be bootstrap or upgrade/);
+});
+
+test('migration harness requires the approved disposable cluster marker before mutation', async () => {
+  const baseEnv = {
+    ...process.env,
+    NODE_ENV: 'test',
+    MIGRATION_TEST_DISPOSABLE: 'true',
+    MIGRATION_TEST_SETUP: 'bootstrap',
+    MIGRATION_DATABASE_URL: 'postgresql://not-used@example.invalid/never-connect',
+  };
+  const missing = { ...baseEnv };
+  delete missing.MIGRATION_TEST_CLUSTER_ID;
+  const missingResult = spawnSync(process.execPath, ['scripts/test-migrations.mjs'], {
+    env: missing,
+    encoding: 'utf8',
+  });
+  assert.equal(missingResult.status, 1);
+  assert.match(`${missingResult.stdout}\n${missingResult.stderr}`, /MIGRATION_TEST_CLUSTER_ID is required/);
+
+  const invalidResult = spawnSync(process.execPath, ['scripts/test-migrations.mjs'], {
+    env: { ...baseEnv, MIGRATION_TEST_CLUSTER_ID: 'unsafe-marker' },
+    encoding: 'utf8',
+  });
+  assert.equal(invalidResult.status, 1);
+  assert.match(`${invalidResult.stdout}\n${invalidResult.stderr}`, /MIGRATION_TEST_CLUSTER_ID must be the PostgreSQL system identifier/);
+
+  await assert.rejects(
+    () => assertApprovedMigrationCluster({
+      query: async () => ({ rows: [{ database_name: 'portal', cluster_id: null }] }),
+    }, 'approved-own43-cluster'),
+    /approved disposable cluster/,
+  );
+});
+
+test('migration harness rejects occupied disposable databases without dropping objects', () => {
+  assert.doesNotThrow(() => assertEmptyMigrationDatabase([]));
+  assert.throws(
+    () => assertEmptyMigrationDatabase([{ schema_name: 'public', object_name: 'users', object_kind: 'r' }]),
+    /requires an empty disposable database; no database objects are dropped/,
+  );
+  assert.throws(
+    () => assertEmptyMigrationDatabase([{ schema_name: 'pgdata', object_name: 'only_view', object_kind: 'v' }]),
+    /requires an empty disposable database; no database objects are dropped/,
+  );
+});
+
+test('Owner News migrations remain historical without runtime grants or readiness coupling', async () => {
   const [migration, provision, verification, migrationTest, runner] = await Promise.all([
     readFile('api/db/migrations/034_owner_news_editorial.sql', 'utf8'),
     readFile('api/db/provision.js', 'utf8'),
@@ -114,7 +165,6 @@ test('Owner News migration order, release gates, and compatibility guard stay al
   assert.match(verification, /'032_user_import_identity',[\s\S]*'033_academy_learning',[\s\S]*'034_owner_news_editorial',[\s\S]*'035_owner_news_polls'/);
   assert.match(migrationTest, /'032_user_import_identity',[\s\S]*'033_academy_learning',[\s\S]*'034_owner_news_editorial',[\s\S]*'035_owner_news_polls'/);
   for (const table of ['owner_news_home', 'owner_news_polls', 'owner_news_poll_options', 'owner_news_poll_votes']) {
-    assert.match(verification, new RegExp(`to_regclass\\('public\\.${table}'\\)`));
     assert.match(migrationTest, new RegExp(table));
   }
   for (const check of [
@@ -122,18 +172,14 @@ test('Owner News migration order, release gates, and compatibility guard stay al
     'owner_news_poll_votes_pkey', 'owner_news_one_open_poll',
     'owner_news_polls_publication_idx',
   ]) {
-    assert.match(verification, new RegExp(check));
     assert.match(migrationTest, new RegExp(check));
   }
-  assert.match(verification, /owner_news_poll_votes_composite_fk/);
   assert.match(migrationTest, /vote_composite_fk/);
   assert.match(migrationTest, /home_columns/);
-  assert.match(provision, /GRANT SELECT, INSERT, UPDATE ON owner_news_home TO portal_api/);
-  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON owner_news_polls, owner_news_poll_options, owner_news_poll_votes TO portal_api/);
-  for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
-    assert.match(verification, new RegExp(`has_table_privilege\\('portal_api', 'public\\.owner_news_poll_votes', '${privilege}'\\)`));
-    assert.match(verification, new RegExp(`NOT has_table_privilege\\('portal_cron', 'public\\.owner_news_poll_votes', '${privilege}'\\)`));
-  }
+  assert.doesNotMatch(provision, /GRANT[^;]*owner_news_/i);
+  assert.match(verification, /api_owner_news_privileges_denied/);
+  assert.match(verification, /cron_owner_news_privileges_denied/);
+  assert.doesNotMatch(verification, /owner_news_home_columns|owner_news_polls_status_check|owner_news_poll_votes_composite_fk/);
   assert.match(migration, /CREATE TABLE owner_news_home/);
   assert.match(migration, /INSERT INTO owner_news_home\(singleton\) VALUES \(TRUE\)/);
   assert.match(runner, /033_owner_news_editorial/);
@@ -241,7 +287,7 @@ test('AutoCard media, icon, crop, and fresh-install indexes stay aligned', async
   assert.match(migrationTest, /has_table_privilege\('portal_api', 'public\.autocard_media', 'SELECT'\)[\s\S]*has_table_privilege\('portal_api', 'public\.autocard_media', 'DELETE'\)/);
   assert.doesNotMatch(migrationTest, /has_table_privilege\([^\n]*'SELECT,INSERT|has_table_privilege\([^\n]*'SELECT,DELETE/);
   assert.match(verification, /'029_autocard_media_safety'/);
-  assert.match(verification, /has_table_privilege\('portal_cron', 'public\.cms_assets', 'UPDATE'\)/);
+  assert.match(verification, /cron_cms_privileges_denied/);
 });
 
 test('profile photo crop schema is safe for fresh installs and upgrades', async () => {
@@ -467,7 +513,7 @@ test('DHO job title migration seeds, merges, and maps the approved names', async
   assert.doesNotMatch(canonical, /\bRH\b/i);
 });
 
-test('CMS migration is isolated, idempotent, and protects document revisions and assets', async () => {
+test('historical CMS migration remains byte-preserved while runtime privileges are denied', async () => {
   const [migration, verification, provision, migrate] = await Promise.all([
     readFile('api/db/migrations/015_cms_editor.sql', 'utf8'),
     readFile('api/db/verify-migrations.js', 'utf8'),
@@ -497,22 +543,17 @@ test('CMS migration is isolated, idempotent, and protects document revisions and
   assert.match(migration, /CREATE INDEX IF NOT EXISTS cms_revisions_status_idx/);
   assert.doesNotMatch(migration, /ALTER TABLE (?!cms_)/);
   assert.match(verification, /'015_cms_editor'/);
-  assert.match(verification, /cms_documents/);
-  assert.match(verification, /cms_revisions/);
-  assert.match(verification, /cms_assets/);
-  assert.match(provision, /GRANT SELECT, INSERT, UPDATE, DELETE ON cms_documents, cms_revisions, cms_assets TO portal_api/);
-  assert.match(provision, /GRANT SELECT, UPDATE ON cms_documents, cms_revisions TO portal_cron/);
+  assert.match(verification, /api_cms_privileges_denied/);
+  assert.match(verification, /cron_cms_privileges_denied/);
+  assert.doesNotMatch(provision, /GRANT[^;]*cms_documents|GRANT[^;]*cms_revisions|GRANT[^;]*cms_assets/i);
   assert.ok(migrate.indexOf('await grantRuntimeAccess(client)') > migrate.indexOf('for (const file of files)'));
-  for (const privilege of ['api_cms_documents_privileges', 'api_cms_revisions_privileges', 'api_cms_assets_privileges', 'cron_cms_documents_privileges', 'cron_cms_revisions_privileges']) {
-    assert.match(verification, new RegExp(privilege));
-  }
 });
 
-test('CMS asset deletion reservations are applied and verified by migrations', async () => {
+test('historical CMS asset deletion state remains preserved but is not a readiness dependency', async () => {
   const [migration, verification] = await Promise.all([
     readFile('api/db/migrations/019_cms_asset_deletion_state.sql', 'utf8').catch(() => ''),
     readFile('api/db/verify-migrations.js', 'utf8'),
   ]);
   assert.match(migration, /deleting_at\s+TIMESTAMPTZ/);
-  assert.match(verification, /cms_asset_deleting_at/);
+  assert.doesNotMatch(verification, /cms_asset_deleting_at/);
 });

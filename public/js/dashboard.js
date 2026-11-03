@@ -1,31 +1,19 @@
-import { fetchAPI, fetchAPIAsset } from './auth.js';
-import { renderBlocks } from './cms-block-renderer.js';
+import { fetchAPI } from './auth.js';
 import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
-import { cmsAssetEndpoint, validateNewsSourceScope } from './owner-news/asset-path.mjs';
-import { newsBlocksToText, validateNewsBlocks } from './owner-news/content-contract.js';
 
-const requests = { fetchAPI, fetchAPIAsset };
-const renderContent = renderBlocks;
+const requests = { fetchAPI };
 export function mount(page) {
-const { fetchAPI, fetchAPIAsset } = page.bindAPI(requests);
-const renderBlocks = (node, blocks, options) => renderContent(node, blocks, { ...options, signal: page.signal });
-page.cleanup(() => { ++announcementsRequest; ++remindersRequest; ++academyRequest; releaseNewsImages(); });
+  const { fetchAPI } = page.bindAPI(requests);
+page.cleanup(() => { ++remindersRequest; ++academyRequest; });
 
 const TIME_ZONE = 'America/Sao_Paulo';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const editorialImages = [
+const cardImages = [
   ['https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=600&q=80', 'Sala de trabalho iluminada'],
   ['https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=600&q=80', 'Notebook aberto sobre uma mesa'],
   ['https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=600&q=80', 'Pessoas trabalhando em uma mesa'],
 ];
-
-function formatDate(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'recentemente' : new Intl.DateTimeFormat('pt-BR', {
-    timeZone: TIME_ZONE, day: '2-digit', month: 'short',
-  }).format(date).replace('.', '');
-}
 
 function civilDateKey(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -63,13 +51,7 @@ function icon(name) {
   return svg;
 }
 
-function validateNewsAnnouncement(announcement) {
-  if (!announcement || typeof announcement !== 'object') throw new Error('invalid_news_dto');
-  validateNewsSourceScope(announcement.source, announcement.asset_scope);
-  return announcement;
-}
-
-function storyCard({ title, category, description, blocks, href, newTab, image, alt, meta, assetSource, assetScope }) {
+function storyCard({ title, category, description, href, newTab, image, alt, meta }) {
   const titleNode = href
     ? element('a', {
       className: 'dashboard-story-card-title', href,
@@ -80,131 +62,15 @@ function storyCard({ title, category, description, blocks, href, newTab, image, 
     titleNode,
     element('small', { text: [category, meta].filter(Boolean).join(' · ') }),
   ]);
-  if (blocks || description) {
+  if (description) {
     const copy = element('div', { className: 'dashboard-story-card-copy' });
-    if (blocks) renderBlocks(copy, blocks, { fallbackText: description || '', assetSource, assetScope });
-    else copy.append(element('p', { text: description }));
+    copy.append(element('p', { text: description }));
     body.append(copy);
   }
   const children = image
     ? [element('img', { src: image, alt, width: 600, height: 360, loading: 'lazy' }), body]
     : [body];
   return element('article', { className: 'dashboard-story-card' }, children);
-}
-
-function renderHero(announcement, state = announcement ? 'populated' : 'empty') {
-  if (announcement) validateNewsAnnouncement(announcement);
-  const hero = document.querySelector('.dashboard-hero');
-  if (hero) hero.dataset.state = state;
-  setBusy(hero, state === 'loading');
-  const section = document.getElementById('dashboard-news-section');
-  if (section) section.hidden = state !== 'populated';
-  const title = document.getElementById('dashboard-hero-title');
-  const eyebrow = document.getElementById('dashboard-hero-eyebrow');
-  const description = document.getElementById('dashboard-hero-description');
-  const meta = document.getElementById('dashboard-hero-meta');
-  if (title) title.textContent = announcement?.title || 'Owner News';
-  if (eyebrow) eyebrow.textContent = `Owner News · ${announcement?.category || 'Ownerinc'}`;
-  if (description) description.textContent = announcement
-    ? announcement.editorial?.summary || newsBlocksToText(announcement.content_blocks).replace(/\s+/g, ' ').slice(0, 180) || 'Uma leitura curta para organizar o que importa e levar boas ideias para a rotina.'
-    : state === 'loading' ? 'Carregando publicações…'
-      : state === 'error' ? 'Não foi possível carregar o Owner News.' : 'Nenhuma publicação no Owner News.';
-  if (meta) meta.textContent = announcement ? `Publicado ${formatDate(announcement.published_at)}` : '';
-  const link = document.querySelector('.dashboard-hero-copy a');
-  if (link) {
-    link.hidden = state === 'loading' || state === 'error';
-    const source = announcement?.source;
-    const query = announcement ? new URLSearchParams({ id: String(announcement.id).toLowerCase(), source }) : null;
-    link.href = announcement ? `./announcements.html?${query}` : '#quick-links';
-    link.textContent = announcement ? 'Ler publicação' : 'Acessar áreas';
-  }
-  const retry = document.getElementById('dashboard-hero-retry');
-  if (retry) retry.hidden = state !== 'error';
-  const image = document.querySelector('.dashboard-hero > img');
-  if (image) image.hidden = state !== 'populated';
-  loadNewsImage(image, announcement);
-}
-
-const announcementsPreview = document.getElementById('announcements-preview');
-let announcementsRequest = 0;
-const newsImageUrls = new Set();
-function releaseNewsImages() {
-  newsImageUrls.forEach(url => URL.revokeObjectURL(url));
-  newsImageUrls.clear();
-}
-
-function loadNewsImage(image, announcement) {
-  if (!image) return;
-  const requestToken = announcementsRequest;
-  image.src = './assets/logo-branco.svg';
-  image.alt = 'Owner News';
-  const blocks = validateNewsBlocks(announcement?.content_blocks || [], announcement?.content_version) || [];
-  const cover = blocks.find(block => block.type === 'image' && block.usage === 'cover') || blocks.find(block => block.type === 'image');
-  if (!cover) return;
-  let endpoint;
-  try {
-    endpoint = cmsAssetEndpoint(cover.asset_id, {
-      source: announcement.source,
-      asset_scope: announcement.asset_scope,
-    });
-  } catch { return; }
-  fetchAPIAsset(endpoint).then(url => {
-    if (requestToken !== announcementsRequest || !image.isConnected) {
-      URL.revokeObjectURL(url);
-      return;
-    }
-    newsImageUrls.add(url);
-    image.src = url;
-    image.alt = cover.alt;
-  }).catch(() => { /* The local brand image remains available when a cover fails. */ });
-}
-page.listen(window, 'pagehide', () => { ++announcementsRequest; releaseNewsImages(); });
-page.listen(window, 'pageshow', event => { if (event.persisted) loadAnnouncements(); });
-const heroRetry = document.getElementById('dashboard-hero-retry');
-if (heroRetry) page.listen(heroRetry, 'click', () => {
-  if (document.querySelector('.dashboard-hero')?.dataset.state === 'error') loadAnnouncements();
-});
-async function loadAnnouncements() {
-  if (!announcementsPreview) return;
-  const requestToken = ++announcementsRequest;
-  const preserveCurrent = document.querySelector('.dashboard-hero')?.dataset.state === 'populated';
-  if (!preserveCurrent) {
-    releaseNewsImages();
-    clear(announcementsPreview);
-    renderHero(null, 'loading');
-  }
-  setBusy(announcementsPreview, true);
-  try {
-    const announcements = (await fetchAPI('/api/announcements?kind=article&limit=3')).slice(0, 3);
-    if (requestToken !== announcementsRequest) return;
-    announcements.forEach(validateNewsAnnouncement);
-    releaseNewsImages();
-    renderHero(announcements[0]);
-    if (!announcements.length) {
-      clear(announcementsPreview);
-      return;
-    }
-    clear(announcementsPreview);
-    announcements.forEach(announcement => {
-      const card = storyCard({
-      title: announcement.title,
-      category: announcement.category || 'Comunicado',
-      description: announcement.editorial?.summary || newsBlocksToText(announcement.content_blocks).replace(/\s+/g, ' ').slice(0, 180),
-       href: `./announcements.html?${new URLSearchParams({ id: String(announcement.id).toLowerCase(), source: announcement.source })}`,
-      image: './assets/logo-branco.svg',
-      alt: 'Owner News',
-      meta: formatDate(announcement.published_at),
-      assetSource: announcement.source,
-      assetScope: announcement.asset_scope,
-      });
-      announcementsPreview.append(card);
-      loadNewsImage(card.querySelector('img'), announcement);
-    });
-  } catch {
-    if (requestToken === announcementsRequest && !preserveCurrent) renderHero(null, 'error');
-  } finally {
-    if (requestToken === announcementsRequest) setBusy(announcementsPreview, false);
-  }
 }
 
 const remindersContainer = document.getElementById('reminders-list');
@@ -225,7 +91,6 @@ async function loadReminders() {
       title: reminder.title,
       category: days === 0 ? 'Hoje' : `Em ${days} ${days === 1 ? 'dia' : 'dias'}`,
       description: reminder.description || '',
-      blocks: reminder.content_blocks,
       href: reminderContentHref(reminder),
     })));
   } catch {
@@ -270,11 +135,10 @@ async function loadAcademy() {
         title: course.title,
         category: course.category || 'Desenvolvimento',
         description: course.description || '',
-        blocks: course.content_blocks,
         href,
         newTab: course.delivery_mode !== 'internal' && Boolean(safeHttpUrl(course.url)),
-        image: editorialImages[index % editorialImages.length][0],
-        alt: editorialImages[index % editorialImages.length][1],
+        image: cardImages[index % cardImages.length][0],
+        alt: cardImages[index % cardImages.length][1],
       }));
     });
   } catch {
@@ -284,5 +148,10 @@ async function loadAcademy() {
   }
 }
 
-void Promise.all([loadAnnouncements(), loadReminders(), loadAcademy()]);
+page.listen(window, 'pageshow', event => {
+  if (!event.persisted) return;
+  void Promise.all([loadReminders(), loadAcademy()]);
+});
+
+void Promise.all([loadReminders(), loadAcademy()]);
 }

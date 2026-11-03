@@ -201,14 +201,17 @@ function service() {
     get lesson() { return f.state.lessons.find(row => row.id === lesson.id); }, rows };
 }
 
-test('real service authorizes on one locked client, isolates UID, CAS races and manual completion', async () => {
+test('progress authorization locks the own hierarchy and preserves CAS semantics', async () => {
   const f = service(), user = { uid: 'learner' };
   const save = data => saveProgress(f.pool, user, f.lesson.id, data);
   const results = await Promise.allSettled([save(input), save(input)]);
   assert.equal(results.filter(row => row.status === 'fulfilled').length, 1);
   assert.equal(results.find(row => row.status === 'rejected').reason.reason, 'progress_conflict');
-  assert.deepEqual(f.calls.filter(c => c.clientId === 1 && /advisory|FOR UPDATE/.test(c.sql)).slice(0, 4).map(c => c.sql.match(/advisory|FROM \w+/)[0]),
-    ['advisory', 'FROM academy', 'FROM academy_modules', 'FROM academy_lessons']);
+  const locks = f.calls.filter(c => c.clientId === 1 && /FOR UPDATE/.test(c.sql));
+  assert.match(locks[0].sql, /FROM academy WHERE/);
+  assert.match(locks[1].sql, /FROM academy_modules/);
+  assert.match(locks[2].sql, /FROM academy_lessons/);
+  assert.equal(f.calls.some(c => /pg_advisory_xact_lock|cms_documents|cms_revisions|cms_assets|7193029/.test(c.sql)), false);
   for (const client of new Set(f.calls.map(c => c.clientId))) {
     const calls = f.calls.filter(c => c.clientId === client);
     assert.equal(calls[0].sql, 'BEGIN');
@@ -224,7 +227,7 @@ test('real service authorizes on one locked client, isolates UID, CAS races and 
   assert.equal(f.rows.length, 2);
 });
 
-test('HTTP rejects external UID/invalid payloads, stale media, inactive hierarchy and unpublished sources', async t => {
+test('progress validates input, current media and active audience before persistence', async t => {
   const f = service();
   const { request } = await createAcademyHttp(t, f.pool, f.users);
   const put = data => request.put(`/api/academy/lessons/${f.lesson.id}/progress`).set('x-fixture-user', 'denied').send(data);
@@ -241,8 +244,11 @@ test('HTTP rejects external UID/invalid payloads, stale media, inactive hierarch
   f.module.active = false; await put(current).expect(404); f.module.active = true;
   f.lesson.active = false; await put(current).expect(404); f.lesson.active = true;
   f.course.audience = 'job_titles'; await put(current).expect(404); f.course.audience = 'all';
-  f.state.documents.push({ type: 'academy_lesson', source_id: f.lesson.id, blocks: null });
-  await put(current).expect(404);
+  f.course.active = false; await put(current).expect(404); f.course.active = true;
+  f.module.active = false; await put(current).expect(404); f.module.active = true;
+  f.lesson.active = false; await put(current).expect(404); f.lesson.active = true;
+  f.course.audience = 'job_titles'; await put(current).expect(404);
+  assert.equal(f.calls.some(call => /cms_documents|cms_revisions|cms_assets|7193029|pg_advisory/.test(call.sql)), false);
 });
 
 test('summary deduplicates visible IDs, ignores old media and resumes after most recent completed lesson', () => {
@@ -265,7 +271,6 @@ test('authenticated middleware selects 120/UID only for exact progress PUT, reta
     if (name === 'firebase-admin/auth') return { getAuth: () => ({ verifyIdToken: async token => ({ uid: token, email_verified: true }) }) };
     if (name === '../db') return { query: async (_sql, [uid]) => ({ rows: [{ uid }] }) };
     if (name === './policy') return { can() {}, canUseAutoCard() {}, canUsePosCards() {} };
-    if (name === './active-user') return require('../../api/middleware/active-user.js');
     if (name === './security') return { rateLimit: options => (req, _res, next) => { selected.push([options.max, options.windowMs, options.key(req)]); next(); } };
     throw new Error(name);
   } });

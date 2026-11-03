@@ -11,7 +11,6 @@ const {
 const { containsLegacyJobTitleToken } = require('../../api/route-utils');
 const { cors, errorHandler, requestOrigin, safeResponses, validateEnvironment } = require('../../api/middleware/security');
 const { imageExtension, isHttpUrl, normalizeContract, normalizeImage, sanitizeRichText, sanitizeRichValues, validateProfile, validateRegistration, validateUser } = require('../../api/middleware/validation');
-const { canManageCms } = require('../../api/cms/permissions');
 
 const manager = { uid: 'manager', role: 'admin', permissions: { manageUsers: true } };
 const superAdmin = { uid: 'root', role: 'admin', permissions: { superAdmin: true } };
@@ -90,19 +89,6 @@ test('public uploads expose only profile-photo keys and AutoCard icons stay allo
   assert.match(autocard, /function safeCard\(card\)/);
   assert.doesNotMatch(autocard, /body\.icon != null && \(typeof body\.icon/);
   assert.doesNotMatch(autocard, /body\.illustration != null && \(typeof body\.illustration/);
-});
-
-test('CMS management permission mapping stays area-scoped', () => {
-  const user = {
-    role: 'admin',
-    permissions: { manageKnowledge: true, manageAcademy: false, manageBenefits: true, manageReminders: false },
-  };
-  assert.equal(canManageCms(user, 'knowledge'), true);
-  assert.equal(canManageCms(user, 'announcement'), true);
-  assert.equal(canManageCms(user, 'academy'), false);
-  assert.equal(canManageCms(user, 'benefit'), true);
-  assert.equal(canManageCms(user, 'reminder'), false);
-  assert.equal(canManageCms(user, 'unknown'), false);
 });
 
 test('permission normalization accepts only known true booleans', () => {

@@ -115,7 +115,6 @@ services:
     volumes:
       - ./public:/usr/share/nginx/html:ro
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./nginx/editorial-route-state:/etc/nginx/editorial-route-state:ro
     depends_on:
       api:
         condition: service_healthy
@@ -142,7 +141,6 @@ services:
       PENDING_REGISTRATION_RETENTION_DAYS: ${PENDING_REGISTRATION_RETENTION_DAYS:-730}
       UPLOAD_DIR: /app/uploads
       AUTOCARD_MEDIA_ORPHAN_DAYS: ${AUTOCARD_MEDIA_ORPHAN_DAYS:-7}
-      CMS_ASSET_ORPHAN_RETENTION_DAYS: ${CMS_ASSET_ORPHAN_RETENTION_DAYS:-30}
       BULK_IMPORT_WORKER_SECRET: ${BULK_IMPORT_WORKER_SECRET:?Set BULK_IMPORT_WORKER_SECRET}
       BULK_IMPORT_API_URL: ${BULK_IMPORT_API_URL:-http://api:3000}
       CRON_BOOTSTRAP_ONLY: ${CRON_BOOTSTRAP_ONLY:-false}
