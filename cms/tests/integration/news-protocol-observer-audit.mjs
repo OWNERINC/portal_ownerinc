@@ -390,11 +390,24 @@ export function assertObserverAuditReport(report) {
   return report
 }
 
+const FINALIZER_GRANT_OPERATIONS = new Set([
+  'runtime-grants', 'observer-relation-grants', 'admin-role-reset', 'ownership-transfer', 'observer-privileges-verify',
+])
+const FINALIZER_LEDGER_OPERATIONS = new Set(['ledger-head-create', 'ledger-head-init', 'ledger-events-create'])
+
 export function sanitizeDiagnosticOutput(output) {
   const empty = { phase: null, sqlstate: null }
   for (const line of String(output || '').split(/\r?\n/u)) {
-    const finalizerMatch = /^CMS news protocol diagnostic: phase=([a-z-]+) reason=[a-z_]+ sqlstate=(none|[0-9A-Z]{5})$/u.exec(line)
-    if (finalizerMatch) return { phase: finalizerMatch[1], sqlstate: finalizerMatch[2] === 'none' ? null : finalizerMatch[2] }
+    const finalizerMatch = /^CMS news protocol diagnostic: phase=([a-z-]+) reason=[a-z0-9_]+ sqlstate=(none|[0-9A-Z]{5})(?: (.*))?$/u.exec(line)
+    if (finalizerMatch && !/[\x00-\x1f\x7f]/u.test(line)) {
+      const [, phase, sqlstate, detail] = finalizerMatch
+      const grant = /^operation=([a-z-]+)$/u.exec(detail || '')
+      const ledger = /^operation=([a-z-]+) ddl_source=mutation-ledger expected_owner=(?:cms_admin|cms_migrator)$/u.exec(detail || '')
+      if (detail === undefined || phase === 'protocol-grants' && grant && FINALIZER_GRANT_OPERATIONS.has(grant[1])
+        || phase === 'protocol-ledger-ddl' && ledger && FINALIZER_LEDGER_OPERATIONS.has(ledger[1])) {
+        return { phase, sqlstate: sqlstate === 'none' ? null : sqlstate }
+      }
+    }
     const bootstrapMatch = /^CMS bootstrap diagnostic: phase=([a-z-]+) sqlstate=(none|[0-9A-Z]{5})$/u.exec(line)
     if (bootstrapMatch) return { phase: bootstrapMatch[1], sqlstate: bootstrapMatch[2] === 'none' ? null : bootstrapMatch[2] }
     let parsed

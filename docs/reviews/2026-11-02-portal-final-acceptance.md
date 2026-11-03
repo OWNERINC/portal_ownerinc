@@ -507,7 +507,28 @@ da etapa CMS. A revisão fresca recebeu **ship**; `npm run verify` completo dess
 snapshot ampliado ainda é gate de publicação. Nenhum serviço local ou produtivo
 foi iniciado.
 
-### Remediação posterior de qs
+### Publicação browser e próximo diagnóstico do finalizer
+
+Publicado `ff46b62b2c39e5ae34566350f5a0d3dd4fde662c`, árvore
+`4d904b2daaf89748ac537e816594ffe2e07102fe`: verify isolado completo sem preload
+diagnóstico **2.296 PASS / 35 SKIP raiz +563 PASS / 11 SKIP CMS**, zero falhas.
+Sintaxe, typecheck, scanner e Compose read-only passaram. A etapa raiz levou
+415,1 s; a preparação autenticada completa passou em 43,3 s. Em CI, SMTP
+`41557757632`, B0 `41557757617` e rotação `41557757603` passaram; geral
+`41557757622` e browser `41557757652` estavam em execução nessa consulta.
+
+O incremento seguinte acrescenta somente cinco operações finitas à fase
+`protocol-grants`, com compatibilidade nos consumidores manual/finalizer/observer.
+Revisão fresca **ship**. O primário repetiu **266 PASS** no checkout de integração
+e **262 PASS** no snapshot isolado somente diagnóstico; os quatro testes de
+ambiente do observer pertencem ao incremento separado. O patch extraído
+`ddb737bc0ac26a0491778a504b349e4264891d55b37d3b95849b066ebefe6621` foi conferido
+contra a base publicada: SQL, ordem/batches, roles e coverage 0 preservados.
+Verify completo desse snapshot ainda é gate de publicação. A instrução que
+causou `42501` no manual `41550800535` permanece desconhecida; nenhuma correção
+funcional de ownership nem qualificação PostgreSQL é reivindicada aqui.
+
+### Remediação posterior de qs — evidência histórica
 
 O lock da API foi atualizado de `qs@6.16.0` para `6.16.2`, mantendo o manifest e
 as demais entradas do lock. A revisão primária confirmou o diff de três campos

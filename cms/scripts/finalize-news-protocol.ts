@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
+import { types } from 'node:util'
 import { readFileSync } from 'node:fs'
 import nativeSchema from '../src/migrations/20261006_181424_z_owner_news_native.json' with { type: 'json' }
 import {
@@ -80,12 +81,16 @@ export const finalizerDiagnosticPhases = [
   'protocol-grants', 'protocol-bootstrap-ddl', 'verify-installed', 'transaction-commit', 'transaction-rollback',
 ] as const
 export type FinalizerDiagnosticPhase = typeof finalizerDiagnosticPhases[number]
+export const finalizerGrantOperations = Object.freeze([
+  'runtime-grants', 'observer-relation-grants', 'admin-role-reset', 'ownership-transfer', 'observer-privileges-verify',
+] as const)
+export type FinalizerDiagnosticOperation = NewsMutationLedgerOperation | typeof finalizerGrantOperations[number]
 export type FinalizerTriggerDiagnosticDetails = CatalogTriggerDiagnosticDetails
 export type FinalizerFailureDiagnostic = {
   phase: FinalizerDiagnosticPhase
   reason: string
   sqlstate: string | null
-  operation?: NewsMutationLedgerOperation
+  operation?: FinalizerDiagnosticOperation
   triggerDetails?: FinalizerTriggerDiagnosticDetails
 }
 export type FinalizerCloseDiagnostic = { phase: 'admin-disconnect'; sqlstate: string | null }
@@ -272,13 +277,17 @@ function failWithTriggerDiagnostic(reason: string, details: FinalizerTriggerDiag
   throw error
 }
 
-function safeDiagnosticSqlState(error: unknown): string | null {
-  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return null
+function ownDiagnosticValue(value: unknown, key: string): unknown {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function') || types.isProxy(value)) return undefined
   try {
-    const code = Object.getOwnPropertyDescriptor(error, 'code')?.value
-    if (typeof code !== 'string' || !/^[0-9A-Z]{5}$/u.test(code) || finalizerDiagnosticReasons.has(code)) return null
-    return code
-  } catch { return null }
+    return Object.getOwnPropertyDescriptor(value, key)?.value
+  } catch { return undefined }
+}
+
+function safeDiagnosticSqlState(error: unknown): string | null {
+  const code = ownDiagnosticValue(error, 'code')
+  return typeof code === 'string' && code.length === 5 && /^[0-9A-Z]{5}$/u.test(code)
+    && !finalizerDiagnosticReasons.has(code) ? code : null
 }
 
 function normalizeDiagnosticReason(code: unknown): string {
@@ -288,18 +297,22 @@ function normalizeDiagnosticReason(code: unknown): string {
 }
 
 function diagnosticReason(error: unknown): string {
-  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return 'database_error'
-  try { return normalizeDiagnosticReason(Object.getOwnPropertyDescriptor(error, 'code')?.value) }
-  catch { return 'database_error' }
+  return normalizeDiagnosticReason(ownDiagnosticValue(error, 'code'))
 }
 
-function recordFinalizerFailure(error: unknown, phase: FinalizerDiagnosticPhase, operation?: NewsMutationLedgerOperation) {
+function diagnosticOperationForPhase(phase: FinalizerDiagnosticPhase, value: unknown): FinalizerDiagnosticOperation | undefined {
+  if (phase === 'protocol-ledger-ddl') return NEWS_MUTATION_LEDGER_STATEMENTS.find(statement => statement.operation === value)?.operation
+  if (phase === 'protocol-grants') return finalizerGrantOperations.find(operation => operation === value)
+  return undefined
+}
+
+function recordFinalizerFailure(error: unknown, phase: FinalizerDiagnosticPhase, operation?: FinalizerDiagnosticOperation) {
   if (!error || (typeof error !== 'object' && typeof error !== 'function') || finalizerFailureDiagnostics.has(error as object)) return
+  const selectedOperation = diagnosticOperationForPhase(phase, operation)
   finalizerFailureDiagnostics.set(error as object, {
     phase: finalizerDiagnosticPhases.includes(phase) ? phase : 'connection-configuration',
     reason: diagnosticReason(error), sqlstate: safeDiagnosticSqlState(error),
-    ...(phase === 'protocol-ledger-ddl' && NEWS_MUTATION_LEDGER_STATEMENTS.some(statement => statement.operation === operation)
-      ? { operation } : {}),
+    ...(selectedOperation ? { operation: selectedOperation } : {}),
     ...(finalizerTriggerDiagnosticDetails.get(error as object)
       ? { triggerDetails: finalizerTriggerDiagnosticDetails.get(error as object)! } : {}),
   })
@@ -311,33 +324,43 @@ export function getFinalizerFailureDiagnostic(error: unknown): FinalizerFailureD
 }
 
 export function formatFinalizerFailureDiagnostic(diagnostic: FinalizerFailureDiagnostic): string {
-  const phase = finalizerDiagnosticPhases.includes(diagnostic.phase) ? diagnostic.phase : 'connection-configuration'
-  const reason = finalizerDiagnosticReasons.has(diagnostic.reason) ? diagnostic.reason : 'database_error'
-  const sqlstate = typeof diagnostic.sqlstate === 'string' && /^[0-9A-Z]{5}$/u.test(diagnostic.sqlstate)
-    && !finalizerDiagnosticReasons.has(diagnostic.sqlstate) ? diagnostic.sqlstate : 'none'
-  const detail = diagnostic.triggerDetails ? formatFinalizerTriggerDiagnosticDetails(diagnostic.triggerDetails) : ''
+  const rawPhase = ownDiagnosticValue(diagnostic, 'phase')
+  const phase = finalizerDiagnosticPhases.find(value => value === rawPhase) ?? 'connection-configuration'
+  const rawReason = ownDiagnosticValue(diagnostic, 'reason'), rawState = ownDiagnosticValue(diagnostic, 'sqlstate')
+  const reason = typeof rawReason === 'string' && finalizerDiagnosticReasons.has(rawReason) ? rawReason : 'database_error'
+  const sqlstate = typeof rawState === 'string' && rawState.length === 5 && /^[0-9A-Z]{5}$/u.test(rawState)
+    && !finalizerDiagnosticReasons.has(rawState) ? rawState : 'none'
+  const triggerDetails = ownDiagnosticValue(diagnostic, 'triggerDetails')
+  const detail = triggerDetails && typeof triggerDetails === 'object' && !types.isProxy(triggerDetails)
+    ? formatFinalizerTriggerDiagnosticDetails(triggerDetails as FinalizerTriggerDiagnosticDetails) : ''
   // Source and expected owner describe this admin-only installer, not an observed
   // catalog or a driver-supplied field. Never retain SQL/message/detail from pg.
-  const operation = phase === 'protocol-ledger-ddl'
-    ? NEWS_MUTATION_LEDGER_STATEMENTS.find(statement => statement.operation === diagnostic.operation)?.operation : undefined
-  const ledgerDetail = operation ? ` operation=${operation} ddl_source=mutation-ledger expected_owner=cms_migrator` : ''
-  return `CMS news protocol diagnostic: phase=${phase} reason=${reason} sqlstate=${sqlstate}${ledgerDetail}${detail}`
+  const operation = diagnosticOperationForPhase(phase, ownDiagnosticValue(diagnostic, 'operation'))
+  const operationDetail = operation ? ` operation=${operation}`
+    + (phase === 'protocol-ledger-ddl' ? ' ddl_source=mutation-ledger expected_owner=cms_migrator' : '') : ''
+  return `CMS news protocol diagnostic: phase=${phase} reason=${reason} sqlstate=${sqlstate}${operationDetail}${detail}`
 }
 
 function formatFinalizerTriggerDiagnosticDetails(details: FinalizerTriggerDiagnosticDetails): string {
-  const integer = (value: number | null) => Number.isSafeInteger(value) ? String(value) : 'none'
-  const boolean = (value: boolean | null) => value === true ? 'yes' : value === false ? 'no' : 'none'
-  return ` trigger_index=${integer(details.expectedIndex)} expected_count=${integer(details.expectedCount)}`
-    + ` observed_count=${integer(details.observedCount)} matched_count=${integer(details.matchingCount)}`
-    + ` relation_schema_match=${boolean(details.relationSchemaMatch)} enabled_match=${boolean(details.enabledMatch)}`
-    + ` function_name_match=${boolean(details.functionNameMatch)} function_schema_match=${boolean(details.functionSchemaMatch)}`
-    + ` function_identity_match=${boolean(details.functionIdentityMatch)}`
-    + ` event_mask=${integer(details.eventMask)} expected_event_mask=${integer(details.expectedEventMask)}`
-    + ` attribute_count=${integer(details.attributeCount)} attribute_type_match=${boolean(details.attributeTypeMatch)}`
-    + ` attribute_text_shape_match=${boolean(details.attributeTextShapeMatch)}`
-    + ` argument_count=${integer(details.argumentCount)} argument_bytes=${integer(details.argumentBytes)}`
-    + ` no_condition=${boolean(details.noCondition)} definition_exact=${boolean(details.definitionExact)}`
-    + ` definition_normalized=${boolean(details.definitionNormalized)}`
+  const integer = (key: keyof FinalizerTriggerDiagnosticDetails) => {
+    const value = ownDiagnosticValue(details, key)
+    return Number.isSafeInteger(value) ? String(value) : 'none'
+  }
+  const boolean = (key: keyof FinalizerTriggerDiagnosticDetails) => {
+    const value = ownDiagnosticValue(details, key)
+    return value === true ? 'yes' : value === false ? 'no' : 'none'
+  }
+  return ` trigger_index=${integer('expectedIndex')} expected_count=${integer('expectedCount')}`
+    + ` observed_count=${integer('observedCount')} matched_count=${integer('matchingCount')}`
+    + ` relation_schema_match=${boolean('relationSchemaMatch')} enabled_match=${boolean('enabledMatch')}`
+    + ` function_name_match=${boolean('functionNameMatch')} function_schema_match=${boolean('functionSchemaMatch')}`
+    + ` function_identity_match=${boolean('functionIdentityMatch')}`
+    + ` event_mask=${integer('eventMask')} expected_event_mask=${integer('expectedEventMask')}`
+    + ` attribute_count=${integer('attributeCount')} attribute_type_match=${boolean('attributeTypeMatch')}`
+    + ` attribute_text_shape_match=${boolean('attributeTextShapeMatch')}`
+    + ` argument_count=${integer('argumentCount')} argument_bytes=${integer('argumentBytes')}`
+    + ` no_condition=${boolean('noCondition')} definition_exact=${boolean('definitionExact')}`
+    + ` definition_normalized=${boolean('definitionNormalized')}`
 }
 
 export function getFinalizerCloseDiagnostic(error: unknown): FinalizerCloseDiagnostic | null {
@@ -1799,7 +1822,7 @@ ${version === 2 ? `ALTER FUNCTION ${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE} OWNE
 async function runProtocolFinalizerOperation(client: FinalizerClient, operation: ProtocolFinalizerOperation, portalDatabase: string):
 Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
   let phase: FinalizerDiagnosticPhase = 'transaction-begin'
-  let ledgerOperation: NewsMutationLedgerOperation | undefined
+  let diagnosticOperation: FinalizerDiagnosticOperation | undefined
   let committed = false
   try {
     await client.query('BEGIN')
@@ -1822,35 +1845,47 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
       await client.query('SET LOCAL ROLE cms_migrator')
       phase = 'protocol-ledger-ddl'
       for (const statement of NEWS_MUTATION_LEDGER_STATEMENTS) {
-        ledgerOperation = statement.operation
+        diagnosticOperation = statement.operation
         await client.query(statement.sql)
       }
-      ledgerOperation = undefined
+      diagnosticOperation = undefined
       phase = 'protocol-trigger-ddl'
       await client.query(migrationOwnedProtocolDDL(buildNewsMutationTriggersDDL()))
       phase = 'protocol-binding-ddl'
       await client.query(migrationOwnedProtocolDDL(NEWS_MIGRATION_ITEM_BINDING_DDL))
       phase = 'protocol-grants'
+      diagnosticOperation = 'runtime-grants'
       await client.query(grantsSQL)
+      diagnosticOperation = undefined
       phase = 'protocol-bootstrap-ddl'
       await client.query(migrationOwnedProtocolDDL(buildNewsMigrationBootstrapRunDDL()))
       phase = 'protocol-grants'
+      diagnosticOperation = 'observer-relation-grants'
       await client.query(observerRelationProvisioningSQL(portalDatabase))
+      diagnosticOperation = 'admin-role-reset'
       await client.query('RESET ROLE')
+      diagnosticOperation = 'ownership-transfer'
       await client.query(protocolOwnershipTransferSQL(2))
+      diagnosticOperation = 'observer-privileges-verify'
       const observer = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
       if (observer.rows[0]?.safe !== true) fail('observer_privilege_contract_mismatch')
+      diagnosticOperation = undefined
       await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
     } else if (operation === 'upgrade-v1-to-v2' && protocolState === 'v1') {
       phase = 'protocol-bootstrap-ddl'
       await client.query('SET LOCAL ROLE cms_migrator')
       await client.query(migrationOwnedProtocolDDL(buildNewsMigrationBootstrapRunDDL()))
       phase = 'protocol-grants'
+      diagnosticOperation = 'observer-relation-grants'
       await client.query(observerRelationProvisioningSQL(portalDatabase))
+      diagnosticOperation = 'admin-role-reset'
       await client.query('RESET ROLE')
+      diagnosticOperation = 'ownership-transfer'
       await client.query(`ALTER FUNCTION ${NEWS_MIGRATION_BOOTSTRAP_RUN_SIGNATURE} OWNER TO cms_control`)
+      diagnosticOperation = 'observer-privileges-verify'
       const observer = await client.query(newsProtocolObserverPrivilegesVerificationSQL)
       if (observer.rows[0]?.safe !== true) fail('observer_privilege_contract_mismatch')
+      diagnosticOperation = undefined
       await verifyInstalled(client, next => { phase = next }, { protocolVersion: 2 })
     }
     phase = 'transaction-commit'
@@ -1858,7 +1893,7 @@ Promise<{ installed: boolean; ready: false; coverageVersion: 0 }> {
     committed = true
     return { installed: operation === 'finalize' && protocolState === 'empty', ready: false, coverageVersion: 0 }
   } catch (error) {
-    recordFinalizerFailure(error, phase, ledgerOperation)
+    recordFinalizerFailure(error, phase, diagnosticOperation)
     if (!committed) {
       try { await client.query('ROLLBACK') } catch { /* Keep original failure; connection is discarded below. */ }
     }

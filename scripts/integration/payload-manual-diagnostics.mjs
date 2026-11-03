@@ -1,6 +1,8 @@
 // Pure diagnostic transport for the disposable manual fixture. No DB, runtime
 // catalog or lifecycle dependency. These finite vocabularies mirror the existing
 // finalizer formatter; the offline test checks exact vocabulary/formatter parity.
+import { types } from 'node:util';
+
 export const manualFinalizerPhases = Object.freeze([
   'connection-configuration', 'admin-connect', 'transaction-begin', 'transaction-lock',
   'audit-transaction-begin', 'audit-identity', 'audit-transaction-commit',
@@ -36,6 +38,17 @@ export const manualFinalizerReasons = Object.freeze([
   'database_error',
 ]);
 const phases = new Set(manualFinalizerPhases), reasons = new Set(manualFinalizerReasons);
+export const manualFinalizerGrantOperations = Object.freeze([
+  'runtime-grants', 'observer-relation-grants', 'admin-role-reset', 'ownership-transfer', 'observer-privileges-verify',
+]);
+export const manualFinalizerLedgerOperations = Object.freeze(['ledger-head-create', 'ledger-head-init', 'ledger-events-create']);
+function operationForPhase(phase, operation) {
+  return (phase === 'protocol-grants' ? manualFinalizerGrantOperations
+    : phase === 'protocol-ledger-ddl' ? manualFinalizerLedgerOperations : []).find(value => value === operation);
+}
+function operationSuffix(phase, operation) {
+  return ` operation=${operation}` + (phase === 'protocol-ledger-ddl' ? ' ddl_source=mutation-ledger expected_owner=cms_migrator' : '');
+}
 const functions = new Set(['owner_news_mutation_guard_stmt', 'owner_news_mutation_capture_row', 'owner_news_seal_run',
   'owner_news_migration_item_binding_guard', 'owner_news_bootstrap_run']);
 const fields = new Set(['sig', 'sec', 'owner', 'config', 'source', 'return', 'strict', 'modes', 'names']);
@@ -43,12 +56,15 @@ const prefix = 'MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code=';
 const lineLimit = 2048, captureLimit = 64 * 1024;
 
 // Own data only: never read message/code accessors, inherited fields or causes.
-export function ownDiagnosticString(value, key) {
+function ownDiagnosticValue(value, key) {
   try {
-    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null;
-    const field = Object.getOwnPropertyDescriptor(value, key)?.value;
-    return typeof field === 'string' && field.length <= lineLimit && !/[\x00-\x1f\x7f]/u.test(field) ? field : null;
-  } catch { return null; }
+    if (!value || (typeof value !== 'object' && typeof value !== 'function') || types.isProxy(value)) return undefined;
+    return Object.getOwnPropertyDescriptor(value, key)?.value;
+  } catch { return undefined; }
+}
+export function ownDiagnosticString(value, key) {
+  const field = ownDiagnosticValue(value, key);
+  return typeof field === 'string' && field.length <= lineLimit && !/[\x00-\x1f\x7f]/u.test(field) ? field : null;
 }
 
 function canonicalCode(code) {
@@ -71,28 +87,28 @@ function canonicalCode(code) {
 export function isManualFinalizerDiagnostic(line) {
   if (typeof line !== 'string' || line.length > lineLimit || /[\r\n\x00-\x1f\x7f]/u.test(line)) return false;
   if (line.startsWith(prefix)) return canonicalCode(line.slice(prefix.length));
-  const match = /^CMS news protocol diagnostic: phase=([a-z-]+) reason=([a-z0-9_]+) sqlstate=(none|[0-9A-Z]{5})$/u.exec(line);
-  return Boolean(match && phases.has(match[1]) && reasons.has(match[2]));
+  const match = /^CMS news protocol diagnostic: phase=([a-z-]+) reason=([a-z0-9_]+) sqlstate=(none|[0-9A-Z]{5})(.*)$/u.exec(line);
+  if (!match || !phases.has(match[1]) || !reasons.has(match[2])) return false;
+  if (!match[4]) return true;
+  const operation = operationForPhase(match[1], /^ operation=([a-z-]+)(?: |$)/u.exec(match[4])?.[1]);
+  return Boolean(operation && match[4] === operationSuffix(match[1], operation));
 }
 
 /** The fixture supplies getFinalizerFailureDiagnostic's result and the existing
- * production formatter. Project only the three transport fields, excluding any
+ * production formatter. Project only the three transport fields and a valid
+ * phase-bound operation. Invalid optional operations are omitted, excluding any
  * optional detail object and any error text. The consumer independently checks
  * the formatted line. Invalid canonical detail falls back to the safe summary. */
 export function serializeManualFinalizerDiagnostic(error, diagnostic, formatDiagnostic) {
   const code = ownDiagnosticString(error, 'code');
   if (canonicalCode(code)) return `${prefix}${code}`;
   const phase = ownDiagnosticString(diagnostic, 'phase'), reason = ownDiagnosticString(diagnostic, 'reason');
-  let sqlstate;
-  try {
-    const field = Object.getOwnPropertyDescriptor(diagnostic, 'sqlstate');
-    if (!field || !Object.hasOwn(field, 'value')) return null;
-    sqlstate = field.value;
-  } catch { return null; }
+  const sqlstate = ownDiagnosticValue(diagnostic, 'sqlstate');
   if (!phases.has(phase) || !reasons.has(reason) || (sqlstate !== null &&
     (typeof sqlstate !== 'string' || !/^[0-9A-Z]{5}$/u.test(sqlstate) || /[\r\n]/u.test(sqlstate)))) return null;
   try {
-    const line = formatDiagnostic({ phase, reason, sqlstate });
+    const operation = operationForPhase(phase, ownDiagnosticString(diagnostic, 'operation'));
+    const line = formatDiagnostic({ phase, reason, sqlstate, ...(operation ? { operation } : {}) });
     return isManualFinalizerDiagnostic(line) ? line : null;
   } catch { return null; }
 }
@@ -103,8 +119,9 @@ export function serializeManualFinalizerDiagnostic(error, diagnostic, formatDiag
 export function extractManualFinalizerDiagnostic(stdout, stderr) {
   let summary = null;
   for (const captured of [stdout, stderr]) {
-    if (!(typeof captured === 'string' || Buffer.isBuffer(captured)) || Buffer.byteLength(captured) > captureLimit) continue;
-    for (const raw of captured.toString().split(/\r?\n/u)) {
+    if (types.isProxy(captured) || !(typeof captured === 'string' || Buffer.isBuffer(captured)) || Buffer.byteLength(captured) > captureLimit) continue;
+    const text = typeof captured === 'string' ? captured : Buffer.prototype.toString.call(captured, 'utf8');
+    for (const raw of text.split(/\r?\n/u)) {
       const line = raw.replace(/^ {0,16}# /u, '');
       if (!isManualFinalizerDiagnostic(line)) continue;
       if (line.startsWith(prefix)) return line;

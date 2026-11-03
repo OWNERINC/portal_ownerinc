@@ -705,9 +705,12 @@ const FINALIZER_DIAGNOSTIC_REASONS = new Set([
   'trigger_definition_mismatch', 'runtime_verifier_role_switch_failed', 'runtime_protocol_acl_mismatch',
   'admin_role_restore_failed', 'control_role_table_acl_mismatch', 'control_role_column_acl_mismatch',
   'control_role_sequence_acl_mismatch', 'public_function_execute_outside_allowlist', 'protocol_acl_mismatch',
-  'unexpected_control_owned_objects', 'database_error',
+  'unexpected_control_owned_objects', 'observer_privilege_contract_mismatch', 'database_error',
 ])
 const FINALIZER_LEDGER_OPERATIONS = new Set(['ledger-head-create', 'ledger-head-init', 'ledger-events-create'])
+const FINALIZER_GRANT_OPERATIONS = new Set([
+  'runtime-grants', 'observer-relation-grants', 'admin-role-reset', 'ownership-transfer', 'observer-privileges-verify',
+])
 const FINALIZER_TRIGGER_DETAIL_KEYS = [
   'trigger_index', 'expected_count', 'observed_count', 'matched_count', 'relation_schema_match', 'enabled_match',
   'function_name_match', 'function_schema_match', 'function_identity_match', 'event_mask', 'expected_event_mask',
@@ -732,21 +735,28 @@ function parseFixedFinalizerDiagnostic(output) {
   const diagnosticLines = lines.filter(line => line.startsWith('CMS news protocol diagnostic:'))
   if (diagnosticLines.length === 0) return { status: 'missing', diagnostic: null }
   if (diagnosticLines.length !== 1) return { status: 'ambiguous', diagnostic: null }
-  const match = /^CMS news protocol diagnostic: phase=([a-z-]+) reason=([a-z_]+) sqlstate=(none|[0-9A-Z]{5})(?: (.*))?$/u.exec(diagnosticLines[0])
-  if (!match) return { status: 'malformed', diagnostic: null }
+  const match = /^CMS news protocol diagnostic: phase=([a-z-]+) reason=([a-z0-9_]+) sqlstate=(none|[0-9A-Z]{5})(?: (.*))?$/u.exec(diagnosticLines[0])
+  if (!match || /[\x00-\x1f\x7f]/u.test(diagnosticLines[0])) return { status: 'malformed', diagnostic: null }
   const [, phase, reason, sqlstate, detailText] = match
   if (!FINALIZER_DIAGNOSTIC_PHASES.has(phase) || !FINALIZER_DIAGNOSTIC_REASONS.has(reason)) {
     return { status: 'unknown_enum', diagnostic: null }
   }
   let triggerDetails = null
-  let ledgerDetails = null
+  let operationDetails = null
   if (detailText !== undefined) {
-    const ledgerMatch = /^operation=([a-z-]+) ddl_source=mutation-ledger expected_owner=cms_admin$/u.exec(detailText)
-    if (ledgerMatch) {
+    const grantMatch = /^operation=([a-z-]+)$/u.exec(detailText)
+    // Historical admin and current migrator are diagnostic metadata only.
+    const ledgerMatch = /^operation=([a-z-]+) ddl_source=mutation-ledger expected_owner=(cms_admin|cms_migrator)$/u.exec(detailText)
+    if (grantMatch) {
+      if (phase !== 'protocol-grants' || !FINALIZER_GRANT_OPERATIONS.has(grantMatch[1])) {
+        return { status: 'unknown_enum', diagnostic: null }
+      }
+      operationDetails = { operation: grantMatch[1] }
+    } else if (ledgerMatch) {
       if (phase !== 'protocol-ledger-ddl' || !FINALIZER_LEDGER_OPERATIONS.has(ledgerMatch[1])) {
         return { status: 'unknown_enum', diagnostic: null }
       }
-      ledgerDetails = { operation: ledgerMatch[1], ddlSource: 'mutation-ledger', expectedOwner: 'cms_admin' }
+      operationDetails = { operation: ledgerMatch[1], ddlSource: 'mutation-ledger', expectedOwner: ledgerMatch[2] }
     } else {
       if (!FINALIZER_TRIGGER_DETAILS_PATTERN.test(detailText)) return { status: 'malformed', diagnostic: null }
       const values = Object.fromEntries(detailText.split(' ').map(field => {
@@ -768,7 +778,7 @@ function parseFixedFinalizerDiagnostic(output) {
     }
   }
   return { status: 'parsed', diagnostic: { phase, reason, sqlstate,
-    ...(ledgerDetails || {}), ...(triggerDetails ? { triggerDetails } : {}) } }
+    ...(operationDetails || {}), ...(triggerDetails ? { triggerDetails } : {}) } }
 }
 
 export function createAtomicRollbackEvidenceRecord() {

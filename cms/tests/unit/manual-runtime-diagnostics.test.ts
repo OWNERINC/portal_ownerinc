@@ -4,9 +4,13 @@ import { readFile } from 'node:fs/promises'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runFinalizer, getFinalizerFailureDiagnostic, formatFinalizerFailureDiagnostic,
-  finalizerDiagnosticPhases, type FinalizerClient } from '../../scripts/finalize-news-protocol'
+  finalizerDiagnosticPhases, finalizerGrantOperations, type FinalizerClient } from '../../scripts/finalize-news-protocol'
+import { NEWS_MUTATION_LEDGER_STATEMENTS } from '../../src/publication/mutation-ledger'
 import { runManualRuntimeFinalizer } from '../integration/manual-runtime-finalizer'
+import { createAtomicRollbackEvidenceRecord, recordFinalizerCliEvidence } from '../integration/protocol-finalizer.mjs'
+import { sanitizeDiagnosticOutput } from '../integration/news-protocol-observer-audit.mjs'
 import { manualFinalizerPhases, manualFinalizerReasons, ownDiagnosticString, serializeManualFinalizerDiagnostic,
+  manualFinalizerGrantOperations, manualFinalizerLedgerOperations,
   isManualFinalizerDiagnostic, extractManualFinalizerDiagnostic } from '../../../scripts/integration/payload-manual-diagnostics.mjs'
 
 const privateCanary = 'PRIVATE_DIAGNOSTIC_CANARY_981c'
@@ -33,6 +37,8 @@ function failedClient(at: 'connect' | 'begin' | 'lock' | 'identity' | 'migration
 
 test('consumer vocabulary exactly matches the existing production formatter, including its private reason set', async () => {
   assert.deepEqual(manualFinalizerPhases, finalizerDiagnosticPhases)
+  assert.deepEqual(manualFinalizerGrantOperations, finalizerGrantOperations)
+  assert.deepEqual(manualFinalizerLedgerOperations, NEWS_MUTATION_LEDGER_STATEMENTS.map(statement => statement.operation))
   const source = await readFile(new URL('../../scripts/finalize-news-protocol.ts', import.meta.url), 'utf8')
   const body = /const finalizerDiagnosticReasons = new Set\(\[([\s\S]*?)\]\)/u.exec(source)?.[1]
   assert.ok(body)
@@ -106,7 +112,7 @@ test('no error, diagnostic, optional-detail or cause getter is evaluated', async
     assert.equal(serializeManualFinalizerDiagnostic(raw, forged, formatFinalizerFailureDiagnostic), null)
   }
   assert.equal(serializeManualFinalizerDiagnostic(new Proxy({}, { getOwnPropertyDescriptor: getter }), null, formatFinalizerFailureDiagnostic), null)
-  assert.equal(reads, 1, 'only the hostile Proxy descriptor trap runs; accessors never run')
+  assert.equal(reads, 0, 'neither accessors nor proxy traps run')
 })
 
 for (const [label, forged] of [
@@ -205,4 +211,179 @@ test('actual command consumer rejects failure with only the validated TAP diagno
   assert.match(source, /const message = ownDiagnosticString\(error, 'message'\)/u)
   assert.match(source, /isManualFinalizerDiagnostic\(message\)/u)
   assert.doesNotMatch(source, /CMS news protocol diagnostic: phase=\[a-z/u)
+})
+
+for (const [phase, operations] of [['protocol-grants', finalizerGrantOperations],
+  ['protocol-ledger-ddl', NEWS_MUTATION_LEDGER_STATEMENTS.map(statement => statement.operation)]] as const) {
+  for (const operation of operations) test(`phase-bound ${operation} survives canonical format, serialization and whole-line TAP extraction`, () => {
+    const diagnostic = { phase, reason: 'database_error', sqlstate: '42501', operation }
+    const expected = `CMS news protocol diagnostic: phase=${phase} reason=database_error sqlstate=42501 operation=${operation}`
+      + (phase === 'protocol-ledger-ddl' ? ' ddl_source=mutation-ledger expected_owner=cms_migrator' : '')
+    assert.equal(formatFinalizerFailureDiagnostic(diagnostic), expected)
+    assert.equal(serializeManualFinalizerDiagnostic(new Error(privateCanary), diagnostic, formatFinalizerFailureDiagnostic), expected)
+    for (const prefix of ['', '# ', '    # ']) assert.equal(extractManualFinalizerDiagnostic(`${privateCanary}\n${prefix}${expected}\r\n`, ''), expected)
+    assert.equal(extractManualFinalizerDiagnostic(`# ${expected}\n`, canonical), canonical)
+    assert.equal(serializeManualFinalizerDiagnostic({ code: canonical.slice('MANUAL_RUNTIME_FINALIZER_DIAGNOSTIC code='.length) },
+      diagnostic, formatFinalizerFailureDiagnostic), canonical)
+    for (const otherPhase of finalizerDiagnosticPhases.filter(value => value !== phase)) {
+      const base = `CMS news protocol diagnostic: phase=${otherPhase} reason=database_error sqlstate=42501`
+      assert.equal(formatFinalizerFailureDiagnostic({ ...diagnostic, phase: otherPhase }), base)
+      assert.equal(serializeManualFinalizerDiagnostic({}, { ...diagnostic, phase: otherPhase }, formatFinalizerFailureDiagnostic), base)
+      assert.equal(extractManualFinalizerDiagnostic('', expected.replace(`phase=${phase}`, `phase=${otherPhase}`)), null)
+    }
+    for (const suffix of [` ${privateCanary}`, `\n${privateCanary}`, ':private', '\r', '\n']) {
+      assert.equal(isManualFinalizerDiagnostic(expected + suffix), false)
+    }
+  })
+}
+
+test('invalid optional operation data falls back to the legacy summary; malformed transmitted suffixes never yield a prefix', () => {
+  const base = { phase: 'protocol-grants' as const, reason: 'database_error', sqlstate: '42501' }
+  const legacy = 'CMS news protocol diagnostic: phase=protocol-grants reason=database_error sqlstate=42501'
+  for (const operation of [undefined, null, privateCanary, 'ownership-transfer\n', `ownership-transfer ${privateCanary}`,
+    'ownership-transfer\r', 'ledger-head-create', {}, ['ownership-transfer']]) {
+    assert.equal(formatFinalizerFailureDiagnostic({ ...base, operation: operation as never }), legacy)
+    assert.equal(serializeManualFinalizerDiagnostic({}, { ...base, operation }, formatFinalizerFailureDiagnostic), legacy)
+  }
+  assert.equal(serializeManualFinalizerDiagnostic({}, base, formatFinalizerFailureDiagnostic), legacy)
+  assert.equal(extractManualFinalizerDiagnostic('', legacy), legacy)
+  for (const suffix of [' operation=unknown', ' operation=ownership-transfer private=value',
+    ' operation=ownership-transfer operation=runtime-grants', ' operation=ownership-transfer ddl_source=mutation-ledger expected_owner=cms_migrator',
+    ' operation=ledger-head-create', ' operation=ownership-transfer ', ' operation=ownership-transfer:private']) {
+    assert.equal(extractManualFinalizerDiagnostic('', `# ${legacy}${suffix}\n`), null)
+  }
+  const ledger = legacy.replace('protocol-grants', 'protocol-ledger-ddl') + ' operation=ledger-head-create'
+  for (const suffix of ['', ' ddl_source=private expected_owner=cms_migrator', ' ddl_source=mutation-ledger expected_owner=private']) {
+    assert.equal(extractManualFinalizerDiagnostic('', ledger + suffix), null)
+  }
+})
+
+test('formatter and operation transport do not invoke getters, proxies, coercion or raw error properties', async () => {
+  let reads = 0
+  const trap = () => { reads++; throw new Error(privateCanary) }
+  const base = { phase: 'protocol-grants' as const, reason: 'database_error', sqlstate: '42501' }
+  const legacy = 'CMS news protocol diagnostic: phase=protocol-grants reason=database_error sqlstate=42501'
+  for (const key of ['operation', 'triggerDetails', 'cause', 'message']) {
+    const diagnostic = Object.defineProperty({ ...base }, key, { get: trap })
+    assert.equal(formatFinalizerFailureDiagnostic(diagnostic), legacy)
+    assert.equal(serializeManualFinalizerDiagnostic({}, diagnostic, formatFinalizerFailureDiagnostic), legacy)
+  }
+  for (const key of ['phase', 'reason', 'sqlstate']) {
+    const diagnostic = Object.defineProperty({ ...base }, key, { get: trap })
+    assert.ok(!formatFinalizerFailureDiagnostic(diagnostic).includes(privateCanary))
+    assert.equal(serializeManualFinalizerDiagnostic({}, diagnostic, formatFinalizerFailureDiagnostic), null)
+  }
+  const proxy = new Proxy(base, { get: trap, getOwnPropertyDescriptor: trap, getPrototypeOf: trap, ownKeys: trap })
+  const revoked = Proxy.revocable(base, {}); revoked.revoke()
+  for (const value of [proxy, revoked.proxy]) {
+    assert.equal(formatFinalizerFailureDiagnostic(value), 'CMS news protocol diagnostic: phase=connection-configuration reason=database_error sqlstate=none')
+    assert.equal(serializeManualFinalizerDiagnostic(value, value, formatFinalizerFailureDiagnostic), null)
+    assert.equal(extractManualFinalizerDiagnostic(value, value), null)
+    assert.equal(formatFinalizerFailureDiagnostic({ ...base, operation: value as never }), legacy)
+    const { client } = failedClient('connect', value)
+    // node:assert inspects rejected objects itself; keep the hostile proxy out
+    // of that unrelated inspection so the counter measures our code boundary.
+    let rejected = false
+    try { await runFinalizer(env, client) } catch (error) { rejected = error === value }
+    assert.equal(rejected, true)
+    assert.deepEqual(getFinalizerFailureDiagnostic(value), { phase: 'admin-connect', reason: 'database_error', sqlstate: null })
+  }
+  const nested = { ...base, triggerDetails: Object.defineProperty({}, 'expectedIndex', { get: trap }) }
+  assert.ok(!formatFinalizerFailureDiagnostic(nested as never).includes(privateCanary))
+  assert.equal(reads, 0)
+})
+
+// Compatibility through the actual CLI consumer APIs, not copies of their parsers.
+function finalizerCliDiagnostic(output: string) {
+  const record = createAtomicRollbackEvidenceRecord()
+  const result = recordFinalizerCliEvidence(record, { status: 1, output })
+  assert.equal(record.status, 1); assert.equal(result.exitCode, 1)
+  assert.equal(result.expectedPublicFunctionRejection, false)
+  assert.equal(JSON.stringify(record).includes(privateCanary), false)
+  return result
+}
+
+for (const operation of finalizerGrantOperations) test(`real formatter ${operation} is compatible with finalizer and observer CLI consumers`, () => {
+  const diagnostic = { phase: 'protocol-grants' as const, reason: 'database_error', sqlstate: '42501', operation }
+  const line = formatFinalizerFailureDiagnostic(diagnostic)
+  for (const newline of ['\n', '\r\n']) {
+    const output = `${privateCanary}${newline}${line}${newline}`
+    const result = finalizerCliDiagnostic(output)
+    assert.equal(result.diagnosticStatus, 'parsed'); assert.deepEqual(result.diagnostic, diagnostic)
+    assert.deepEqual(sanitizeDiagnosticOutput(output), { phase: 'protocol-grants', sqlstate: '42501' })
+  }
+  for (const phase of finalizerDiagnosticPhases.filter(phase => phase !== 'protocol-grants')) {
+    const forged = line.replace('phase=protocol-grants', `phase=${phase}`)
+    assert.equal(finalizerCliDiagnostic(forged).diagnostic, null)
+    assert.deepEqual(sanitizeDiagnosticOutput(forged), { phase: null, sqlstate: null })
+  }
+})
+
+for (const { operation } of NEWS_MUTATION_LEDGER_STATEMENTS) test(`real formatter ${operation} and historical owner metadata round-trip through both CLI consumers`, () => {
+  const diagnostic = { phase: 'protocol-ledger-ddl' as const, reason: 'database_error', sqlstate: '42501', operation }
+  const current = formatFinalizerFailureDiagnostic(diagnostic)
+  assert.ok(current.endsWith('ddl_source=mutation-ledger expected_owner=cms_migrator'))
+  for (const owner of ['cms_admin', 'cms_migrator']) {
+    const line = current.replace('expected_owner=cms_migrator', `expected_owner=${owner}`)
+    const result = finalizerCliDiagnostic(`${privateCanary}\r\n${line}\r\n`)
+    assert.equal(result.diagnosticStatus, 'parsed')
+    assert.deepEqual(result.diagnostic, { ...diagnostic, ddlSource: 'mutation-ledger', expectedOwner: owner })
+    assert.deepEqual(sanitizeDiagnosticOutput(line), { phase: 'protocol-ledger-ddl', sqlstate: '42501' })
+    for (const phase of finalizerDiagnosticPhases.filter(phase => phase !== 'protocol-ledger-ddl')) {
+      const forged = line.replace('phase=protocol-ledger-ddl', `phase=${phase}`)
+      assert.equal(finalizerCliDiagnostic(forged).diagnostic, null)
+      assert.deepEqual(sanitizeDiagnosticOutput(forged), { phase: null, sqlstate: null })
+    }
+  }
+})
+
+test('CLI consumers preserve legacy summaries and fixed observer guard failures with grant operations', () => {
+  for (const sqlstate of [null, '42501']) {
+    const diagnostic = { phase: 'protocol-grants' as const, reason: 'observer_privilege_contract_mismatch', sqlstate,
+      operation: 'observer-privileges-verify' as const }
+    for (const value of [diagnostic, { phase: diagnostic.phase, reason: diagnostic.reason, sqlstate }]) {
+      const line = formatFinalizerFailureDiagnostic(value)
+      assert.deepEqual(finalizerCliDiagnostic(line).diagnostic, { ...value, sqlstate: sqlstate ?? 'none' })
+      assert.deepEqual(sanitizeDiagnosticOutput(line), { phase: value.phase, sqlstate })
+    }
+  }
+})
+
+test('both CLI consumers reject unknown operations, mixed metadata and trailing junk as whole lines', () => {
+  const grant = formatFinalizerFailureDiagnostic({ phase: 'protocol-grants', reason: 'database_error', sqlstate: '42501', operation: 'ownership-transfer' })
+  const ledger = formatFinalizerFailureDiagnostic({ phase: 'protocol-ledger-ddl', reason: 'database_error', sqlstate: '42501', operation: 'ledger-head-create' })
+  for (const forged of [
+    grant.replace('ownership-transfer', privateCanary), grant.replace('ownership-transfer', 'unknown-operation'),
+    `${grant} ${privateCanary}`, `${grant}:suffix`, `${grant} operation=runtime-grants`, `${grant} `, `${grant}\r`, `${grant}\t`,
+    grant.replace('ownership-transfer', 'ownership-\rtransfer'),
+    `${grant} ddl_source=mutation-ledger expected_owner=cms_admin`,
+    `${grant} ddl_source=mutation-ledger expected_owner=cms_migrator`,
+    `${ledger} ${privateCanary}`, `${ledger} `, `${ledger}\r`,
+    ledger.replace('expected_owner=cms_migrator', 'expected_owner=cms_runtime'),
+    ledger.replace('expected_owner=cms_migrator', `expected_owner=${privateCanary}`),
+    ledger.replace('ddl_source=mutation-ledger', `ddl_source=${privateCanary}`),
+    ledger.replace('ledger-head-create', 'unknown-operation'),
+    ledger.replace('ledger-head-create', 'ownership-transfer'),
+    ledger.replace(' ddl_source=mutation-ledger expected_owner=cms_migrator', ''),
+    ...[grant, ledger].flatMap(line => [`prefix: ${line}`, `# ${line}`, ` ${line}`, `\x1b[31m${line}`]),
+  ]) {
+    assert.equal(finalizerCliDiagnostic(forged).diagnostic, null)
+    assert.deepEqual(sanitizeDiagnosticOutput(forged), { phase: null, sqlstate: null })
+  }
+})
+
+test('CLI consumers retain their existing duplicate policy: finalizer ambiguous, observer first valid line', () => {
+  const first = formatFinalizerFailureDiagnostic({ phase: 'protocol-grants', reason: 'database_error', sqlstate: '42501', operation: 'runtime-grants' })
+  const second = formatFinalizerFailureDiagnostic({ phase: 'protocol-ledger-ddl', reason: 'database_error', sqlstate: '42P01', operation: 'ledger-head-init' })
+  for (const newline of ['\n', '\r\n']) {
+    for (const repeated of [first, second, `${first} ${privateCanary}`]) {
+      const output = `${first}${newline}${repeated}${newline}`
+      const result = finalizerCliDiagnostic(output)
+      assert.equal(result.diagnosticStatus, 'ambiguous'); assert.equal(result.diagnostic, null)
+      assert.deepEqual(sanitizeDiagnosticOutput(output), { phase: 'protocol-grants', sqlstate: '42501' })
+    }
+    const malformedFirst = `${first} ${privateCanary}${newline}${second}`
+    assert.equal(finalizerCliDiagnostic(malformedFirst).diagnosticStatus, 'ambiguous')
+    assert.deepEqual(sanitizeDiagnosticOutput(malformedFirst), { phase: 'protocol-ledger-ddl', sqlstate: '42P01' })
+  }
 })
