@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { formatPreparationFailure, projectPreparationFailure } from '../helpers/payload-preparation-attribution.mjs';
 
 const required = process.env.PAYLOAD_REQUIRE_NATIVE_RECOVERY === '1';
 const reportDirectory = path.resolve('recovery-ci-reports');
@@ -132,7 +133,7 @@ test('production recovery signed contracts, closed witness, database reconciliat
   t.diagnostic(result.stderr.trim());
 });
 
-test('native ADMIN, PostgreSQL, historical application and forced-witness qualification', { skip: !required }, () => {
+test('native ADMIN, PostgreSQL, historical application and forced-witness qualification', { skip: !required }, t => {
   assert.equal(process.platform, 'linux');
   assert.equal(process.getuid(), 0);
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
@@ -142,6 +143,15 @@ test('native ADMIN, PostgreSQL, historical application and forced-witness qualif
   assert.deepEqual(JSON.parse(proof.stdout), { ownedDetachedDescendantsReaped: true, idleAndCrashedWork: true });
   const preparation = nativeRun(process.execPath, ['--test', '--test-reporter=tap',
     'tests/unit/payload-preparation-authentication.test.mjs'], 420, 60, { PAYLOAD_REQUIRE_NATIVE_PREPARATION: '1' });
+  if (preparation.error?.code !== undefined || preparation.status !== 0
+    || !/# skipped 0\b/u.test(preparation.stdout) || !/# fail 0\b/u.test(preparation.stdout)) {
+    try {
+      t.diagnostic(formatPreparationFailure(projectPreparationFailure(preparation)));
+    } catch {
+      // Diagnostic failure must never replace the original qualification error.
+      try { t.diagnostic('preparation-attribution: unavailable'); } catch { /* Preserve the assertions below. */ }
+    }
+  }
   assert.equal(preparation.error?.code, undefined, 'native preparation supervisor timed out');
   assert.equal(preparation.status, 0, 'native preparation process checks failed (private diagnostics withheld)');
   assert.match(preparation.stdout, /# skipped 0\b/u, 'native preparation must not skip');
