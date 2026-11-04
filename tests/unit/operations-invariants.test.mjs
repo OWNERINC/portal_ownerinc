@@ -59,8 +59,8 @@ test('API and cron require shared Resend SMTP configuration', async () => {
 });
 
 test('API and cron lock Nodemailer to the approved safe policy', async () => {
-  const expectedRange = '^10.0.13';
-  const expectedResolvedVersion = '10.0.13';
+  const expectedRange = '^10.1.4';
+  const expectedResolvedVersion = '10.1.4';
 
   for (const service of ['api', 'cron']) {
     const manifest = JSON.parse(await read(`${service}/package.json`));

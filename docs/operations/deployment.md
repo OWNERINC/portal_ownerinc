@@ -75,16 +75,20 @@ Defina `IMAGE_REGISTRY=ghcr.io/ownerinc`. O CI publica API e cron com a tag do c
 
 Configure localmente `VPS_USER`, `VPS_HOST`, `API_IMAGE`, `CRON_IMAGE` e, se necessário, `VPS_PATH` e `SSH_PORT`. `API_IMAGE` e `CRON_IMAGE` devem ser referências completas `@sha256` produzidas pelo CI. O `deploy.sh` recusa alterações rastreadas não commitadas e publica apenas um `git archive` do `HEAD` com o manifesto de imagens; `ownerinc-novo-agente/` é excluído explicitamente.
 
-## Fluxo de release
+## Fluxo de release manual (`deploy.sh`)
 
 1. Execute `npm run verify` e `npm run security`.
 2. Exporte os dois digests aprovados pelo CI e execute `bash deploy.sh` somente após revisar host e revisão.
 3. O servidor cria `releases/<commit>-<timestamp>`, valida o manifesto recebido e baixa somente as imagens por digest.
-4. Antes de trocar uma release existente, `scripts/backup.sh` interrompe ingress e cron, salva PostgreSQL e uploads de forma consistente em `shared/backups`, reinicia os serviços e aplica retenção de 14 dias. Se a remoção de um diretório antigo falhar por permissão depois do smoke público, o deploy registra um aviso e mantém a release validada; diretórios históricos pertencentes a outro usuário exigem uma limpeza operacional autorizada na VPS.
+4. Antes de trocar uma release existente, `scripts/release.sh` chama `scripts/backup.sh` com `LEAVE_STOPPED=true`: pausa Nginx, API e cron ativos, salva PostgreSQL e uploads com manifesto de hashes em `shared/backups` e aplica retenção de 14 dias. No sucesso, os serviços permanecem parados para a migration. Falhas na retenção desse helper são fatais; a exceção best-effort descrita abaixo pertence somente ao receiver.
 5. O serviço one-shot `migrate` aplica schema/grants e registra quantas migrations foram aplicadas; `api/db/verify-migrations.js` confirma o ledger e a estrutura crítica, incluindo `011_cron_alert_state` e `012_autocard_media_crop`, os privilégios mínimos do cron e o contrato não nulo do crop, antes dos smoke tests.
-6. Se prontidão ou smoke falhar, os containers voltam à release/imagens anteriores quando elas existem. Dados não sofrem rollback automático.
+6. Se prontidão ou smoke falhar, os containers voltam à release/imagens anteriores quando elas existem. Este fluxo manual não restaura dados automaticamente. O receiver de CI tem uma regra própria de restauração pré-tráfego, descrita abaixo e em [Rollback e restauração](rollback.md).
 
-`GET /api/health` é somente liveness. `GET /api/ready` executa `SELECT 1`, retorna `503` genérico quando o banco não responde e é usado por Compose, cron e smoke.
+`GET /api/health` é somente liveness. `GET /api/ready` executa `SELECT 1`, retorna
+`503` genérico quando o banco não responde e é usado por Compose, cron e smoke.
+Essa consulta mede somente conectividade: não verifica ledger ou schema, não
+substitui `api/db/verify-migrations.js` nem smoke e não comprova conclusão do
+deploy ou jornadas autenticadas.
 
 ## Primeiro super-admin
 
@@ -380,7 +384,7 @@ independente. Sua configuração não é exigida pelo workflow de produção.
 Os receptores de staging e produção são separados. Cada chave usa `restrict` e
 `command=` no `authorized_keys`, não abre shell e não encaminha portas. Staging
 exige `staging:<sha>`. O workflow de produção envia somente o SHA de 40 caracteres,
-compatível com o receptor de produção já instalado na VPS. O entrypoint exclusivo
+compatível com a entrada legada de produção. O entrypoint exclusivo
 de produção versionado normaliza esse SHA para `production:<sha>` antes de
 delegar ao receptor comum; também aceita o prefixo explícito e rejeita staging.
 Ambos recebem o archive da release correspondente. Staging
@@ -431,12 +435,33 @@ backup distintos dos valores de produção; o receptor rejeita qualquer alvo
 que não seja `production` ou `staging`.
 
 O receptor serializa deploys com `flock`, confere SHA e conteúdo do archive,
-resolve API e cron por digest imutável no GHCR e cria backup verificado de
-PostgreSQL e uploads antes de interromper a release anterior. Em seguida aplica
-migrations, sobe a nova release e valida HTTPS, readiness, conteúdo montado e
-digest da API. Falha em qualquer gate restaura o banco quando necessário e
-reativa a release anterior. O arquivo `current-release` só muda depois de todos
-os gates aprovados.
+resolve API e cron por digest imutável no GHCR e interrompe Nginx, API e cron antes
+de criar o backup de PostgreSQL e uploads e validar seus checksums. Em seguida
+aplica e verifica migrations, valida saúde e digests da API e do cron em modo
+bootstrap e inicia o Nginx, marcando `public_started=true`. Depois valida HTTPS,
+readiness público, smoke e conteúdo montado. O arquivo `current-release` só muda
+depois de todos os gates aprovados, inclusive ativação e saúde do cron.
+
+Antes de `public_started`, o rollback do receiver restaura o banco somente se
+`migration_started=true` e `backup_complete=true`; se a restauração falhar, mantém
+os serviços parados. Depois de `public_started=true`, não restaura o banco
+automaticamente, mesmo em falha de readiness, smoke ou cron. Tenta recuperar a
+release anterior quando disponível, preservando possíveis escritas públicas;
+uploads não são restaurados por esse rollback. Restauração manual destrutiva
+exige backup validado, confirmação e janela aprovada conforme [rollback.md](rollback.md).
+
+A retenção **best-effort é exclusivamente a limpeza pós-smoke do receiver** em
+`ops/deploy-from-ci.sh`: falha ao remover diretórios de backup com mais de 14 dias
+gera aviso e permite continuar os gates restantes. Backup, manifesto, checksum,
+migration e sua verificação, readiness, smoke e cron permanecem fatais.
+Essa exceção não se aplica a `scripts/backup.sh` nem ao backup de proteção do
+restore. Diretórios históricos com permissões incompatíveis exigem limpeza
+operacional autorizada na VPS.
+
+O comportamento descrito é o dos receptores versionados e separados por alvo.
+A instalação e a revisão efetiva dos binários no host precisam de evidência
+operacional própria; o archive da aplicação não os instala. Estes procedimentos
+não registram aceite de staging, cópia S3/off-host ou jornadas autenticadas.
 
 Nenhum segredo de runtime, Firebase, SMTP ou banco é enviado ao GitHub: eles
 continuam somente nos arquivos protegidos de cada VPS.

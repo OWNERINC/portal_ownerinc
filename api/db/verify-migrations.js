@@ -42,11 +42,21 @@ const historicalVersions = Object.freeze([
   '036_payload_editorial_control',
   '037_owner_news_cutover',
 ]);
-const historicalExpectedVersions = Object.freeze([
-  ...expectedVersions.slice(0, -1),
-  ...historicalVersions,
-  expectedVersions.at(-1),
-]);
+
+function buildHistoricalExpectedVersions(versions) {
+  const anchor = '038_disable_legacy_editorial_writes';
+  const anchorIndex = versions.indexOf(anchor);
+  if (anchorIndex === -1 || anchorIndex !== versions.lastIndexOf(anchor)) {
+    throw new Error(`Expected exactly one migration anchor: ${anchor}`);
+  }
+  return [
+    ...versions.slice(0, anchorIndex),
+    ...historicalVersions,
+    ...versions.slice(anchorIndex),
+  ];
+}
+
+const historicalExpectedVersions = Object.freeze(buildHistoricalExpectedVersions(expectedVersions));
 
 function isAcceptedMigrationLedger(appliedVersions) {
   return [expectedVersions, historicalExpectedVersions]
@@ -414,6 +424,7 @@ module.exports = {
   expectedVersions,
   historicalVersions,
   historicalExpectedVersions,
+  buildHistoricalExpectedVersions,
   isAcceptedMigrationLedger,
   verifyMigrations,
 };
