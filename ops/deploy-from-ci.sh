@@ -481,7 +481,9 @@ if [[ $mounted_public_hash != "$expected_public_hash" ]]; then
   false
 fi
 
-find "$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf -- {} +
+if ! find "$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf -- {} +; then
+  echo "Backup retention cleanup incomplete; continuing with the validated $target release." >&2
+fi
 
 export CRON_BOOTSTRAP_ONLY=false
 if ! compose_for "$release" up -d --force-recreate --no-deps cron; then

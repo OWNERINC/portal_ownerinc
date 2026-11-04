@@ -197,7 +197,7 @@ Expected: only the verifier and its unit test are changed by this fix; no histor
 - Consumes: the validated compatibility commit and the already-merged API image security fix.
 - Produces: a PR with passing image scan/security checks, a protected merge, and a new `main` workflow using fully-qualified immutable GHCR digests.
 
-- [ ] **Step 1: Push the branch and open a focused PR**
+- [x] **Step 1: Push the branch and open a focused PR**
 
 Run:
 
@@ -222,7 +222,7 @@ gh pr checks $prNumber --repo OWNERINC/portal_ownerinc --watch --interval 10
 
 Expected: GitHub returns the PR URL, `$prNumber` resolves to that PR, and validation, image builds, Trivy scans, the HIGH/CRITICAL dependency gate, SBOMs, and migration tests pass. Do not merge if any required check fails.
 
-- [ ] **Step 3: Merge through the normal protected path**
+- [x] **Step 3: Merge through the normal protected path**
 
 Run only after PR checks are green:
 
@@ -241,7 +241,7 @@ Expected: GitHub reports a merge commit on `main` and starts a new push workflow
 - Consumes: the merged compatibility commit and its main workflow.
 - Produces: observed results for image publication, remote backup, migration verification, smoke, rollback behavior, and live read-only endpoints.
 
-- [ ] **Step 1: Watch every main workflow job**
+- [x] **Step 1: Watch every main workflow job**
 
 Run:
 
@@ -253,7 +253,7 @@ gh run watch $runId --repo OWNERINC/portal_ownerinc --exit-status
 
 Expected: `validate`, image publication, and `Deploy production` all pass; the deploy log confirms migration verification accepts the production ledger and the smoke gate succeeds.
 
-- [ ] **Step 2: If the deploy fails, inspect the exact failed log before editing**
+- [x] **Step 2: If the deploy fails, inspect the exact failed log before editing**
 
 Run:
 
@@ -277,3 +277,72 @@ Expected: `{"check":"smoke","status":"ok",...}`. The command performs GET-only c
 - [ ] **Step 4: Record evidence in OWN-49**
 
 Record the compatibility commit, PR, main workflow URL, scan/security result, deploy result, migration verification result, smoke result, and whether rollback was invoked. Do not include secrets, credentials, private payloads, or raw production data.
+
+### Task 6: Keep post-smoke backup retention failures non-fatal
+
+**Files:**
+- Modify: `ops/deploy-from-ci.sh:484`
+- Modify: `tests/unit/operations-invariants.test.mjs:380-426`
+- Modify: `docs/operations/deployment.md:78-86`
+
+**Interfaces:**
+- Consumes: the validated release, completed migration verification, readiness, and read-only smoke.
+- Produces: a successful release transition even when an old backup directory is not removable by the deploy user, with a bounded warning for operator follow-up.
+
+- [x] **Step 1: Add a failing invariant for guarded retention cleanup**
+
+Extend the deployment invariants to require that the post-smoke `find "$backup_root" ... rm -rf` operation runs inside an `if ! ...; then` guard and logs that retention is incomplete while continuing with the validated release.
+
+- [x] **Step 2: Run the focused invariant test and confirm the current cleanup is fatal**
+
+Run:
+
+```powershell
+node --test tests/unit/operations-invariants.test.mjs
+```
+
+Expected: FAIL because the current retention command is unguarded and a permission error reaches the deployment rollback trap.
+
+- [x] **Step 3: Make only post-smoke retention cleanup best-effort**
+
+Replace the unguarded command:
+
+```bash
+find "$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf -- {} +
+```
+
+with:
+
+```bash
+if ! find "$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf -- {} +; then
+  echo "Backup retention cleanup incomplete; continuing with the validated $target release." >&2
+fi
+```
+
+Do not make backup creation, checksum verification, migration, readiness, smoke, or cron health best-effort. Only the housekeeping deletion after a successful public smoke may continue after a failure.
+
+- [x] **Step 4: Document the operator follow-up without changing the VPS**
+
+Update the release flow documentation to state that retention permission failures are warnings after smoke, the release remains active, and root-owned historical backup directories require a separate authorized VPS permissions cleanup.
+
+- [x] **Step 5: Run focused and full validation**
+
+Run:
+
+```powershell
+node --test tests/unit/operations-invariants.test.mjs
+npm run verify
+npm run security
+git diff --check
+```
+
+Expected: all tests and security gates pass, with no scanner or rollback bypass.
+
+- [x] **Step 6: Commit the retention behavior fix**
+
+Run:
+
+```powershell
+git add ops/deploy-from-ci.sh tests/unit/operations-invariants.test.mjs docs/operations/deployment.md
+git commit -m "fix: keep retention cleanup from rolling back releases"
+```

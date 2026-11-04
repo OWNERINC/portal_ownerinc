@@ -422,6 +422,7 @@ test('green main revisions deploy through a restricted serialized production gat
   assert.match(productionReceiver, /DEPLOY_RECEIVER_ROLE=production/);
   assert.match(hostDeploy, /find "\$staging" -type d -exec chmod 0755/);
   assert.match(hostDeploy, /find "\$staging" -type f -exec chmod 0644/);
+  assert.match(hostDeploy, /if ! find "\$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime \+14 -exec rm -rf -- \{\} \+; then[\s\S]*Backup retention cleanup incomplete; continuing with the validated \$target release\./);
   assert.match(productionCompose, /postgres:[\s\S]*volumes: !override[\s\S]*postgres_data/);
 });
 
