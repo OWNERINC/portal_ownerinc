@@ -346,6 +346,10 @@ test('CI builds and publishes commit-addressed production images', async () => {
   assert.match(workflow, /docker push \$\{REGISTRY\}\/ownerinc-portal-api:\$\{GITHUB_SHA\}/);
   assert.match(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} --file cron\/Dockerfile \./);
   assert.doesNotMatch(workflow, /docker build --tag ownerinc-portal-cron:\$\{GITHUB_SHA\} cron\s*$/m);
+  assert.match(workflow, /api_digest=\$\(docker inspect --format='\{\{index \.RepoDigests 0\}\}' \$\{REGISTRY\}\/ownerinc-portal-api:\$\{GITHUB_SHA\}\)/);
+  assert.match(workflow, /cron_digest=\$\(docker inspect --format='\{\{index \.RepoDigests 0\}\}' \$\{REGISTRY\}\/ownerinc-portal-cron:\$\{GITHUB_SHA\}\)/);
+  assert.match(workflow, /printf '%s@%s\\n' "\$\{REGISTRY\}\/ownerinc-portal-api" "\$\{api_digest##\*@\}"/);
+  assert.match(workflow, /printf '%s@%s\\n' "\$\{REGISTRY\}\/ownerinc-portal-cron" "\$\{cron_digest##\*@\}"/);
   assert.match(workflow, /Test migrations against PostgreSQL/);
   assert.match(workflow, /MIGRATION_TEST_DISPOSABLE: "true"/);
   const actionReferences = [...workflow.matchAll(/^\s*[-]?\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);

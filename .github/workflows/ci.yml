@@ -141,8 +141,12 @@ jobs:
           docker tag ownerinc-portal-cron:${GITHUB_SHA} ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
           docker push ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA}
           docker push ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA}
-          docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA} > image-digests.txt
-          docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA} >> image-digests.txt
+          api_digest=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-api:${GITHUB_SHA})
+          cron_digest=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/ownerinc-portal-cron:${GITHUB_SHA})
+          [[ $api_digest =~ @sha256:[0-9a-f]{64}$ ]] || { echo "API image digest unavailable" >&2; exit 1; }
+          [[ $cron_digest =~ @sha256:[0-9a-f]{64}$ ]] || { echo "Cron image digest unavailable" >&2; exit 1; }
+          printf '%s@%s\n' "${REGISTRY}/ownerinc-portal-api" "${api_digest##*@}" > image-digests.txt
+          printf '%s@%s\n' "${REGISTRY}/ownerinc-portal-cron" "${cron_digest##*@}" >> image-digests.txt
           echo "api_image=$(sed -n '1p' image-digests.txt)" >> "$GITHUB_OUTPUT"
           echo "cron_image=$(sed -n '2p' image-digests.txt)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
