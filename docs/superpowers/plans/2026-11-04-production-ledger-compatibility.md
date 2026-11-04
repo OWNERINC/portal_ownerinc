@@ -31,7 +31,7 @@
 - Consumes: the exported ledger constants/helper from `api/db/verify-migrations.js`.
 - Produces: executable unit coverage proving that the current 35-version ledger and the production-shaped ledger with `036/037` are the only accepted forms.
 
-- [ ] **Step 1: Write the failing unit test for the two accepted ledgers**
+- [x] **Step 1: Write the failing unit test for the two accepted ledgers**
 
 Create a Node test that imports `expectedVersions`, `historicalVersions`, `historicalExpectedVersions`, and `isAcceptedMigrationLedger` through `createRequire`. Assert:
 
@@ -56,7 +56,7 @@ assert.equal(isAcceptedMigrationLedger([
 ]), false);
 ```
 
-- [ ] **Step 2: Run the new test and confirm the current verifier lacks the helper**
+- [x] **Step 2: Run the new test and confirm the current verifier lacks the helper**
 
 Run:
 
@@ -76,7 +76,7 @@ Expected: FAIL because the verifier does not yet export the historical ledger co
 - Consumes: the ordered `expectedVersions` array already used by migration tests.
 - Produces: `historicalVersions`, `historicalExpectedVersions`, and `isAcceptedMigrationLedger(appliedVersions)`; `verifyMigrations()` uses this helper before schema and privilege checks.
 
-- [ ] **Step 1: Define the historical versions and the production-shaped ledger**
+- [x] **Step 1: Define the historical versions and the production-shaped ledger**
 
 Immediately after `expectedVersions`, add:
 
@@ -99,7 +99,7 @@ function isAcceptedMigrationLedger(appliedVersions) {
 
 Keep the comparison exact and order-sensitive; do not use a set or a subset check.
 
-- [ ] **Step 2: Replace the single-ledger comparison with the strict helper**
+- [x] **Step 2: Replace the single-ledger comparison with the strict helper**
 
 Change the verifier condition to:
 
@@ -111,7 +111,7 @@ if (!isAcceptedMigrationLedger(appliedVersions)) {
 
 Do not alter any later structural, grant, or editorial privilege checks.
 
-- [ ] **Step 3: Export the helper and constants for unit coverage**
+- [x] **Step 3: Export the helper and constants for unit coverage**
 
 Update the CommonJS export to:
 
@@ -125,7 +125,7 @@ module.exports = {
 };
 ```
 
-- [ ] **Step 4: Run the focused test and verify it passes**
+- [x] **Step 4: Run the focused test and verify it passes**
 
 Run:
 
@@ -135,7 +135,7 @@ node --test tests/unit/migration-ledger-compatibility.test.mjs
 
 Expected: all accepted and rejected ledger assertions pass.
 
-- [ ] **Step 5: Commit the focused verifier change**
+- [x] **Step 5: Commit the focused verifier change**
 
 Run:
 
@@ -155,7 +155,7 @@ git commit -m "fix: accept historical production migration ledger"
 - Consumes: the focused verifier commit.
 - Produces: evidence that vulnerability remediation, application behavior, migration contracts, and CI invariants remain green.
 
-- [ ] **Step 1: Run the migration-ledger and operations-focused tests**
+- [x] **Step 1: Run the migration-ledger and operations-focused tests**
 
 Run:
 
@@ -165,7 +165,7 @@ node --test tests/unit/migration-ledger-compatibility.test.mjs tests/unit/operat
 
 Expected: all tests pass, including the existing assertions that `038` is present and editorial runtime privileges are denied.
 
-- [ ] **Step 2: Run the full verification and dependency security checks**
+- [x] **Step 2: Run the full verification and dependency security checks**
 
 Run:
 
@@ -177,7 +177,7 @@ git diff --check
 
 Expected: the full suite passes; security has no HIGH/CRITICAL findings; any existing MODERATE-only notices remain below the configured gate; diff check passes.
 
-- [ ] **Step 3: Confirm the change does not reintroduce removed runtime surfaces**
+- [x] **Step 3: Confirm the change does not reintroduce removed runtime surfaces**
 
 Run:
 
