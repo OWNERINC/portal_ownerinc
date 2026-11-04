@@ -38,6 +38,21 @@ const expectedVersions = [
   '038_disable_legacy_editorial_writes',
 ];
 
+const historicalVersions = Object.freeze([
+  '036_payload_editorial_control',
+  '037_owner_news_cutover',
+]);
+const historicalExpectedVersions = Object.freeze([
+  ...expectedVersions.slice(0, -1),
+  ...historicalVersions,
+  expectedVersions.at(-1),
+]);
+
+function isAcceptedMigrationLedger(appliedVersions) {
+  return [expectedVersions, historicalExpectedVersions]
+    .some((accepted) => JSON.stringify(appliedVersions) === JSON.stringify(accepted));
+}
+
 const editorialTables = [
   'cms_documents',
   'cms_revisions',
@@ -74,7 +89,7 @@ async function verifyMigrations() {
   try {
     const versions = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
     const appliedVersions = versions.rows.map(({ version }) => version);
-    if (JSON.stringify(appliedVersions) !== JSON.stringify(expectedVersions)) {
+    if (!isAcceptedMigrationLedger(appliedVersions)) {
       throw new Error(`Unexpected migration ledger: ${appliedVersions.join(',')}`);
     }
     const result = await pool.query(`SELECT to_regclass('public.job_titles') AS job_titles,
@@ -395,4 +410,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { expectedVersions, verifyMigrations };
+module.exports = {
+  expectedVersions,
+  historicalVersions,
+  historicalExpectedVersions,
+  isAcceptedMigrationLedger,
+  verifyMigrations,
+};
