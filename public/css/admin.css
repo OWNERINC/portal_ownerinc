@@ -1,11 +1,75 @@
-.admin-users-table td { padding-block: 8px; }
+/* Conecta V3.5 · administração. Scoped for persistent navigation. */
+.admin-page-header { display: block; margin-bottom: 24px; }
+.admin-page-header p { color: var(--text-secondary); font-size: 17px; margin-top: 8px; }
+.admin-page .admin-tabs { margin-bottom: 28px; gap: 8px; }
+.admin-page .admin-tab { min-height: 48px; }
+.admin-page .section-header { margin-bottom: 20px; }
+.admin-page .section-header h2 { font-weight: 800; }
+.admin-user-actions, .admin-bulk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.admin-bulk-actions { justify-content: flex-end; margin-top: 16px; }
+.admin-page .admin-section { min-width: 0; }
+.admin-page .admin-section > .card-copy { max-width: 900px; margin-bottom: 24px; }
+.admin-filters { display: flex; align-items: flex-start; flex-direction: row; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
+.admin-filters .form-group { flex: 1 1 180px; min-width: 0; margin-bottom: 0; }
+.admin-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-end; }
+.admin-filters .form-feedback:empty, #job-title-options-feedback:empty { display: none; }
+.admin-page #users-filters { display: grid; grid-template-columns: minmax(200px, 1.5fr) repeat(3, minmax(120px, 1fr)); }
+.admin-page #users-filters .admin-filter-actions { grid-column: 1 / -1; }
+.admin-page .table-wrapper { max-width: 100%; margin-top: 8px; border-radius: var(--radius-sm); }
+.admin-page .table-wrapper th { color: var(--text); background: var(--selected); font-size: 13px; font-weight: 600; }
+.admin-page .table-wrapper td { padding-block: 16px; font-size: 14px; }
+.admin-page caption { padding-bottom: 12px; font-size: 14px; }
+.admin-users-table td:first-child { font-weight: 700; }
+.admin-users-table td { vertical-align: top; }
+.admin-users-table td.table-actions { display: table-cell; }
+.admin-page .table-actions { min-width: 190px; }
+.admin-page .table-actions .btn { margin: 0 4px 4px 0; }
+.admin-section .table-actions .form-help { white-space: normal; min-width: 180px; max-width: 330px; margin-top: 8px; line-height: 1.5; }
 .admin-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .admin-row-actions summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
-.admin-filters { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
-.admin-filters .form-group { flex: 1 1 180px; min-width: 0; margin-bottom: 0; }
-.admin-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; align-self: center; }
-.admin-filters .form-feedback:empty, #job-title-options-feedback:empty { display: none; }
-.admin-section .table-actions .form-help { white-space: normal; min-width: 180px; }
+.admin-page .pagination { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-top: 20px; }
+.admin-page .pagination:empty { display: none; }
+.admin-page .pagination span { font-size: 13px; color: var(--text-secondary); }
+.admin-page .admin-subsection { margin-top: 40px; padding-top: 28px; border-top: 1px solid var(--border); }
+.admin-page .admin-subsection h3 { font-size: 24px; font-weight: 800; }
+.admin-page #audit-filters { padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.admin-page #audit-dates-help { font-size: 14px; max-width: 880px; margin-bottom: 20px; }
+.admin-page #bulk-csv-columns { padding-left: 20px; }
+.admin-page #bulk-import-panel { border-radius: var(--radius-sm); }
+.admin-page #bulk-import-panel code { overflow-wrap: anywhere; }
+@media (max-width: 1100px) {
+  .admin-page #users-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-user-actions { gap: 8px; }
+}
 @media (max-width: 600px) {
+  .admin-page-header p { font-size: 15px; }
+  .admin-page .admin-tabs { margin-inline: 0; padding: 0 0 4px; gap: 4px; }
+  .admin-page .admin-tab { flex-shrink: 0; }
+  .admin-user-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .admin-user-actions .btn { padding-inline: 12px; white-space: normal; }
+  .admin-page .admin-filters { gap: 12px; }
   .admin-filters .form-group { flex-basis: 100%; }
+  .admin-page #users-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-page #users-filters .form-group:first-child { grid-column: 1 / -1; }
+  .admin-filter-actions { width: 100%; }
+  .admin-page .admin-filter-actions .btn { width: auto; flex: 1; }
+  .admin-page #audit-filters { padding: 20px; }
+  .admin-page .pagination { justify-content: center; gap: 8px; }
+  .admin-page .pagination span { flex-basis: 100%; text-align: center; order: -1; }
+  .admin-page .admin-users-wrapper { overflow: visible; }
+  .admin-page .table-wrapper table:has(td.empty-state) { min-width: 0; }
+  .admin-page .table-wrapper table:has(td.empty-state) thead { display: none; }
+  .admin-page .admin-users-table { display: block; min-width: 0; background: transparent; }
+  .admin-users-table caption { display: block; }
+  .admin-users-table thead { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+  .admin-users-table tbody { display: grid; gap: 16px; }
+  .admin-users-table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+  .admin-page .admin-users-table td { display: block; min-width: 0; padding: 0; border: 0; overflow-wrap: anywhere; }
+  .admin-users-table td[data-label]::before { content: attr(data-label); display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+  .admin-users-table td:nth-child(1), .admin-users-table td:nth-child(2), .admin-users-table td:last-child, .admin-users-table td.empty-state { grid-column: 1 / -1; }
+  .admin-page .admin-users-table td:first-child { font-size: 18px; }
+  .admin-users-table td:nth-child(1)::before, .admin-users-table td:nth-child(2)::before { display: none; }
+  .admin-page .admin-users-table td.table-actions { padding-top: 12px; border-top: 1px solid var(--border); }
+  .admin-section .table-actions .form-help { min-width: 0; max-width: none; }
+  .admin-bulk-actions .btn { width: 100%; }
 }

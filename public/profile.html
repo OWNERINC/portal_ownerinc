@@ -3,103 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0F0F0F">
-  <title>Meu Perfil — Portal Ownerinc</title>
+  <meta name="theme-color" content="#F7F6F2">
+  <title>Meu Perfil — Conecta Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
-  <link rel="stylesheet" href="./css/admin.css">
+  <link rel="stylesheet" href="./css/profile.css">
   <script src="./js/auth-shell.js"></script>
-  <style>
-    .avatar-wrap {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 28px;
-    }
-    .avatar-circle {
-      width: 88px;
-      height: 88px;
-      border-radius: 50%;
-      background: var(--primary);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 34px;
-      font-weight: 700;
-      color: var(--espresso);
-      overflow: hidden;
-      border: 3px solid var(--border);
-      flex-shrink: 0;
-      cursor: pointer;
-      position: relative;
-    }
-    .avatar-circle img {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-    }
-    .avatar-overlay {
-      position: absolute;
-      inset: 0;
-      background: rgba(0,0,0,0.45);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      transition: opacity 150ms;
-      color: #fff;
-    }
-    .avatar-circle:hover .avatar-overlay { opacity: 1; }
-    .avatar-hint {
-      font-size: 12px;
-      color: var(--text-secondary);
-      text-align: center;
-    }
-    .avatar-uploading {
-      font-size: 12px;
-      color: var(--focus);
-      font-weight: 500;
-    }
-    .section-label {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      margin-bottom: 14px;
-    }
-    .profile-card { max-width: 560px; }
-    .profile-job-title { margin: -6px 0 18px; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
-    .profile-section-title { margin: 0 0 14px; }
-    .profile-feedback, .photo-feedback { min-height: 18px; font-size: 12px; }
-    .profile-feedback { margin-top: 10px; }
-    .photo-feedback { margin: 0; }
-    .photo-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-    .photo-crop-dialog { width: min(calc(100vw - 32px), 420px); max-width: 420px; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: var(--shadow-md); }
-    .photo-crop-dialog::backdrop { background: rgba(17,17,17,.55); }
-    .photo-crop-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-    .photo-crop-heading h2 { font-size: var(--font-size-lg); }
-    .photo-crop-help { margin-top: 4px; color: var(--text-secondary); font-size: var(--font-size-sm); line-height: 1.5; }
-    .photo-crop-frame { width: min(100%, 280px); aspect-ratio: 1; margin: 0 auto 18px; overflow: hidden; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2); cursor: grab; touch-action: none; }
-    .photo-crop-frame:active { cursor: grabbing; }
-    .photo-crop-frame img { display: block; max-width: none; transform-origin: top left; }
-    .photo-crop-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-    @media (max-width: 420px) { .photo-crop-dialog { width: calc(100vw - 20px); padding: 18px; } }
-    .profile-email { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 6px; overflow-wrap: anywhere; }
-    .profile-copy { font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.6; }
-    .section-divider {
-      border: none;
-      border-top: 1px solid var(--border);
-      margin: 24px 0;
-    }
-  </style>
 </head>
 <body>
 <script src="./js/sidebar-state.js"></script>
@@ -107,9 +18,9 @@
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
-      <a href="./dashboard.html" class="sidebar-brand" aria-label="Ownerinc">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
-        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
+      <a href="./dashboard.html" class="sidebar-brand" aria-label="Conecta Ownerinc">
+        <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="logo-full" width="156" height="48">
+        <img src="./assets/conecta/symbol.svg" alt="" class="logo-icon" width="40" height="22">
       </a>
       <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
         <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#chevrons-left"></use></svg>
@@ -117,14 +28,17 @@
     </div>
     <!-- generated:portal-sidebar -->
     <ul class="sidebar-nav">
+      <li class="nav-group-label" aria-hidden="true">PORTAL</li>
       <li><a href="./dashboard.html" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg><span>Dashboard</span></a></li>
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./profile.html" class="active" aria-current="page" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
-      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-group-label nav-tools-label" aria-hidden="true">FERRAMENTAS</li>
       <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
       <li class="pos-cards-link"><a href="./cards-pos.html" title="Cards Pós"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg><span>Cards Pós</span></a></li>
+      <li class="nav-group-label admin-link" aria-hidden="true">GESTÃO</li>
+      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-account"><a href="./profile.html" class="active" aria-current="page" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
     </ul>
     <!-- /generated:portal-sidebar -->
     <div class="sidebar-footer">
@@ -136,11 +50,16 @@
 
   <div class="main-content">
     <!-- generated:portal-topbar -->
-    <header class="topbar"><h1 class="topbar-title">Meu Perfil</h1></header>
+    <header class="topbar"><a class="topbar-brand" href="./dashboard.html" aria-label="Conecta Ownerinc — início"><img src="./assets/conecta/symbol.svg" alt="" width="32" height="18"></a><span class="topbar-title">Meu Perfil</span><div class="topbar-actions"><a class="topbar-account" href="./profile.html"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu perfil</span></a></div></header>
     <!-- /generated:portal-topbar -->
-    <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
+    <main class="page-body profile-page" id="main-content" tabindex="-1" data-route-pending>
 
-       <div class="card profile-card">
+      <div class="page-header profile-page-header">
+        <h1>Meu Perfil</h1>
+        <p class="profile-intro">Mantenha suas informações e seus contatos atualizados.</p>
+      </div>
+      <div class="profile-layout">
+       <section class="card profile-card" aria-labelledby="personal-data-title">
 
         <!-- Avatar com upload -->
         <div class="avatar-wrap">
@@ -150,16 +69,19 @@
             <div class="avatar-overlay" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#camera"></use></svg></div>
           </button>
           <input type="file" id="photo-input" name="photo" accept="image/jpeg,image/png,image/webp" aria-describedby="avatar-hint photo-feedback" style="display:none">
-          <span class="avatar-hint" id="avatar-hint">JPEG, PNG ou WebP de até 500 KB</span>
-          <p class="photo-feedback" id="photo-feedback" role="status" aria-live="polite"></p>
-          <div class="photo-actions">
-            <button class="btn btn-ghost btn-sm" id="adjust-photo" type="button" hidden>Ajustar enquadramento</button>
-            <button class="btn btn-ghost btn-sm" id="remove-photo" type="button" hidden>Remover foto</button>
+          <div class="avatar-details">
+            <label class="avatar-upload-label" for="photo-input">Alterar foto</label>
+            <span class="avatar-hint" id="avatar-hint">JPEG, PNG ou WebP de até 500 KB</span>
+            <p class="photo-feedback" id="photo-feedback" role="status" aria-live="polite"></p>
+            <div class="photo-actions">
+              <button class="btn btn-ghost btn-sm" id="adjust-photo" type="button" hidden>Ajustar enquadramento</button>
+              <button class="btn btn-ghost btn-sm" id="remove-photo" type="button" hidden>Remover foto</button>
+            </div>
           </div>
         </div>
 
         <!-- Dados pessoais -->
-        <h2 class="section-label profile-section-title">Dados pessoais</h2>
+        <h2 class="section-label profile-section-title" id="personal-data-title">Dados pessoais</h2>
         <p id="profile-job-title" class="profile-job-title" hidden></p>
         <form id="profile-form">
 
@@ -172,6 +94,7 @@
           <textarea class="form-textarea" id="p-bio" name="bio" maxlength="2000" autocomplete="organization-title" aria-describedby="bio-hint" placeholder="Conte brevemente sobre seu cargo e atuação…"></textarea>
           <small id="bio-hint" class="form-help">Você pode escrever em mais de uma linha.</small>
         </div>
+        <div class="profile-contacts">
         <div class="form-group">
           <label class="form-label" for="p-phone">WhatsApp</label>
           <input class="form-input" id="p-phone" name="phone" type="tel" maxlength="40" autocomplete="tel" inputmode="tel" pattern="[+0-9 ()-]{8,40}" placeholder="Ex.: +55 61 99999-9999…">
@@ -181,25 +104,29 @@
           <input class="form-input" id="p-linkedin" name="linkedin_url" type="url" maxlength="500" autocomplete="url" pattern="https://(www\.)?linkedin\.com/.*" placeholder="https://linkedin.com/in/seu-perfil…">
         </div>
 
+        </div>
         <button class="btn btn-primary profile-save" id="btn-save" type="submit">
           Salvar perfil
         </button>
         <p id="profile-feedback" class="profile-feedback" role="status" aria-live="polite"></p>
         </form>
 
-        <hr class="section-divider">
+       </section>
 
         <!-- Segurança -->
-        <h2 class="section-label profile-section-title">Segurança</h2>
+       <section class="card profile-security" aria-labelledby="security-title">
+        <svg class="icon profile-security-icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg>
+        <h2 class="profile-section-title" id="security-title">Segurança</h2>
         <p id="profile-email" class="profile-email"></p>
         <p class="profile-copy">
           Para alterar sua senha, enviaremos um link de redefinição para o e-mail acima.
         </p>
         <button class="btn btn-ghost" id="btn-reset-pw" type="button">
-          Enviar link de redefinição de senha
+          Enviar link de redefinição
         </button>
         <p id="pw-feedback" class="profile-feedback" role="status" aria-live="polite"></p>
 
+       </section>
       </div>
 
     </main>

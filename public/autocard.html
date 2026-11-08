@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0F0F0F">
-  <title>AutoCard — Portal Ownerinc</title>
+  <meta name="theme-color" content="#F7F6F2">
+  <title>AutoCard — Conecta Ownerinc</title>
   <script src="./js/auth-shell.js"></script>
   <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./autocard/styles.css">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
@@ -19,9 +20,9 @@
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
-      <a href="./dashboard.html" class="sidebar-brand" aria-label="Ownerinc">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
-        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
+      <a href="./dashboard.html" class="sidebar-brand" aria-label="Conecta Ownerinc">
+        <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="logo-full" width="156" height="48">
+        <img src="./assets/conecta/symbol.svg" alt="" class="logo-icon" width="40" height="22">
       </a>
       <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
         <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#chevrons-left"></use></svg>
@@ -29,14 +30,17 @@
     </div>
     <!-- generated:portal-sidebar -->
     <ul class="sidebar-nav">
+      <li class="nav-group-label" aria-hidden="true">PORTAL</li>
       <li><a href="./dashboard.html" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg><span>Dashboard</span></a></li>
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
-      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-group-label nav-tools-label" aria-hidden="true">FERRAMENTAS</li>
       <li class="autocard-link"><a href="./autocard.html" class="active" aria-current="page" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
       <li class="pos-cards-link"><a href="./cards-pos.html" title="Cards Pós"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg><span>Cards Pós</span></a></li>
+      <li class="nav-group-label admin-link" aria-hidden="true">GESTÃO</li>
+      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-account"><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
     </ul>
     <!-- /generated:portal-sidebar -->
     <div class="sidebar-footer">
@@ -48,13 +52,13 @@
 
   <div class="main-content">
     <!-- generated:portal-topbar -->
-    <header class="topbar"><span class="topbar-title">AutoCard</span></header>
+    <header class="topbar"><a class="topbar-brand" href="./dashboard.html" aria-label="Conecta Ownerinc — início"><img src="./assets/conecta/symbol.svg" alt="" width="32" height="18"></a><span class="topbar-title">AutoCard</span><div class="topbar-actions"><a class="topbar-account" href="./profile.html"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu perfil</span></a></div></header>
     <!-- /generated:portal-topbar -->
     <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
       <div class="autocard-content">
         <div class="autocard-toolbar">
           <div>
-            <span class="eyebrow">AutoCard</span>
+            <h1><span class="eyebrow">AutoCard</span></h1>
             <p>Cards internos com a identidade Ownerinc.</p>
           </div>
           <button class="quiet-button" id="helpButton" type="button">Como usar</button>
@@ -69,7 +73,7 @@
           <div id="editorView" class="editor hidden">
             <section class="panel editor-panel">
               <button id="backButton" class="back-button" type="button">← Trocar modelo</button>
-              <div class="section-heading"><div><span class="eyebrow" id="templateGroup"></span><h1 id="templateTitle"></h1></div><span class="badge" id="templateBadge"></span></div>
+              <div class="section-heading"><div><span class="eyebrow" id="templateGroup"></span><h2 id="templateTitle"></h2></div><span class="badge" id="templateBadge"></span></div>
               <div id="fields"></div>
               <div class="editor-actions">
                 <button id="iconButton" class="secondary-button" type="button"><span id="iconPreview"></span> Escolher ícone</button>
@@ -83,11 +87,11 @@
               <div class="editor-actions bottom"><button id="saveButton" class="secondary-button" type="button">Salvar</button><button id="exportButton" class="primary-button" type="button">Exportar PNG</button></div>
               <p id="contentOverflow" class="content-overflow" role="status" aria-live="polite" data-overflow="false"></p>
             </section>
-             <section class="preview-area"><div class="canvas-frame"><div id="cardCanvas"></div></div><p>Exportação PNG: largura de 1080 px, proporção do card preservada.</p></section>
+             <section class="preview-area" aria-labelledby="autocardPreviewTitle"><div class="autocard-preview-heading"><h2 id="autocardPreviewTitle">Prévia do card</h2><span>PNG · 1080 px</span></div><div class="canvas-frame"><div id="cardCanvas"></div></div><p>Exportação PNG: largura de 1080 px, proporção do card preservada.</p></section>
           </div>
         </section>
 
-        <section id="savedView" class="panel saved-view hidden"><div class="section-heading"><div><span class="eyebrow">Biblioteca compartilhada</span><h1>Histórico de cards</h1></div><input id="savedSearch" aria-label="Buscar cards por nome" type="search" placeholder="Buscar por nome..."></div><div id="savedFilters" class="filters"></div><div id="savedList" class="saved-list"></div><div id="savedPagination" class="pagination saved-pagination" aria-live="polite"></div><p id="savedEmpty" class="empty">Nenhum card salvo ainda.</p></section>
+        <section id="savedView" class="panel saved-view hidden"><div class="section-heading"><div><span class="eyebrow">Biblioteca compartilhada</span><h2>Histórico de cards</h2></div><input id="savedSearch" aria-label="Buscar cards por nome" type="search" placeholder="Buscar por nome..."></div><div id="savedFilters" class="filters"></div><div id="savedList" class="saved-list"></div><div id="savedPagination" class="pagination saved-pagination" aria-live="polite"></div><p id="savedEmpty" class="empty">Nenhum card salvo ainda.</p></section>
       </div>
     </main>
   </div>

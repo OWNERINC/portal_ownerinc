@@ -8,7 +8,7 @@ export function catalogView({ root, page, focusPage = page, api, navigate, entry
   const query = new URL(page.location.href).searchParams;
   root.replaceChildren(brand(brandAssets));
   const motionDisposers = [];
-  const continuing = element('section', { className: 'academy-section' }, [element('h2', { text: 'Continuar aprendendo' })]);
+  const continuing = element('section', { className: 'academy-section academy-continuing' }, [element('h2', { text: 'Continuar aprendendo' })]);
   const continued = element('div', { 'aria-busy': 'true' }, [element('p', { role: 'status', text: 'Carregando cursos em andamento…' })]);
   continuing.append(continued); root.append(continuing);
   const live = () => !disposed && page.active;
@@ -19,8 +19,8 @@ export function catalogView({ root, page, focusPage = page, api, navigate, entry
     try {
       const courses = await api.continueCourses();
       if (!live()) return;
-      continued.replaceChildren(); continued.className = 'academy-grid';
-      courses.forEach(course => continued.append(courseCard(course, page, navigate, brandAssets)));
+      continued.replaceChildren(); continued.className = 'academy-continue-list';
+      courses.forEach(course => continued.append(courseCard(course, page, navigate, brandAssets, { continuing: true })));
       if (!motionDisposers.length && typeof mountAcademyMotion === 'function') motionDisposers.push(mountAcademyMotion(continued, { signal: page.signal, reducedMotion: !entryMotion }));
       if (!courses.length) continued.append(element('p', { text: 'Escolha um curso abaixo para começar.' }));
     } catch (error) { if (live()) errorState(continued, error, loadContinue); }
@@ -28,6 +28,7 @@ export function catalogView({ root, page, focusPage = page, api, navigate, entry
   }
   loadContinue();
   const filters = [];
+  const groups = element('div', { className: 'academy-groups' }); root.append(groups);
   for (const [group, title] of [['initial', 'Comece por aqui'], ['role', 'Formação para seu cargo']]) {
     const legacy = query.get('group') === group;
     const category = query.get(`${group}_category`) ?? (legacy ? query.get('category') : '') ?? '';
@@ -38,7 +39,7 @@ export function catalogView({ root, page, focusPage = page, api, navigate, entry
     const label = element('label', { for: `academy-filter-${group}`, text: `Categoria · ${title}` });
     const cards = element('div', { className: 'academy-grid', 'aria-busy': 'true' }, [element('p', { role: 'status', text: 'Carregando cursos…' })]);
     const pagination = element('nav', { className: 'academy-pagination', 'aria-label': `Páginas · ${title}` });
-    section.append(element('h2', { text: title }), label, select, cards, pagination); root.append(section);
+    section.append(element('h2', { text: title }), label, select, cards, pagination); groups.append(section);
     const change = (value, nextOffset, initiatingControl = document.activeElement) => {
       if (!live() || cards.getAttribute('aria-busy') === 'true') return;
       if (initiatingControl === select || initiatingControl?.parentNode === pagination) {

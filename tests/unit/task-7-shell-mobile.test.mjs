@@ -667,9 +667,13 @@ test('shell keeps a named collapse control visible and exposes state to assistiv
   assert.match(layout, /\.sidebar :focus-visible/);
 });
 
-test('CSP-safe typography and contrast tokens do not depend on remote font loading', () => {
-  assert.doesNotMatch(tokens, /@font-face|fonts\.gstatic\.com|Raleway/);
-  assert.match(tokens, /--font-display:\s*Arial, sans-serif/);
+test('CSP-safe typography and contrast tokens do not depend on remote font loading', async () => {
+  assert.doesNotMatch(tokens, /fonts\.gstatic\.com|fonts\.googleapis\.com|@import/);
+  assert.match(tokens, /--font-sans:\s*'Manrope', sans-serif/);
+  assert.match(tokens, /--font-display:\s*var\(--font-sans\)/);
+  assert.match(tokens, /url\('\.\.\/assets\/fonts\/Manrope-Variable\.ttf'\)/);
+  assert.ok((await readFile('public/assets/fonts/Manrope-Variable.ttf')).byteLength > 10000);
+  assert.match(await readFile('public/assets/fonts/OFL-Manrope.txt', 'utf8'), /SIL OPEN FONT LICENSE/);
   assert.match(nginx, /font-src 'self'/);
   assert.ok(contrast(cssColor(tokens, '--text-secondary'), cssColor(tokens, '--bg')) >= 4.5);
   assert.ok(contrast(cssColor(tokens, '--focus'), cssColor(tokens, '--bg')) >= 3);

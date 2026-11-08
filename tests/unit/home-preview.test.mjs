@@ -117,9 +117,10 @@ test('home preview preserves the light and dark surface contrast tokens', async 
     css,
     /\.preview-meta\s*\{[^}]*rgba\(255\s*,\s*255\s*,\s*255\s*,\s*0\.62\)/s,
   );
-  assert.doesNotMatch(tokens, /@font-face|fonts\.gstatic\.com|Raleway/);
-  assert.match(tokens, /--font-sans:\s*Arial/);
-  assert.match(tokens, /--font-display:\s*Arial, sans-serif/);
+  assert.doesNotMatch(tokens, /fonts\.gstatic\.com|fonts\.googleapis\.com|@import/);
+  assert.match(tokens, /url\('\.\.\/assets\/fonts\/Manrope-Variable\.ttf'\)/);
+  assert.match(tokens, /--font-sans:\s*'Manrope', sans-serif/);
+  assert.match(tokens, /--font-display:\s*var\(--font-sans\)/);
   assert.doesNotMatch(tokens, /Hamilton|Novelin|Signaturia/);
   assert.match(css, /\.preview-topbar\s*\{[^}]*font-family:\s*var\(--font-display\);/s);
   assert.match(css, /\.preview-hero h1\s*\{[^}]*font-family:\s*var\(--font-display\);/s);

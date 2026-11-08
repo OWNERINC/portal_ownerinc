@@ -47,12 +47,21 @@ export function hydrateBrandAssets(root, assets) {
     image.replaceWith(icon);
   });
 }
-export function courseCard(course, page, navigate, assets = null) {
-  return element('article', { className: 'academy-course-card' }, [cover(course, page, assets),
+export function courseCard(course, page, navigate, assets = null, { continuing = false } = {}) {
+  const total = Math.max(0, Number(course.total_lessons) || 0);
+  const completed = Math.min(total, Math.max(0, Number(course.completed_lessons) || 0));
+  const body = element('div', { className: 'academy-course-card-body' }, [
+    element('p', { className: 'academy-course-category', text: course.category || 'Formação' }),
     element('h3', {}, [routeLink(course.title, { course: course.id }, navigate)]),
-    element('p', { text: course.category || 'Formação' }),
-    element('p', { text: course.delivery_mode === 'external' ? 'Curso externo' : `${course.completed_lessons || 0} de ${course.total_lessons || 0} aulas concluídas` }),
+    element('p', { text: course.delivery_mode === 'external' ? 'Curso externo' : `${completed} de ${total} aulas concluídas` }),
   ]);
+  if (course.delivery_mode === 'internal' && total) body.append(element('progress', {
+    className: 'academy-progress', value: completed, max: total, 'aria-label': `Progresso: ${course.title}`,
+  }));
+  if (continuing) body.append(routeLink('Continuar curso', {
+    course: course.id, ...(course.resume_lesson_id ? { lesson: course.resume_lesson_id } : {}),
+  }, navigate, { className: 'academy-button' }));
+  return element('article', { className: 'academy-course-card', 'data-continuing': String(continuing) }, [cover(course, page, assets), body]);
 }
 export function curriculum(courseView, navigate, current, preview = false) {
   const nav = element('nav', { className: 'academy-curriculum', 'aria-label': 'Aulas do curso' });

@@ -280,13 +280,17 @@ test('an authorized preview uses explicit all=true but never persists progress',
 
 test('the actual Dashboard opens internal courses in Portal and keeps valid legacy external destinations', async () => {
   const { createFeedbackHarness } = await import('../helpers/frontend-feedback-harness.mjs');
-  const h = await createFeedbackHarness('dashboard');
-  h.latest('/api/academy?').resolve([course('course-a'), course('external', { delivery_mode: 'external', url: 'https://training.test/course' })]);
-  await drain();
-  const links = h.node('academy-preview').querySelectorAll('a');
-  assert.equal(links[0].getAttribute('href'), './academy.html?course=course-a');
-  assert.equal(links[0].getAttribute('target'), null);
-  assert.equal(links[1].getAttribute('href'), 'https://training.test/course');
-  assert.equal(links[1].getAttribute('target'), '_blank');
-  h.page.dispose();
+  for (const candidate of [course('course-a'), course('external', { delivery_mode: 'external', url: 'https://training.test/course' })]) {
+    const h = await createFeedbackHarness('dashboard');
+    h.latest('/api/academy/continue?').resolve([]);
+    await drain();
+    h.latest('/api/academy?').resolve([candidate]);
+    await drain();
+    const links = h.node('academy-preview').querySelectorAll('a');
+    for (const link of links) {
+      assert.equal(link.getAttribute('href'), candidate.delivery_mode === 'internal' ? './academy.html?course=course-a' : 'https://training.test/course');
+      assert.equal(link.getAttribute('target'), candidate.delivery_mode === 'internal' ? null : '_blank');
+    }
+    h.page.dispose();
+  }
 });

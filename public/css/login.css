@@ -1,0 +1,54 @@
+/* Conecta V3.5 · acesso. Estados são controlados pelo fluxo de login existente. */
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-sans); line-height: 1.5; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+p, h1 { margin: 0; }
+.login-split { display: grid; grid-template-columns: minmax(0, 560px) 440px; align-items: center; gap: 80px; width: min(100% - 96px, 1080px); min-height: 100svh; margin: auto; padding-block: 64px; }
+.brand-panel { min-width: 0; }
+.brand-logo { display: block; width: min(100%, 390px); height: auto; margin-bottom: 24px; }
+.brand-headline { font-size: 40px; font-weight: 800; line-height: 1.35; max-width: 510px; }
+.brand-subtitle { margin-top: 16px; font-size: 18px; color: var(--text-secondary); max-width: 460px; }
+.form-panel { min-width: 0; padding: 28px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+#login-title { margin-bottom: 16px; font-size: 28px; font-weight: 800; line-height: 1.4; overflow-wrap: anywhere; }
+.login-intro { margin-bottom: 24px; color: var(--text-secondary); font-size: 15px; }
+.form-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+.form-label { font-size: 14px; font-weight: 600; }
+.form-input { min-width: 0; width: 100%; min-height: 48px; padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 16px; }
+.form-input::placeholder { color: var(--text-secondary); opacity: 1; }
+.form-input:focus { border-color: var(--focus); }
+:where(button, a, input):focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.password-wrap { position: relative; }
+.password-wrap .form-input { padding-right: 52px; }
+.toggle-pw { position: absolute; right: 2px; top: 2px; display: grid; place-items: center; width: 44px; min-height: 44px; padding: 0; border: 0; border-radius: 6px; color: var(--text-secondary); background: transparent; }
+.icon { width: 20px; height: 20px; }
+.btn-login { width: 100%; min-height: 48px; border: 1px solid var(--primary); border-radius: var(--radius-sm); padding: 12px 16px; color: var(--on-primary); background: var(--primary); font-size: 15px; font-weight: 700; line-height: 1.5; }
+.btn-login:hover { background: var(--primary-hover); }
+.btn-login:disabled { background: var(--disabled-bg); border-color: var(--border); color: var(--text-secondary); cursor: not-allowed; }
+.forgot-link, .register-link, .back-link { display: block; min-height: 44px; padding: 10px 0; border: 0; background: transparent; color: var(--accent-text); font-size: 14px; font-weight: 700; text-align: left; }
+.forgot-link:hover, .register-link:hover, .back-link:hover, .support-link:hover { text-decoration: underline; }
+#forgot-link { margin-top: -12px; margin-bottom: 12px; }
+.first-access { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 14px; color: var(--text-secondary); }
+.first-access .forgot-link { flex-basis: 100%; }
+.back-link { margin: 12px auto 0; text-align: center; }
+.support-link { display: flex; align-items: center; justify-content: center; min-height: 44px; margin-top: 12px; color: var(--text-secondary); font-size: 13px; }
+.error-msg { color: var(--danger); background: var(--danger-bg); border-radius: var(--radius-sm); margin-bottom: 16px; padding: 12px 14px; font-size: 14px; overflow-wrap: anywhere; }
+.error-msg:empty { display: none; }
+.success-msg { margin-bottom: 20px; padding: 14px; background: var(--success-bg); border: 1px solid var(--success); border-radius: var(--radius-sm); color: var(--success); font-size: 14px; overflow-wrap: anywhere; }
+.form-help { color: var(--text-secondary); font-size: 13px; margin-bottom: 20px; }
+.reset-section, .registration-password-section, .register-section, .login-form-wrap.hidden { display: none; }
+.reset-section.active, .registration-password-section.active, .register-section.active { display: block; }
+@media (max-width: 1000px) {
+  .login-split { gap: 40px; grid-template-columns: minmax(0, 1fr) minmax(0, 400px); width: calc(100% - 64px); }
+  .brand-headline { font-size: 32px; }
+}
+@media (max-width: 768px) {
+  .login-split { display: flex; flex-direction: column; align-items: stretch; gap: 48px; min-height: 100svh; width: min(100% - 48px, 440px); padding-block: max(48px, env(safe-area-inset-top)) max(32px, env(safe-area-inset-bottom)); }
+  .brand-logo { width: 220px; margin: 0 auto; }
+  .brand-headline, .brand-subtitle { display: none; }
+  .form-panel { padding: 24px 20px; }
+}
+@media (max-width: 380px) {
+  .login-split { width: calc(100% - 32px); gap: 32px; padding-top: 32px; }
+  .form-panel { padding-inline: 16px; }
+}
