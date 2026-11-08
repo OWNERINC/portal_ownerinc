@@ -15,7 +15,7 @@
 - [x] Adaptar acesso, perfil e administração.
 - [x] Adaptar AutoCard e Cards Pós preservando as artes.
 - [x] Integrar, validar em navegador e corrigir regressões.
-- [ ] Abrir e revisar PR; conferir CI e deploy.
+- [x] Abrir e revisar PR; conferir CI e deploy.
 
 ## Global Constraints
 

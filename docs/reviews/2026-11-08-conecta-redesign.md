@@ -62,7 +62,8 @@ para merge e acionamento de produção.
 ## Estado desta evidência
 
 Implementação dos quatro lotes concluída. Verificação integrada e revisões
-frescas finais aprovadas; publicação do PR em andamento.
+frescas finais aprovadas. PR aberto, CI aprovado e merge/produção aguardando
+autorização humana, conforme a especificação.
 
 ### Lotes 1–2 revisados
 
@@ -175,3 +176,25 @@ frescas finais aprovadas; publicação do PR em andamento.
 - A navegação Cards Pós → perfil exige confirmação de descarte já na base
   `952a038`, devido à normalização inicial de texto rico. O harness de navegação
   confirma o diálogo real explicitamente; não desativa a proteção de rascunho.
+
+## PR e CI
+
+- PR: [#89 — Conecta Ownerinc V3.5](https://github.com/OWNERINC/portal_ownerinc/pull/89),
+  base `main`, branch `feat/conecta-orange-redesign`.
+- Implementação: `6a48b3f`; evidências iniciais: `78afac8`.
+- [CI 42535343501](https://github.com/OWNERINC/portal_ownerinc/actions/runs/42535343501)
+  aprovado no SHA `78afac80c0257153aa0a9a413e72c261d42557b6`.
+- Logs do job `validate` confirmam **828 testes PASS, zero falhas e zero skips**
+  no Linux. A contagem inclui os subtestes Linux que não executam no Windows.
+- Migrações fresh/upgrade/bootstrap, readiness sem relações editoriais e seis
+  testes de integração Academy/PostgreSQL aprovados. Builds das imagens API/cron,
+  scans, audit de produção e geração dos SBOMs aprovados.
+- PR consultado sem conflitos (`MERGEABLE`, `CLEAN`), sem comentários/reviews
+  externos pendentes naquele momento. Revisões dos agentes estão consolidadas
+  neste relatório e não representam aprovação de outro usuário no GitHub.
+- `Deploy production` ficou `SKIPPED`, como esperado em `pull_request`.
+  **Não há deploy do redesign.** O merge em `main` dispara publicação e continua
+  dependendo de autorização humana explícita.
+- Este fechamento altera somente documentação. O estado do CI do HEAD mais
+  recente deve ser consultado nos checks do PR; o run acima identifica a
+  evidência verificada da implementação.
