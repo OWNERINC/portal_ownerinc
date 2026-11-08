@@ -7,7 +7,8 @@ com integração aos fluxos existentes, revisão do PR e verificação do deploy
 O usuário aprovou a direção visual no material de referência e escolheu
 “Redesign completo do Portal atual” nesta sessão em 08/11/2026.
 
-Esta especificação está em revisão antes do planejamento de implementação.
+Especificação aprovada pelo usuário em 08/11/2026. Dúvidas de abordagem durante
+a execução são encaminhadas à thread Astra xhigh solicitada pelo usuário.
 
 ## Fonte visual e rastreabilidade
 
