@@ -67,7 +67,7 @@ test('mobile centers the complete login composition while allowing natural verti
   assert.doesNotMatch(mobile, /(?:^|;)\s*height:|overflow:\s*hidden|position:\s*(?:fixed|absolute)/);
 });
 
-test('PodFalar is integrated at the bottom of the access card but outside every form', async () => {
+test('PodFalar has an independent card below the access card and outside every form', async () => {
   const h = await createLoginHarness();
   const links = h.doc.querySelectorAll('.podfalar-link');
   assert.equal(links.length, 1);
@@ -83,12 +83,28 @@ test('PodFalar is integrated at the bottom of the access card but outside every 
   assert.equal(logo.getAttribute('alt'), 'PodFalar');
   assert.equal(logo.getAttribute('width'), '108');
   const panel = h.doc.querySelector('.podfalar-panel');
-  assert.equal(panel.closest('.form-panel') === h.doc.querySelector('.form-panel'), true);
+  assert.equal(panel.closest('.form-panel') === null, true);
   assert.equal(panel.closest('.brand-panel') === null, true);
-  assert.equal(h.doc.querySelector('.login-box').children.at(-1) === panel, true);
+  const stack = h.doc.querySelector('.access-stack');
+  assert.ok(stack);
+  assert.equal(panel.parentElement === stack, true);
+  assert.equal(stack.children[0] === h.doc.querySelector('.form-panel'), true);
+  assert.equal(stack.children.at(-1) === panel, true);
   assert.match(panel.textContent, /Canal de denúncias/);
   assert.match(panel.textContent, /Disponível sem login\./);
   assert.equal(h.requests.length, 0);
+});
+
+test('PodFalar card stays outside the access card in all secondary states', async () => {
+  const h = await createLoginHarness();
+  for (const trigger of ['forgot-link', 'back-link', 'register-link', 'registration-password-link']) {
+    await h.click(trigger);
+    const panel = h.doc.querySelector('.podfalar-panel');
+    assert.equal(panel.closest('.form-panel') === null, true);
+    assert.equal(panel.closest('form'), null);
+    assert.equal(h.doc.querySelectorAll('.podfalar-link').length, 1);
+    assert.equal(panel.hidden, false);
+  }
 });
 
 test('password creation is available only inside Cadastre-se and returns focus to its own trigger', async () => {

@@ -9,7 +9,7 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 ## Usuários
 
 - Colaboradores que consultam informações, cursos e benefícios.
-- Usuários que mantêm o próprio perfil e recebem lembretes.
+- Usuários que mantêm o próprio perfil e recebem notificações.
 - Administradores que gerenciam usuários, permissões e conteúdo interno.
 
 ## Capacidades atuais
@@ -23,7 +23,7 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
   Academy não usa materiais CMS nem apresentação editorial no runtime. O catálogo
   de benefícios permanece preservado para uma etapa futura e fora da experiência
   inicial.
-- Lembretes mensais enviados por email.
+- Notificações mensais enviadas por email (rotas e contratos técnicos reminders).
 - Upload de foto de perfil.
 
 ## Restrições

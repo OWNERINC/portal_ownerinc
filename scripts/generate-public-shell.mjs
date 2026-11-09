@@ -4,14 +4,14 @@ const root = new URL('../public/', import.meta.url);
 const pages = [
   ['dashboard', 'Dashboard', 'home'],
   ['knowledge', 'Base de Conhecimento', 'book-open'],
-  ['reminders', 'Lembretes', 'bell'],
+  ['reminders', 'Notificações', 'bell'],
   ['academy', 'Academy', 'graduation-cap'],
 ];
 
 const generatedPages = [
   ['dashboard.html', 'dashboard', 'Dashboard'],
   ['knowledge.html', 'knowledge', 'Base de Conhecimento'],
-  ['reminders.html', 'reminders', 'Lembretes'],
+  ['reminders.html', 'reminders', 'Notificações'],
   ['academy.html', 'academy', 'Academy'],
   ['benefits.html', 'benefits', 'Benefícios'],
   ['profile.html', 'profile', 'Meu Perfil'],
@@ -85,7 +85,7 @@ ${navItem('profile.html', 'Meu Perfil', 'user', 'nav-account', current === 'prof
 function topbar(current, title) {
   const actions = {
     knowledge: '<button id="btn-new" class="btn btn-primary" type="button" style="display:none">Novo artigo</button>',
-    reminders: '<button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Novo lembrete</button>',
+    reminders: '<button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Nova notificação</button>',
   }[current];
   const account = '<a class="topbar-account" href="./profile.html"><i data-lucide="user"></i><span>Meu perfil</span></a>';
   const action = `<div class="topbar-actions">${actions || ''}${account}</div>`;

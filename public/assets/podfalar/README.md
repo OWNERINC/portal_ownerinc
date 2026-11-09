@@ -9,8 +9,9 @@ os paths e as cores originais; não houve redesenho nem recoloração.
 - `symbol.svg`: original `pode_simb.svg`, símbolo isolado.
 
 O login referencia a assinatura horizontal como imagem externa, com largura de
-108 px e altura proporcional na parte inferior do cartão de acesso, fora dos
-formulários. O botão conserva alvo mínimo de 48 px e nome
+108 px e altura proporcional em cartão independente abaixo do cartão de acesso,
+com a mesma largura, fora dos formulários. O cartão usa detalhes amarelos e
+pretos da identidade original, sem alterar os SVGs. O botão conserva alvo mínimo de 48 px e nome
 acessível “PodFalar (abre em nova aba)”. As classes internas dos SVGs não afetam
 o CSS do Portal. As outras variantes ficam disponíveis sem serem exibidas no
 login nem substituir a marca Conecta Ownerinc.

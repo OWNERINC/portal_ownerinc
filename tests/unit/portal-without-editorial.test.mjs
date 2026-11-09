@@ -64,7 +64,7 @@ test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle 
   reminders.reject(new Error('offline'));
   academy.resolve([{ id: 'course-1', title: 'Curso sintético', active: true, delivery_mode: 'internal' }]);
   await drain();
-  assert.match(h.node('reminders-list').textContent, /Não foi possível carregar os lembretes/);
+  assert.match(h.node('reminders-list').textContent, /Não foi possível carregar as notificações/);
   assert.match(h.node('academy-preview').textContent, /Curso sintético/);
 
   const retry = h.node('reminders-list').querySelector('button');

@@ -112,11 +112,11 @@ async function loadReminders() {
     const upcoming = reminders.map(reminder => {
       return { reminder, days: daysUntil(reminder.next_occurrence) };
     });
-    if (!upcoming.length) return showState(remindersContainer, 'Nenhum lembrete destinado a você nos próximos 7 dias.');
+    if (!upcoming.length) return showState(remindersContainer, 'Nenhuma notificação destinada a você nos próximos 7 dias.');
     clear(remindersContainer);
     upcoming.forEach(({ reminder, days }) => remindersContainer.append(reminderCard(reminder, days)));
   } catch {
-    if (requestToken === remindersRequest) showState(remindersContainer, 'Não foi possível carregar os lembretes. Verifique sua conexão.', loadReminders);
+    if (requestToken === remindersRequest) showState(remindersContainer, 'Não foi possível carregar as notificações. Verifique sua conexão.', loadReminders);
   } finally {
     if (requestToken === remindersRequest) setBusy(remindersContainer, false);
   }
@@ -125,7 +125,7 @@ async function loadReminders() {
 const quickLinks = document.getElementById('quick-links');
 const links = [
   ['book-open', 'Conhecimento', './knowledge.html'],
-  ['bell', 'Lembretes', './reminders.html'],
+  ['bell', 'Notificações', './reminders.html'],
   ['graduation-cap', 'Academy', './academy.html'],
 ];
 if (quickLinks) {

@@ -12,12 +12,13 @@ p, h1, h2 { margin: 0; }
 .brand-accent { width: 40px; height: 3px; background: var(--accent); }
 .brand-headline { font-size: 22px; font-weight: 700; line-height: 1.3; }
 .brand-subtitle { font-size: 18px; color: var(--text-secondary); }
-.podfalar-panel { display: flex; align-items: center; gap: 12px; width: 100%; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+.access-stack { display: grid; gap: 16px; min-width: 0; }
+.podfalar-panel { --podfalar-yellow: #fed500; --podfalar-ink: #010101; display: flex; align-items: center; gap: 12px; width: 100%; padding: 18px 24px; border: 1px solid color-mix(in srgb, var(--podfalar-yellow) 50%, var(--border)); border-left: 4px solid var(--podfalar-yellow); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--podfalar-yellow) 6%, var(--surface)); color: var(--podfalar-ink); }
 .podfalar-description { flex: 1; min-width: 0; }
 .podfalar-title { font-size: 15px; font-weight: 700; }
 .podfalar-availability { font-size: 13px; color: var(--text-secondary); }
-.podfalar-link { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-height: 48px; padding: 0 18px; border: 1px solid var(--primary); border-radius: var(--radius-sm); background: var(--surface); color: var(--primary); font-size: 15px; font-weight: 700; text-decoration: none; }
-.podfalar-link:hover { background: var(--selected); }
+.podfalar-link { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-height: 48px; padding: 0 18px; border: 1px solid var(--podfalar-ink); border-radius: var(--radius-sm); background: var(--surface); color: var(--podfalar-ink); font-size: 15px; font-weight: 700; text-decoration: none; }
+.podfalar-link:hover { background: color-mix(in srgb, var(--podfalar-yellow) 14%, var(--surface)); }
 .podfalar-logo { display: block; width: 108px; height: auto; }
 .form-panel { min-width: 0; padding: 28px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 #login-title { margin-bottom: 16px; font-size: 24px; font-weight: 800; line-height: 1.4; overflow-wrap: anywhere; }
@@ -62,10 +63,12 @@ p, h1, h2 { margin: 0; }
   .brand-headline { font-size: 17px; text-align: center; }
   .brand-accent, .brand-subtitle { display: none; }
   .form-panel { padding: 22px 20px; }
+  .podfalar-panel { padding-inline: 20px; }
 }
 @media (max-width: 380px) {
   .login-split { width: calc(100% - 32px); }
   .form-panel { padding-inline: 16px; }
+  .podfalar-panel { padding-inline: 16px; }
 }
 
 /* Aurora decorativa exclusiva do acesso; o fluxo e o layout permanecem intactos. */
