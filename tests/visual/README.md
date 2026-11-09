@@ -37,6 +37,33 @@ manual. `VISUAL_ROUTES=dashboard,knowledge` restringe as rotas dessa auditoria.
 Ausência de violações automatizadas não substitui inspeção de teclado, foco,
 alvos de toque e estados interativos.
 
+### Login V3.5 revisado
+
+`check-login-approved.mjs` confere as pranchetas P17D-R1 e P17M-R1 do arquivo
+`Conecta-Ownerinc-V3.5-Aprovado.pen`: marca responsiva, frase de boas-vindas,
+botões de largura igual e espaçamento de 12 px. O bloco público PodFalar fica
+integrado à parte inferior do cartão de acesso, fora de todos os formulários,
+conforme o ajuste de composição solicitado após a aprovação das pranchetas.
+Confere também o carregamento da logo horizontal original do PodFalar, sua
+largura de 108 px, proporção e nome acessível, sem distorções ou overflow.
+Percorre login, recuperação, cadastro e criação de senha em dez larguras de
+320 a 1920 px, com axe WCAG A/AA e restauração do foco. No mobile, mede a
+centralização vertical/horizontal do conjunto; em 360 × 480/568/667 px verifica
+rolagem natural e acesso aos campos e ao rodapé, sem cortes no topo. Isso não
+substitui teste com teclado virtual em aparelho físico. Exercita ordem por Tab,
+mostrar/ocultar senha, contratos de envio simulados e nova aba isolada do canal.
+
+```sh
+PLAYWRIGHT_MODULE_PATH=/caminho/externo/node_modules/playwright/index.mjs \
+AXE_MODULE_PATH=/caminho/externo/node_modules/@axe-core/playwright/dist/index.mjs \
+node tests/visual/check-login-approved.mjs
+```
+
+Aceita `VISUAL_ORIGIN` somente em `127.0.0.1`. `VISUAL_OUTPUT` escolhe a pasta de
+capturas e `results.json`; o padrão usa `opencode/login-approved-visual` no
+diretório temporário do sistema. Todas as gravações e a navegação externa são
+substituídas no navegador: esse teste não envia emails nem acessa o canal real.
+
 `check-conecta-interactions.mjs` usa a mesma variável `PLAYWRIGHT_MODULE_PATH`
 para conferir detalhes, modais, Escape/retorno de foco, validação de filtros,
 curso/aula e erro independente/retentativa do dashboard em 1920/402/360 px.

@@ -783,22 +783,24 @@ test('registration contracts exist in API and UI', async () => {
   assert.match(service, /recoverPendingRegistration/);
 });
 
-test('login exposes PodFalar as an isolated external link without the old password setup trigger', async () => {
+test('login exposes PodFalar outside the forms and password setup inside registration', async () => {
   const [login, loginScript] = await Promise.all([
     readFile('public/login.html', 'utf8'),
     readFile('public/js/login.js', 'utf8'),
   ]);
-  const firstAccess = login.match(/<div class="first-access">([\s\S]*?)<\/div>/)?.[1] || '';
-  const link = firstAccess.match(/<a\b([^>]*)>PodFalar<\/a>/)?.[1] || '';
-  assert.match(link, /class="forgot-link"/);
+  const link = login.match(/<a\b([^>]*class="podfalar-link"[^>]*)>/)?.[1] || '';
+  assert.match(link, /class="podfalar-link"/);
   assert.match(link, /href="https:\/\/app\.denouncefy\.com\/portal\/canaldedenunciaownerinc"/);
   assert.match(link, /target="_blank"/);
   assert.match(link, /rel="noopener noreferrer"/);
-  assert.doesNotMatch(login, /id="registration-password-link"/);
-  assert.doesNotMatch(loginScript, /getElementById\(['"]registration-password-link['"]\)/);
+  const register = login.match(/<form class="register-section"[\s\S]*?<\/form>/)?.[0] || '';
+  const initial = login.match(/<form id="login-form"[\s\S]*?<\/form>/)?.[0] || '';
+  assert.match(register, /id="registration-password-link"[^>]*>Criar senha do cadastro<\/button>/);
+  assert.doesNotMatch(initial, /PodFalar|registration-password-link/);
+  assert.match(loginScript, /getElementById\(['"]registration-password-link['"]\)/);
   assert.doesNotMatch(loginScript, /Primeiro acesso: criar senha/);
-  assert.match(login, /Para criar sua primeira senha, contate o suporte/);
-  assert.match(loginScript, /Para criar sua primeira senha, contate o suporte/);
+  assert.match(login, /Criar senha do cadastro/);
+  assert.match(loginScript, /Criar senha do cadastro/);
 });
 
 test('registration UI accepts only the exact 202 received contract', async () => {
