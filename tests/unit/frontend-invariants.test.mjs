@@ -208,13 +208,14 @@ test('admin and profile mount from validated identity while navigation snapshots
   assert.match(profileHtml, /id="photo-crop-frame"[^>]+role="img"/);
 });
 
-test('login keeps a visible heading and uses local icons', async () => {
+test('login keeps the brand heading and uses local icons', async () => {
   const [login, loginScript] = await Promise.all([
     readFile('public/login.html', 'utf8'),
     readFile('public/js/login.js', 'utf8'),
   ]);
   assert.equal((login.match(/<h1(?:\s|>)/g) || []).length, 1);
-  assert.match(login, /<h1 id="login-title"/);
+  assert.match(login, /<h1[^>]*class="brand-title"/);
+  assert.match(login, /<h2 id="login-title"[^>]*hidden/);
   assert.match(login, /assets\/icons\.svg#eye/);
   assert.match(login, /id="email"[^>]*aria-label="E-mail"/);
   assert.match(login, /id="password"[^>]*aria-label="Senha"/);
@@ -224,20 +225,21 @@ test('login keeps a visible heading and uses local icons', async () => {
   assert.doesNotMatch(login, /<script(?![^>]*\bsrc=)[^>]*>/);
 });
 
-test('login replaces the brand headline with a public PodFalar link that opens safely in a new tab', async () => {
+test('login preserves the welcome phrase beside a public PodFalar link that opens safely in a new tab', async () => {
   const [login, css] = await Promise.all([
     readFile('public/login.html', 'utf8'),
     readFile('public/css/login.css', 'utf8'),
   ]);
-  const link = login.match(/<a\b[^>]*class="podfalar-link"[^>]*>PodFalar<\/a>/)?.[0];
+  const link = login.match(/<a\b[^>]*class="podfalar-link"[^>]*>[\s\S]*?<\/a>/)?.[0];
   assert.ok(link);
   assert.match(link, /href="https:\/\/app\.denouncefy\.com\/portal\/canaldedenunciaownerinc"/);
   assert.match(link, /target="_blank"/);
   assert.match(link, /rel="noopener noreferrer"/);
   assert.match(link, /aria-label="PodFalar \(abre em nova aba\)"/);
-  assert.doesNotMatch(login, /Boas conexões começam aqui\.|brand-headline/);
+  assert.match(link, /<img[^>]*src="\.\/assets\/podfalar\/logo-horizontal\.svg"[^>]*alt="PodFalar"/);
+  assert.match(login, /<h2 class="brand-headline">Boas conexões começam aqui\.<\/h2>/);
   assert.match(css, /\.podfalar-link\s*\{[^}]*min-height:\s*48px/);
-  assert.match(css, /@media \(max-width: 768px\)[\s\S]*\.podfalar-link\s*\{[^}]*display:\s*flex/);
+  assert.match(css, /@media \(max-width: 768px\)/);
   assert.doesNotMatch(css, /\.podfalar-link[^{}]*\{[^}]*display:\s*none/);
 });
 

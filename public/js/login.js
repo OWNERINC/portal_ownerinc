@@ -8,6 +8,21 @@ const loginWrap = document.querySelector('.login-form-wrap');
 const resetSection = document.getElementById('reset-section');
 const registerSection = document.getElementById('register-section');
 const registrationPasswordSection = document.getElementById('registration-password-section');
+const loginTitle = document.getElementById('login-title');
+
+function showView(view, focusTarget) {
+  const titles = { reset: 'Redefinir senha', register: 'Cadastre-se', password: 'Criar senha do cadastro' };
+  loginWrap?.classList.toggle('hidden', view !== 'login');
+  for (const [name, section] of [['reset', resetSection], ['register', registerSection], ['password', registrationPasswordSection]]) {
+    section?.classList.toggle('active', view === name);
+  }
+  if (loginTitle) {
+    loginTitle.hidden = view === 'login';
+    loginTitle.textContent = titles[view] || '';
+  }
+  const target = focusTarget || loginTitle;
+  if (target) target.focus();
+}
 
 function safeDestination(value) {
   if (!value) return './dashboard.html';
@@ -110,34 +125,19 @@ document.getElementById('login-form').addEventListener('submit', async event => 
 });
 
 document.getElementById('forgot-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Redefinir senha';
-  document.getElementById('login-title').setAttribute('tabindex', '-1');
-  document.getElementById('login-title').focus();
-  loginWrap.classList.add('hidden');
-  resetSection.classList.add('active');
-  registerSection.classList.remove('active');
-  registrationPasswordSection.classList.remove('active');
-  document.getElementById('reset-email').focus();
+  showView('reset');
 });
 
 document.getElementById('register-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Cadastre-se';
-  document.getElementById('login-title').setAttribute('tabindex', '-1');
-  document.getElementById('login-title').focus();
-  loginWrap.classList.add('hidden');
-  resetSection.classList.remove('active');
-  registerSection.classList.add('active');
-  registrationPasswordSection.classList.remove('active');
-  document.getElementById('register-name').focus();
+  showView('register');
+});
+
+document.getElementById('registration-password-link').addEventListener('click', () => {
+  showView('password');
 });
 
 document.getElementById('back-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Entrar no Conecta';
-  document.getElementById('login-title').focus();
-  resetSection.classList.remove('active');
-  registerSection.classList.remove('active');
-  registrationPasswordSection.classList.remove('active');
-  loginWrap.classList.remove('hidden');
+  showView('login', document.getElementById('forgot-link'));
   document.getElementById('reset-error').textContent = '';
   document.getElementById('reset-success').style.display = 'none';
   document.getElementById('reset-email').value = '';
@@ -146,12 +146,7 @@ document.getElementById('back-link').addEventListener('click', () => {
 });
 
 document.getElementById('registration-password-back-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Entrar no Conecta';
-  document.getElementById('login-title').focus();
-  registrationPasswordSection.classList.remove('active');
-  resetSection.classList.remove('active');
-  registerSection.classList.remove('active');
-  loginWrap.classList.remove('hidden');
+  showView('register', document.getElementById('registration-password-link'));
   document.getElementById('registration-password-error').textContent = '';
   document.getElementById('registration-password-success').style.display = 'none';
   document.getElementById('registration-password-section').reset();
@@ -160,11 +155,7 @@ document.getElementById('registration-password-back-link').addEventListener('cli
 });
 
 document.getElementById('register-back-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Entrar no Conecta';
-  document.getElementById('login-title').focus();
-  registerSection.classList.remove('active');
-  resetSection.classList.remove('active');
-  loginWrap.classList.remove('hidden');
+  showView('login', document.getElementById('register-link'));
   document.getElementById('register-error').textContent = '';
   document.getElementById('register-success').style.display = 'none';
   document.getElementById('register-section').reset();
@@ -255,7 +246,7 @@ registerSection.addEventListener('submit', async event => {
       }),
     });
     await requireAcceptedRegistration(response);
-    success.textContent = 'Se o cadastro puder ser processado, você receberá instruções para confirmar o e-mail. Aguarde a aprovação do administrador. Para criar sua primeira senha, contate o suporte.';
+    success.textContent = 'Se o cadastro puder ser processado, você receberá instruções para confirmar o e-mail. Depois, use “Criar senha do cadastro” para definir sua primeira senha e aguarde a aprovação do administrador.';
     success.style.display = 'block';
     registerSection.reset();
     button.textContent = 'Cadastro recebido';
