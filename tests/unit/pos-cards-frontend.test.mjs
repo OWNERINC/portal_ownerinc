@@ -16,7 +16,7 @@ const router = await readFile('public/js/router.js', 'utf8');
 test('Cards Pós uses the authenticated Portal shell and local module assets', async () => {
   for (const marker of ['portal-wrapper', 'sidebar', 'topbar', 'skip-link', 'id="main-content"', 'sidebar-logout']) assert.match(html, new RegExp(marker));
   for (const stylesheet of ['./css/tokens.css', './css/layout.css', './css/components.css', './cards-pos/styles.css']) assert.match(html, new RegExp(`href="${stylesheet.replaceAll('.', '\\.') }"`));
-  assert.match(html, /title>Cards Pós — Portal Ownerinc/);
+  assert.match(html, /title>Cards Pós — Conecta Ownerinc/);
   assert.match(html, /assets\/icons\.svg#/);
   assert.doesNotMatch(html, /lucide@0\.441\.0/);
   assert.match(html, /<script src="\.\/js\/sidebar\.js"><\/script>/);

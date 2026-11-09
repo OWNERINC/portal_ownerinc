@@ -877,18 +877,33 @@ function init() {
   });
   inlineEditor = inline;
   page.cleanup(() => inline.dispose());
-  page.listen($('cardCanvas'), 'click', event => { const target = event.target.closest('[data-edit-key]'); if (target && window.matchMedia('(max-width: 900px)').matches) inline.open(target.dataset.editKey); if (event.target.closest('[data-edit-media]') && window.matchMedia('(max-width: 900px)').matches) $('imageInput').click(); });
+  page.listen($('cardCanvas'), 'click', event => { const target = event.target.closest('[data-edit-key]'); if (target && window.matchMedia('(max-width: 900px)').matches) { inline.open(target.dataset.editKey); repositionInline(); } if (event.target.closest('[data-edit-media]') && window.matchMedia('(max-width: 900px)').matches) $('imageInput').click(); });
   page.listen(document, 'keydown', event => { if (event.key === 'Escape') inline.cancel(); });
   const viewport = window.visualViewport;
+  const inlineLayer = $('card-inline-layer');
+  const inlineMobile = window.matchMedia?.('(max-width: 900px)');
+  let inlineViewportDisposed = false;
+  const clearInlinePosition = () => {
+    inlineLayer?.style?.removeProperty('--inline-viewport-bottom');
+    inlineLayer?.style?.removeProperty('--inline-viewport-height');
+  };
   const repositionInline = () => {
-    const layer = $('card-inline-layer');
-    if (!layer || layer.hidden) return;
-    const keyboardTop = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
-    layer.style.maxHeight = `${Math.max(160, keyboardTop - 12)}px`;
-    layer.style.paddingBottom = 'max(12px, env(safe-area-inset-bottom))';
+    if (inlineViewportDisposed || !inlineLayer || inlineLayer.hidden || !inlineMobile?.matches) { clearInlinePosition(); return; }
+    // Fixed positioning uses the layout viewport; the keyboard may only shrink
+    // the visual viewport. Keep both edges inside its visible, possibly panned area.
+    const height = viewport?.height ?? window.innerHeight;
+    const bottom = (viewport?.offsetTop ?? 0) + height;
+    inlineLayer.style.setProperty('--inline-viewport-bottom', `${Math.max(12, window.innerHeight - bottom + 12)}px`);
+    inlineLayer.style.setProperty('--inline-viewport-height', `${Math.max(0, height - 24)}px`);
   };
   if (viewport) { page.listen(viewport, 'resize', repositionInline); page.listen(viewport, 'scroll', repositionInline); }
   page.listen(window, 'resize', repositionInline);
+  if (inlineMobile?.addEventListener) page.listen(inlineMobile, 'change', repositionInline);
+  // Flush/cancel can also come from save, module switches or inline next/previous.
+  const inlineVisibility = inlineLayer && typeof MutationObserver === 'function'
+    ? new MutationObserver(repositionInline) : null;
+  inlineVisibility?.observe(inlineLayer, { attributes: true, attributeFilter: ['hidden'] });
+  page.cleanup(() => { inlineViewportDisposed = true; inlineVisibility?.disconnect(); clearInlinePosition(); });
   const previewStage = document.querySelector('.preview-stage');
   layoutUpdate = observePreviewLayout({ container: previewStage, frame: () => CARD_GEOMETRY[current.template], wrapper: document.querySelector('.preview-artboard'), toolbar: document.querySelector('.cards-pos-toolbar'), mode: () => previewMode, page });
   for (const button of document.querySelectorAll('[data-preview-mode]')) page.listen(button, 'click', () => {

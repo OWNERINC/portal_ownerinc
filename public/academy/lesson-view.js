@@ -13,10 +13,12 @@ export function lessonView({ root, page, api, navigate, LessonView, CourseView, 
   scope.cleanup(() => page.signal.removeEventListener('abort', abort));
   const lesson = LessonView.lesson;
   let player = null, manual = false, lost = false, checking = false, starting = false;
-  const host = element('div', { className: 'academy-player', 'aria-label': lesson.title, 'aria-busy': 'true' });
+  const host = element('div', { className: 'academy-player', role: 'region', 'aria-label': lesson.title, 'aria-busy': 'true' });
   const playerStatus = element('div', { className: 'academy-player-status' }, [element('p', { role: 'status', text: 'Carregando vídeo…' })]);
   const status = element('p', { role: 'status', className: 'academy-save-status' });
-  const materials = element('div', { className: 'academy-materials', text: LessonView.description || '' });
+  const materials = element('div', { className: 'academy-materials' }, LessonView.description ? [
+    element('h2', { text: 'Sobre esta aula' }), element('p', { text: LessonView.description }),
+  ] : []);
   const actions = element('div', { className: 'academy-actions' });
   const next = LessonView.next_lesson_id ? routeLink('Próxima aula →',
     { course: CourseView.course.id, lesson: LessonView.next_lesson_id, ...(preview ? { preview: '1' } : {}) }, navigate) : null;
@@ -25,11 +27,12 @@ export function lessonView({ root, page, api, navigate, LessonView, CourseView, 
   complete.disabled = LessonView.progress.completed || preview;
   actions.append(complete);
   if (next) { next.hidden = !LessonView.progress.completed; actions.append(next); }
-  const main = element('section', { className: 'academy-lesson-main' }, [host, playerStatus, heading(lesson.title), actions, status, materials]);
+  const main = element('section', { className: 'academy-lesson-main' }, [host, playerStatus, materials, actions, status]);
   const details = element('details', { className: 'academy-curriculum-disclosure', open: true }, [
     element('summary', { text: 'Conteúdo do curso' }), curriculum(CourseView, navigate, lesson.id, preview),
   ]);
   root.replaceChildren(routeLink('← Voltar ao curso', { course: CourseView.course.id, ...(preview ? { preview: '1' } : {}) }, navigate),
+    heading(lesson.title), element('p', { className: 'academy-lesson-course', text: CourseView.course.title }),
     element('div', { className: 'academy-classroom' }, [main, details]));
 
   function revoke() {

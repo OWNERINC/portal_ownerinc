@@ -83,6 +83,8 @@ HTML.
 - [Arquitetura](docs/architecture/overview.md)
 - [Auditoria da plataforma](docs/reviews/2026-07-20-platform-audit.md)
 - [Auditoria de UI/UX](docs/design/2026-07-20-ui-ux-audit.md)
+- [Redesign Conecta V3.5 e evidências](docs/reviews/2026-11-08-conecta-redesign.md)
+- [Prévia visual local do Conecta](tests/visual/README.md)
 - [Relatório de implementação](docs/reports/2026-07-20-roadmap-implementation.md)
 - [Fluxo de dados](docs/architecture/data-flow.md)
 - [Histórico da importação privada da Owner News](docs/operations/owner-news-import.md)

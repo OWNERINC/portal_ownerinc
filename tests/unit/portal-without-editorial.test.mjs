@@ -56,7 +56,7 @@ test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle 
   t.after(() => h.page.dispose());
 
   const reminders = h.latest('/api/reminders/upcoming');
-  const academy = h.latest('/api/academy?');
+  const academy = h.latest('/api/academy/continue?');
   assert.ok(reminders);
   assert.ok(academy);
   assert.equal(h.requests.some(request => /announcements|owner-news/i.test(request.path)), false);
@@ -85,7 +85,7 @@ test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle 
 test('maintained Dashboard reloads only its areas after a persisted pageshow', async () => {
   const h = await createFeedbackHarness('dashboard');
   const initialReminders = h.latest('/api/reminders/upcoming');
-  const initialAcademy = h.latest('/api/academy?');
+  const initialAcademy = h.latest('/api/academy/continue?');
   initialReminders.resolve([{ id: 'reminder-initial', title: 'Lembrete inicial', next_occurrence: '2099-01-02', description: 'Inicial' }]);
   initialAcademy.resolve([{ id: 'course-initial', title: 'Curso inicial', active: true, delivery_mode: 'internal' }]);
   await drain();
@@ -103,7 +103,7 @@ test('maintained Dashboard reloads only its areas after a persisted pageshow', a
   const reloaded = h.requests.slice(beforePageshow);
   assert.deepEqual(reloaded.map(request => request.path), [
     '/api/reminders/upcoming?days=7',
-    '/api/academy?active=true&limit=3',
+    '/api/academy/continue?limit=1',
   ]);
   assert.equal(h.requests.filter(request => /announcements|owner-news/i.test(request.path)).length, 0);
   assert.equal(h.requests.some(request => request.kind === 'asset'), false);

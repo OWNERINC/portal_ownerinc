@@ -2096,8 +2096,8 @@ test('AutoCard UI is guarded before loading the editor', async () => {
     /<link rel="stylesheet" href="\.\/autocard\/styles\.css">/,
     /<link rel="stylesheet" href="\.\/css\/layout\.css">/,
     /<link rel="stylesheet" href="\.\/css\/components\.css">/,
-    /<img src="\.\/assets\/logo-branco\.svg"/,
-    /<img src="\.\/assets\/icon-branco\.svg"/,
+    /<img src="\.\/assets\/conecta\/logo\.svg"/,
+    /<img src="\.\/assets\/conecta\/symbol\.svg"/,
     /<script src="\.\/js\/sidebar\.js"><\/script>/,
     /<script type="module" src="\.\/js\/router-bootstrap\.js"><\/script>/,
   ]) assert.match(html, path);

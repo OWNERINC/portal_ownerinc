@@ -25,7 +25,7 @@ const cropImage = document.getElementById('photo-crop-img');
 const cropCloseButton = document.getElementById('photo-crop-close');
 const cropResetButton = document.getElementById('photo-crop-reset');
 const cropApplyButton = document.getElementById('photo-crop-apply');
-const profileActionButtons = [saveButton, avatarButton, adjustPhotoButton, removePhotoButton, resetPasswordButton, cropCloseButton, cropResetButton, cropApplyButton].filter(Boolean);
+const profileActionButtons = [saveButton, avatarButton, photoInput, adjustPhotoButton, removePhotoButton, resetPasswordButton, cropCloseButton, cropResetButton, cropApplyButton].filter(Boolean);
 const cropFrameTabIndex = cropFrame?.tabIndex ?? 0;
 const cropFramePointerEvents = cropFrame?.style?.pointerEvents || '';
 let profileActionBusy = false;
@@ -218,6 +218,11 @@ page.listen(document.getElementById('avatar-img'), 'error', () => {
 });
 
 photoInput.addEventListener('change', async () => {
+  // A chooser opened before another action began may report its file later.
+  if (profileActionBusy || !page.active) {
+    photoInput.value = '';
+    return;
+  }
   const file = photoInput.files[0];
   if (!file) return;
 

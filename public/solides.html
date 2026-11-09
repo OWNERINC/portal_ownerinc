@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0F0F0F">
-  <title>Minha Jornada — Portal Ownerinc</title>
+  <meta name="theme-color" content="#F7F6F2">
+  <title>Minha Jornada — Conecta Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <script src="./js/auth-shell.js"></script>
@@ -16,22 +17,25 @@
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
-      <a href="./dashboard.html" class="sidebar-brand" aria-label="Ownerinc">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
-        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
+      <a href="./dashboard.html" class="sidebar-brand" aria-label="Conecta Ownerinc">
+        <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="logo-full" width="156" height="48">
+        <img src="./assets/conecta/symbol.svg" alt="" class="logo-icon" width="40" height="22">
       </a>
       <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#chevrons-left"></use></svg></button>
     </div>
     <!-- generated:portal-sidebar -->
     <ul class="sidebar-nav">
+      <li class="nav-group-label" aria-hidden="true">PORTAL</li>
       <li><a href="./dashboard.html" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg><span>Dashboard</span></a></li>
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
-      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-group-label nav-tools-label" aria-hidden="true">FERRAMENTAS</li>
       <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
       <li class="pos-cards-link"><a href="./cards-pos.html" title="Cards Pós"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg><span>Cards Pós</span></a></li>
+      <li class="nav-group-label admin-link" aria-hidden="true">GESTÃO</li>
+      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-account"><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
     </ul>
     <!-- /generated:portal-sidebar -->
     <div class="sidebar-footer"><button class="sidebar-logout" type="button" aria-label="Sair"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#log-out"></use></svg><span>Sair</span></button></div>
@@ -39,7 +43,7 @@
 
   <div class="main-content">
     <!-- generated:portal-topbar -->
-    <header class="topbar"><span class="topbar-title">Sólides</span></header>
+    <header class="topbar"><a class="topbar-brand" href="./dashboard.html" aria-label="Conecta Ownerinc — início"><img src="./assets/conecta/symbol.svg" alt="" width="32" height="18"></a><span class="topbar-title">Sólides</span><div class="topbar-actions"><a class="topbar-account" href="./profile.html"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu perfil</span></a></div></header>
     <!-- /generated:portal-topbar -->
     <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
       <div class="page-header">

@@ -6,7 +6,6 @@ const pages = [
   ['knowledge', 'Base de Conhecimento', 'book-open'],
   ['reminders', 'Lembretes', 'bell'],
   ['academy', 'Academy', 'graduation-cap'],
-  ['profile', 'Meu Perfil', 'user'],
 ];
 
 const generatedPages = [
@@ -71,10 +70,14 @@ function sidebar(current) {
   const items = pages.map(([page, label, icon]) => navItem(`${page}.html`, label, icon, '', current === page)).join('\n');
   return `<!-- generated:portal-sidebar -->
     <ul class="sidebar-nav">
+      <li class="nav-group-label" aria-hidden="true">PORTAL</li>
 ${items}
-${navItem('admin.html', 'Admin', 'settings-2', 'admin-link', current === 'admin', 'admin-link')}
+      <li class="nav-group-label nav-tools-label" aria-hidden="true">FERRAMENTAS</li>
 ${navItem('autocard.html', 'AutoCard', 'layout-template', 'autocard-link', current === 'autocard')}
 ${navItem('cards-pos.html', 'Cards Pós', 'badge-check', 'pos-cards-link', current === 'cards-pos')}
+      <li class="nav-group-label admin-link" aria-hidden="true">GESTÃO</li>
+${navItem('admin.html', 'Admin', 'settings-2', 'admin-link', current === 'admin', 'admin-link')}
+${navItem('profile.html', 'Meu Perfil', 'user', 'nav-account', current === 'profile')}
     </ul>
     <!-- /generated:portal-sidebar -->`;
 }
@@ -84,10 +87,11 @@ function topbar(current, title) {
     knowledge: '<button id="btn-new" class="btn btn-primary" type="button" style="display:none">Novo artigo</button>',
     reminders: '<button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Novo lembrete</button>',
   }[current];
-  const action = actions ? `<div class="topbar-actions">${actions}</div>` : '';
-  const titleTag = current === 'profile' ? 'h1' : 'span';
+  const account = '<a class="topbar-account" href="./profile.html"><i data-lucide="user"></i><span>Meu perfil</span></a>';
+  const action = `<div class="topbar-actions">${actions || ''}${account}</div>`;
+  const titleTag = 'span';
   return `<!-- generated:portal-topbar -->
-    <header class="topbar"><${titleTag} class="topbar-title">${title}</${titleTag}>${action}</header>
+    <header class="topbar"><a class="topbar-brand" href="./dashboard.html" aria-label="Conecta Ownerinc — início"><img src="./assets/conecta/symbol.svg" alt="" width="32" height="18"></a><${titleTag} class="topbar-title">${title}</${titleTag}>${action}</header>
     <!-- /generated:portal-topbar -->`;
 }
 
@@ -102,6 +106,12 @@ async function generate(checkOnly = false) {
     const generated = replaceIcons(source.replace(sidebarPattern, sidebar(current)).replace(topbarPattern, topbar(current, title)));
     const shell = current === 'autocard' ? generated : removeLucideScript(generated);
     const next = shell
+      .replace(/<meta name="theme-color" content="[^"]*">/, '<meta name="theme-color" content="#F7F6F2">')
+      .replace(/<title>(.*?) — Portal Ownerinc<\/title>/, '<title>$1 — Conecta Ownerinc</title>')
+      .replace(/(<a[^>]*class="sidebar-brand"[^>]*aria-label=")[^"]*(")/, '$1Conecta Ownerinc$2')
+      .replace(/<img[^>]*class="logo-full"[^>]*>/, '<img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="logo-full" width="156" height="48">')
+      .replace(/<img[^>]*class="logo-icon"[^>]*>/, '<img src="./assets/conecta/symbol.svg" alt="" class="logo-icon" width="40" height="22">')
+      .replace(/(<link rel="stylesheet" href="\.\/css\/tokens.css">)(?!\s*<link rel="icon")/, '$1\n  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">')
       .replace(/<main\b([^>]*?)>/, (_, attrs) => `<main${attrs.replace(/\s+data-route-pending(?:="[^"]*")?/g, '')} data-route-pending>`)
       .replace(/(<body[^>]*>)(?:\s*<script src="\.\/js\/sidebar-state\.js"><\/script>)?/, '$1\n<script src="./js/sidebar-state.js"></script>')
       .replace(/<script type="module" src="(?:\.\/js\/[^"/]+\.js|\.\/autocard\/entry\.js|\.\/cards-pos\/app\.js)"><\/script>/, '<script type="module" src="./js/router-bootstrap.js"></script>');

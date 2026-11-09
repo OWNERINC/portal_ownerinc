@@ -179,11 +179,11 @@ test('profile exposes safe API errors instead of hiding upload and save failures
   assert.match(upload, /fileSize: 500 \* 1024/);
 });
 
-test('profile uses the topbar as its only page heading', async () => {
+test('profile has one page heading inside main and a compact topbar label', async () => {
   const profile = await readFile('public/profile.html', 'utf8');
   assert.equal((profile.match(/<h1(?:\s|>)/g) || []).length, 1);
-  assert.match(profile, /<header class="topbar"><h1 class="topbar-title">Meu Perfil<\/h1>/);
-  assert.doesNotMatch(profile, /class="page-header"/);
+  assert.match(profile, /<header class="topbar">(?:(?!<\/header>)[\s\S])*<span class="topbar-title">Meu Perfil<\/span>/);
+  assert.match(profile, /<main\b[^>]*>(?:(?!<\/main>)[\s\S])*<h1\b[^>]*>Meu Perfil<\/h1>/);
 });
 
 test('admin and profile mount from validated identity while navigation snapshots stay visual', async () => {
@@ -230,7 +230,7 @@ test('Portal entry verifies Firebase before routing to dashboard or login', asyn
     readFile('public/js/index.js', 'utf8'),
   ]);
   assert.match(html, /Verificando acesso/);
-  assert.match(html, /src="\.\/assets\/icon-branco\.svg"/);
+  assert.match(html, /src="\.\/assets\/conecta\/symbol\.svg"/);
   assert.match(html, /animation:\s*portal-pulse 2\.8s ease-in-out infinite/);
   assert.match(html, /prefers-reduced-motion/);
   assert.match(html, /<script type="module" src="\.\/js\/index\.js"><\/script>/);
@@ -335,7 +335,7 @@ test('Dashboard keeps scoped areas and maintained previews without Owner News', 
   assert.doesNotMatch(html, /dashboard-hero|announcements-preview|Owner News|announcements/i);
   assert.match(html, /id="quick-links" class="dashboard-areas-grid"/);
   assert.doesNotMatch(script, /renderHero|announcements|owner-news/i);
-  assert.match(homeCss, /\.dashboard-section\s*\{/);
+  assert.match(homeCss, /\.dashboard-overview\s*\{[^}]*display:\s*grid/);
   assert.doesNotMatch(homeCss, /dashboard-hero|announcements|owner-news/i);
   assert.match(homeCss, /@media \(max-width: 768px\)/);
   assert.match(homeCss, /@media \(prefers-reduced-motion: reduce\)/);
@@ -512,7 +512,7 @@ test('authenticated shell is generated from one static build source', async () =
     assert.match(html, /<!-- generated:portal-sidebar -->[\s\S]*<!-- \/generated:portal-sidebar -->/, `${page}: sidebar is not generated`);
     const brands = html.match(/<a\b[^>]*\bclass="sidebar-brand"[^>]*>/g) || [];
     assert.equal(brands.length, 1, `${page}: expected one brand anchor`);
-    assert.match(brands[0], /\baria-label="Ownerinc"/, `${page}: brand name must survive the collapsed logo`);
+    assert.match(brands[0], /\baria-label="Conecta Ownerinc"/, `${page}: brand name must survive the collapsed logo`);
     assert.match(html, /<!-- generated:portal-topbar -->[\s\S]*<!-- \/generated:portal-topbar -->/, `${page}: topbar is not generated`);
     assert.doesNotMatch(html, /data-lucide=/, `${page}: shell contains runtime icon placeholders`);
   }

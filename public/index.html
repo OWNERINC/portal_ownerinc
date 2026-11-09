@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0F0F0F">
-  <title>Portal Ownerinc</title>
+  <meta name="theme-color" content="#F7F6F2">
+  <title>Conecta Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
   <style>
-    :root { color-scheme: dark; }
     body {
       min-height: 100vh;
       margin: 0;
       display: grid;
       place-items: center;
-      background: #000;
-      color: #fff;
+      background: var(--bg);
+      color: var(--text);
       font-family: var(--font-sans);
     }
     main {
@@ -25,12 +25,12 @@
     }
     main img {
       width: 72px;
-      height: 72px;
+      height: auto;
       animation: portal-pulse 2.8s ease-in-out infinite;
     }
     main p {
       margin: 0;
-      color: rgba(255, 255, 255, .68);
+      color: var(--text-secondary);
       font-size: 14px;
       letter-spacing: .04em;
     }
@@ -45,10 +45,10 @@
 </head>
 <body>
   <main aria-live="polite">
-    <img src="./assets/icon-branco.svg" alt="">
+    <img src="./assets/conecta/symbol.svg" alt="" width="72" height="39">
     <p>Verificando acesso…</p>
   </main>
-  <noscript><p>Ative o JavaScript para acessar o Portal Ownerinc.</p></noscript>
+  <noscript><p>Ative o JavaScript para acessar o Conecta Ownerinc.</p></noscript>
   <script type="module" src="./js/index.js"></script>
 </body>
 </html>

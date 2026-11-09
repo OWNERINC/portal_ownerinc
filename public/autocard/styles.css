@@ -110,6 +110,11 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
   overflow: auto;
 }
 .autocard-page #cardCanvas {
+  /* Freeze the existing art typography; Portal tokens style only the editor. */
+  --font-display: Arial, sans-serif;
+  font-family: Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
   width: min(100%, 420px);
   max-width: 100%;
   aspect-ratio: 1;
@@ -145,4 +150,122 @@ body.autocard-page{background:var(--bg);color:var(--text);font-family:var(--font
 .autocard-page .card-shell .sub,
 .autocard-page .card-shell .highlight {
   overflow-wrap: anywhere;
+}
+
+/* Conecta V3.5: editor chrome only. Never target descendants of #cardCanvas. */
+.autocard-page .autocard-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px 16px;
+  padding: 0;
+  margin-bottom: 28px;
+  background: transparent;
+  color: var(--text);
+  border-radius: 0;
+}
+.autocard-toolbar h1 { margin: 0; font-size: 32px; line-height: 1.2; font-weight: 800; letter-spacing: -.03em; }
+.autocard-toolbar h1 .eyebrow { color: inherit; font: inherit; letter-spacing: inherit; text-transform: none; }
+.autocard-toolbar p { color: var(--text-secondary); font-size: 15px; margin-top: 8px; }
+.autocard-toolbar .quiet-button { min-height: 44px; padding: 10px 16px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface); font-size: 14px; }
+.autocard-toolbar nav { grid-column: 1 / -1; width: 100%; gap: 24px; border-bottom: 1px solid var(--border); }
+.autocard-toolbar .tab { flex: 0 1 auto; padding: 12px 4px; border-radius: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-secondary); font-size: 14px; }
+.autocard-toolbar .tab.active { color: var(--accent-text); border-bottom-color: var(--accent); }
+.autocard-page .gallery { padding: 0; background: transparent; color: var(--text); border-radius: 0; }
+.autocard-page .gallery > h2 { font-size: 24px; font-weight: 800; line-height: 1.3; margin: 0 0 8px; }
+.autocard-page .gallery-intro { color: var(--text-secondary); font-size: 15px; margin-bottom: 24px; }
+.autocard-page .template-group { margin-top: 0; }
+.autocard-page .template-group > h3 { font-size: 14px; font-weight: 600; margin: 0 0 12px; color: var(--text-secondary); }
+.autocard-page .template-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.autocard-page .template-tile { padding: 24px; min-height: 190px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); transition: border-color .15s, background-color .15s; }
+.autocard-page .template-tile:hover { border-color: var(--accent); background: var(--bg); transform: none; }
+.autocard-page .template-tile:active { transform: none; }
+.autocard-page .template-tile strong { font-size: 18px; font-weight: 800; margin-top: 16px; }
+.autocard-page .template-tile small { color: var(--text-secondary); font-size: 14px; margin-top: 6px; }
+.autocard-page .template-tile .wire { height: 28px; padding: 0; border: 0; justify-content: space-between; align-items: center; color: var(--accent-text); }
+.autocard-page .template-tile .wire i { background: transparent; }
+.autocard-page .template-tile .wire span { flex: 0; height: auto; color: var(--text-secondary); background: none; }
+.autocard-page .template-start { display: block; margin-top: 20px; font-size: 13px; font-weight: 700; color: var(--accent-text); }
+.autocard-page .editor { grid-template-columns: minmax(320px, 440px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.autocard-page .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; box-shadow: none; color: var(--text); }
+.autocard-page .editor-panel { min-width: 0; }
+.autocard-page .back-button { color: var(--text-secondary); font-size: 14px; margin-bottom: 16px; }
+.autocard-page .section-heading { flex-wrap: wrap; align-items: center; gap: 12px; }
+.autocard-page .section-heading > div { min-width: 0; }
+.autocard-page .section-heading h2 { margin: 6px 0 0; font-size: 23px; line-height: 1.3; font-weight: 800; overflow-wrap: anywhere; }
+.autocard-page .section-heading .eyebrow { font-size: 12px; letter-spacing: .04em; color: var(--accent-text); }
+.autocard-page #templateBadge { background: var(--selected); border-radius: 6px; font-size: 12px; color: var(--text); }
+.autocard-page .field { margin: 18px 0; }
+.autocard-page .field label { color: var(--text); font-size: 14px; }
+.autocard-page .field label small { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
+.autocard-page .field :is(input, textarea), .autocard-page #savedSearch,
+.autocard-page #assetSearch { min-height: 48px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 16px; }
+.autocard-page .field :is(input, textarea):focus, .autocard-page #savedSearch:focus,
+.autocard-page #assetSearch:focus { border-color: var(--focus); box-shadow: none; }
+.autocard-page .editor-actions { gap: 8px; }
+.autocard-page :is(.secondary-button, .primary-button) { min-height: 48px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); font-size: 14px; line-height: 1.4; }
+.autocard-page .primary-button { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.autocard-page :is(.secondary-button, .primary-button):active { transform: none; }
+.autocard-page .secondary-button:hover { background: var(--selected); }
+.autocard-page .primary-button:hover { background: var(--primary-hover); }
+.autocard-page :is(.secondary-button, .primary-button):disabled { opacity: .6; cursor: wait; }
+.autocard-page .editor-actions.bottom { position: sticky; bottom: 0; z-index: 6; padding-block: 16px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); }
+.autocard-page .editor-panel :is(input, textarea, button, select, [tabindex]) { scroll-margin-block: calc(var(--topbar-height) + 16px) calc(100px + env(safe-area-inset-bottom)); }
+.autocard-page .control { color: var(--text); font-size: 14px; }
+.autocard-page .segmented { border-color: var(--border); border-radius: 6px; }
+.autocard-page .segmented button { min-height: 48px; padding: 8px; font-size: 13px; color: var(--text-secondary); background: var(--surface); }
+.autocard-page .segmented button.active { background: var(--selected); color: var(--text); }
+.autocard-page .media-status { color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.autocard-page .media-status[data-state="error"], .autocard-page .content-overflow { color: var(--danger); }
+.autocard-page .preview-area { position: sticky; top: calc(var(--topbar-height) + 24px); min-height: 0; padding: 24px; gap: 24px; justify-content: flex-start; background: var(--selected); border-radius: 8px; }
+.autocard-page .autocard-preview-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; width: 100%; color: var(--text); }
+.autocard-page .autocard-preview-heading h2 { margin: 0; font: 700 14px/1.4 var(--font-sans); }
+.autocard-page .autocard-preview-heading > span { font-size: 12px; }
+.autocard-page .canvas-frame { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+.autocard-page .preview-area > p { margin: 0; font-size: 13px; color: var(--text); line-height: 1.5; }
+.autocard-page .saved-view { max-width: none; padding: 0; border: 0; background: transparent; }
+.autocard-page .saved-view input { max-width: 320px; }
+.autocard-page .filter { border-color: var(--border); background: var(--surface); color: var(--text); border-radius: 6px; font-size: 13px; }
+.autocard-page .filter.active { background: var(--selected); border-color: var(--primary); }
+.autocard-page .saved-list { grid-template-columns: minmax(0, 1fr); gap: 0; border-top: 1px solid var(--border); }
+.autocard-page .saved-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; padding: 20px; background: var(--surface); border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+.autocard-page .saved-card > header { grid-column: 1; grid-row: 2; justify-content: flex-start; flex-wrap: wrap; gap: 16px; color: var(--text-secondary); font-size: 13px; }
+.autocard-page .saved-card > strong { grid-column: 1; grid-row: 1; margin: 0; font-size: 16px; }
+.autocard-page .saved-card .actions { grid-column: 2; grid-row: 1 / 3; align-items: center; flex-wrap: wrap; }
+.autocard-page .saved-card button { min-width: 76px; color: var(--text); background: var(--surface); border-color: var(--border); font-size: 13px; }
+.autocard-page .saved-card button[data-delete] { color: var(--danger); }
+.autocard-page .empty { color: var(--text-secondary); font-size: 15px; }
+.autocard-page :is(#assetDialog, #cropDialog) { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; }
+.autocard-page :is(#assetDialog, #cropDialog)::backdrop { background: var(--scrim); }
+.autocard-page #assetDialog { max-height: calc(100dvh - 32px); overflow: auto; }
+.autocard-page .dialog-heading { gap: 16px; margin-bottom: 16px; }
+.autocard-page .dialog-heading h2 { font-size: 22px; font-weight: 800; }
+.autocard-page .close-button { min-width: 44px; min-height: 44px; flex-shrink: 0; border-radius: 6px; color: var(--accent-text); }
+.autocard-page #cropHelp { color: var(--text-secondary); }
+.autocard-page .asset-grid button { background: var(--surface); border-color: var(--border); color: var(--text); }
+.autocard-page .asset-grid button.selected { background: var(--selected); border-color: var(--primary); }
+.autocard-page .toast { background: var(--primary); color: var(--on-primary); font-size: 14px; z-index: 110; }
+.autocard-toolbar :where(button, input, textarea, [tabindex]):focus-visible,
+.autocard-page .gallery :where(button, input, textarea, [tabindex]):focus-visible { outline-color: var(--focus); }
+@media (max-width: 1100px) {
+  .autocard-page .editor { grid-template-columns: minmax(300px, 1fr) minmax(0, 1fr); gap: 16px; }
+  .autocard-page .panel, .autocard-page .preview-area { padding: 20px; }
+}
+@media (max-width: 900px) {
+  .autocard-page .editor { grid-template-columns: minmax(0, 1fr); }
+  .autocard-page .preview-area { position: static; }
+}
+@media (max-width: 600px) {
+  .autocard-toolbar h1 { font-size: 28px; }
+  .autocard-toolbar p { font-size: 14px; }
+  .autocard-page .autocard-toolbar { gap: 16px 8px; margin-bottom: 24px; }
+  .autocard-toolbar .quiet-button { padding-inline: 10px; }
+  .autocard-page .template-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .autocard-page .template-tile { padding: 20px; min-height: 172px; }
+  .autocard-page .gallery > h2 { font-size: 21px; }
+  .autocard-page .panel { padding: 20px 16px; }
+  .autocard-page .preview-area { padding: 16px; gap: 16px; }
+  .autocard-page .saved-view { padding: 0; }
+  .autocard-page .saved-view input { max-width: none; }
+  .autocard-page .saved-card { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .autocard-page .saved-card .actions { grid-column: 1; grid-row: 3; margin-top: 8px; }
 }

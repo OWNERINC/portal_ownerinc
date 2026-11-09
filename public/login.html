@@ -3,358 +3,56 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0F0F0F">
-  <title>Login — Portal Ownerinc</title>
+  <meta name="theme-color" content="#F7F6F2">
+  <title>Entrar — Conecta Ownerinc</title>
+  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./css/tokens.css">
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    button { min-height: 44px; }
-
-    body {
-      font-family: var(--font-sans);
-      min-height: 100vh;
-      display: flex;
-    }
-
-    /* ── Split layout ─────────────────────────────────── */
-    .login-split {
-      display: flex;
-      width: 100%;
-      min-height: 100vh;
-    }
-
-    /* ── Painel esquerdo (marca / foto) ────────────────── */
-    .brand-panel {
-      flex: 1;
-      position: relative;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 52px 60px;
-
-      /*
-       * ── FOTO DE FUNDO ───────────────────────────────
-       * Para adicionar uma foto, troque o background abaixo:
-       *   background-image: url('./assets/foto-gramado.jpg');
-       *   background-size: cover;
-       *   background-position: center;
-       * O overlay escuro já está aplicado via .brand-overlay
-       * ─────────────────────────────────────────────── */
-      background: #0F0F0F;
-    }
-
-    /* overlay com gradiente dourado — fica sobre a foto */
-    .brand-overlay {
-      position: absolute;
-      inset: 0;
-      background:
-        linear-gradient(160deg, rgba(196,162,86,0.18) 0%, transparent 45%),
-        radial-gradient(ellipse at 85% 15%, rgba(196,162,86,0.10) 0%, transparent 55%),
-        radial-gradient(ellipse at 15% 85%, rgba(196,162,86,0.07) 0%, transparent 55%);
-      z-index: 0;
-    }
-
-    /* anéis decorativos */
-    .brand-ring {
-      position: absolute;
-      border-radius: 50%;
-      border: 1px solid rgba(196,162,86,0.12);
-      z-index: 0;
-    }
-    .brand-ring-1 { width: 440px; height: 440px; bottom: -140px; left: -140px; }
-    .brand-ring-2 { width: 280px; height: 280px; top: -90px; right: -90px; }
-    .brand-ring-3 { width: 160px; height: 160px; bottom: 120px; right: 40px;
-                    border-color: rgba(196,162,86,0.07); }
-
-    .brand-content, .brand-footer { position: relative; z-index: 1; }
-
-    .brand-logo { height: 30px; width: auto; margin-bottom: 72px; opacity: 0.95; }
-
-    .brand-headline {
-      font-size: 36px;
-      font-weight: 700;
-      color: #fff;
-      line-height: 1.18;
-      letter-spacing: -0.6px;
-      margin-bottom: 18px;
-    }
-
-    .brand-subtitle {
-      font-size: 14px;
-      color: rgba(255,255,255,0.50);
-      line-height: 1.7;
-      max-width: 340px;
-      margin-bottom: 52px;
-    }
-
-    .feature-list {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    .feature-list li {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      font-size: 13.5px;
-      color: rgba(255,255,255,0.72);
-    }
-
-    .feat-icon {
-      width: 34px; height: 34px;
-      border-radius: 9px;
-      background: rgba(196,162,86,0.13);
-      border: 1px solid rgba(196,162,86,0.22);
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-      color: #C4A256;
-    }
-    .feat-icon svg { width: 15px; height: 15px; }
-
-    .brand-footer {
-      border-top: 1px solid rgba(255,255,255,0.07);
-      padding-top: 22px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .brand-tagline {
-      font-size: 11px;
-      color: rgba(255,255,255,0.28);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-
-    .brand-dot {
-      width: 3px; height: 3px;
-      border-radius: 50%;
-      background: rgba(196,162,86,0.4);
-      flex-shrink: 0;
-    }
-
-    /* ── Painel direito (formulário) ───────────────────── */
-    .form-panel {
-      width: 460px;
-      flex-shrink: 0;
-      background: var(--surface);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 48px 52px;
-    }
-
-    .login-box { width: 100%; }
-
-    .login-logo { margin-bottom: 32px; }
-    .login-logo img { height: 32px; width: auto; }
-    .login-logo span {
-      display: block;
-      font-size: 11px;
-      color: var(--text-secondary);
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      margin-top: 10px;
-    }
-    .divider {
-      width: 36px; height: 2px;
-      background: var(--primary);
-      margin: 10px 0 0;
-      border-radius: 2px;
-    }
-
-    .form-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
-    .form-label { font-size: 13px; font-weight: 500; color: var(--text); }
-    .form-input {
-      padding: 10px 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      font-size: 14px;
-      font-family: var(--font-sans);
-       transition: border-color 150ms;
-    }
-    .form-input:focus { border-color: var(--primary); }
-    :where(button, a, input):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-
-    .btn-login {
-      width: 100%;
-      padding: 12px;
-      background: var(--espresso);
-      color: #fff;
-      border: none;
-      border-radius: var(--radius-sm);
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      margin-top: 8px;
-      transition: background 150ms;
-    }
-    .btn-login:hover { background: #2d1a0e; }
-    .btn-login:disabled { opacity: 0.6; cursor: not-allowed; }
-
-    .error-msg {
-      font-size: 12px;
-      color: var(--danger);
-      margin-top: 8px;
-      min-height: 18px;
-    }
-
-    .support-link {
-      display: block;
-      text-align: center;
-      margin-top: 20px;
-      font-size: 12px;
-      color: var(--text-secondary);
-      text-decoration: none;
-    }
-    .support-link:hover { color: var(--primary); }
-
-    .forgot-link {
-      display: block; text-align: left; margin-top: 6px;
-      font-size: 12px; color: var(--text-secondary); text-decoration: none; cursor: pointer;
-      background: none; border: none; padding: 0; font-family: var(--font-sans);
-    }
-    .forgot-link:hover { color: var(--primary); }
-
-     .reset-section, .registration-password-section { display: none; }
-     .reset-section.active, .registration-password-section.active { display: block; }
-    .login-form-wrap.hidden { display: none; }
-
-    .success-msg {
-      font-size: 13px; color: var(--text); background: #f0faf4;
-      border: 1px solid #b7e4c7; border-radius: var(--radius-sm);
-      padding: 12px 14px; margin-top: 8px; line-height: 1.5;
-    }
-    .form-help { font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin: -4px 0 8px; }
-
-    .back-link {
-      display: block; text-align: center; margin-top: 16px;
-      font-size: 12px; color: var(--text-secondary); cursor: pointer;
-      background: none; border: none; padding: 0; font-family: var(--font-sans);
-    }
-    .back-link:hover { color: var(--primary); }
-
-    .register-section { display: none; }
-    .register-section.active { display: block; }
-    .register-link {
-      display: block; text-align: center; margin-top: 10px;
-      font-size: 12px; color: var(--primary); cursor: pointer;
-      background: none; border: none; padding: 0; font-family: var(--font-sans);
-    }
-    .register-link:hover { color: var(--espresso); }
-
-    .password-wrap { position: relative; }
-    .password-wrap .form-input { padding-right: 40px; width: 100%; }
-    .toggle-pw {
-      position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
-      background: none; border: none; cursor: pointer;
-      color: var(--text-secondary); padding: 4px;
-      display: flex; align-items: center; line-height: 1;
-    }
-    .toggle-pw:hover { color: var(--espresso); }
-    .toggle-pw svg { width: 16px; height: 16px; }
-
-    /* ── Responsivo: oculta painel da marca em mobile ── */
-    @media (max-width: 768px) {
-      .login-split { flex-direction: column; }
-      .brand-panel {
-        display: flex;
-        flex: none;
-        min-height: 198px;
-        padding: max(28px, env(safe-area-inset-top)) 24px 26px;
-        justify-content: flex-start;
-      }
-      .brand-logo { height: 26px; margin-bottom: 28px; }
-      .brand-headline { font-size: 25px; line-height: 1.12; margin-bottom: 0; }
-      .brand-subtitle, .feature-list, .brand-footer { display: none; }
-      .form-panel { width: 100%; padding: 32px max(24px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); align-items: flex-start; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
-    }
-  </style>
+  <link rel="stylesheet" href="./css/login.css">
 </head>
 <body>
-<div class="login-split">
-
-  <!-- ── Painel esquerdo: marca ─────────────────────────── -->
+<main class="login-split">
   <div class="brand-panel">
-    <div class="brand-overlay"></div>
-    <div class="brand-ring brand-ring-1"></div>
-    <div class="brand-ring brand-ring-2"></div>
-    <div class="brand-ring brand-ring-3"></div>
-
-    <div class="brand-content">
-      <img src="./assets/logo-branco.svg" alt="Ownerinc" class="brand-logo" width="150" height="30">
-      <p class="brand-headline">Tudo que a<br>equipe precisa,<br>em um só lugar.</p>
-      <p class="brand-subtitle">Hub central de conhecimento, treinamentos, benefícios e comunicação da equipe.</p>
-      <ul class="feature-list">
-        <li>
-          <div class="feat-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg></div>
-          Base de Conhecimento e Processos
-        </li>
-        <li>
-          <div class="feat-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg></div>
-          Ownerinc Academy
-        </li>
-        <li>
-          <div class="feat-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#gift"></use></svg></div>
-          Clube de Vantagens
-        </li>
-        <li>
-          <div class="feat-icon" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg></div>
-          Lembretes e Datas Importantes
-        </li>
-      </ul>
-    </div>
-
-    <div class="brand-footer">
-      <span class="brand-tagline">Gramado · Serra Gaúcha</span>
-    </div>
+    <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="brand-logo" width="390" height="120">
+    <p class="brand-headline">Boas conexões começam aqui.</p>
+    <p class="brand-subtitle">Informação, aprendizado e ferramentas para o seu dia.</p>
   </div>
 
-  <!-- ── Painel direito: formulário ────────────────────── -->
-  <div class="form-panel">
+  <section class="form-panel" aria-labelledby="login-title">
     <div class="login-box">
-
-      <div class="login-logo">
-        <img src="./assets/logo-preto.svg" alt="Ownerinc" width="160" height="32">
-        <div class="divider"></div>
-        <span>Portal Interno</span>
-      </div>
-
-      <h1 id="login-title" style="font-size:24px; margin-bottom:20px; color:var(--espresso)">Entrar no Portal</h1>
+      <h1 id="login-title" tabindex="-1">Entrar no Conecta</h1>
 
       <div class="login-form-wrap">
+        <p class="login-intro">Acesse com o e-mail cadastrado no portal.</p>
         <form id="login-form" autocomplete="on">
           <div class="form-group">
             <label class="form-label" for="email">E-mail</label>
-            <input class="form-input" type="email" id="email" name="email" autocomplete="email" spellcheck="false" aria-label="E-mail" required>
+            <input class="form-input" type="email" id="email" name="email" autocomplete="email" spellcheck="false" aria-label="E-mail" aria-describedby="error-msg" required placeholder="seu.email@empresa.com">
           </div>
           <div class="form-group">
             <label class="form-label" for="password">Senha</label>
             <div class="password-wrap">
-              <input class="form-input" type="password" id="password" name="password" autocomplete="current-password" aria-label="Senha" required>
+              <input class="form-input" type="password" id="password" name="password" autocomplete="current-password" aria-label="Senha" aria-describedby="error-msg" required placeholder="Digite sua senha">
               <button type="button" class="toggle-pw" id="toggle-pw" aria-label="Mostrar senha" aria-pressed="false">
                 <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#eye"></use></svg>
               </button>
             </div>
-           <button class="forgot-link" type="button" id="forgot-link">Esqueci minha senha</button>
-           <button class="forgot-link" type="button" id="registration-password-link">Primeiro acesso: criar senha</button>
           </div>
+          <button class="forgot-link" type="button" id="forgot-link">Esqueci minha senha</button>
           <p class="error-msg" id="error-msg" aria-live="polite"></p>
           <button class="btn-login" type="submit" id="submit-btn">Entrar no portal</button>
-          <button class="register-link" type="button" id="register-link">Cadastre-se</button>
+          <div class="first-access">
+            <p>Ainda não tem acesso?</p>
+            <button class="register-link" type="button" id="register-link">Cadastre-se</button>
+            <button class="forgot-link" type="button" id="registration-password-link">Primeiro acesso: criar senha</button>
+          </div>
         </form>
-      </div><!-- /.login-form-wrap -->
+      </div>
 
       <form class="reset-section" id="reset-section">
+        <p class="login-intro">Informe seu e-mail para receber as orientações de redefinição de senha.</p>
         <div class="form-group">
           <label class="form-label" for="reset-email">Seu e-mail cadastrado</label>
-           <input class="form-input" type="email" id="reset-email" name="reset-email" autocomplete="email" spellcheck="false" aria-label="Seu e-mail cadastrado" required placeholder="nome@exemplo.com…">
+          <input class="form-input" type="email" id="reset-email" name="reset-email" autocomplete="email" spellcheck="false" aria-label="Seu e-mail cadastrado" aria-describedby="reset-error" required placeholder="nome@exemplo.com">
         </div>
         <p class="error-msg" id="reset-error" aria-live="polite"></p>
         <div id="reset-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
@@ -363,11 +61,12 @@
       </form>
 
       <form class="registration-password-section" id="registration-password-section">
+        <p class="login-intro">Crie sua primeira senha após confirmar o e-mail do cadastro.</p>
         <div class="form-group">
           <label class="form-label" for="registration-password-email">E-mail do cadastro</label>
-          <input class="form-input" type="email" id="registration-password-email" name="registration-password-email" autocomplete="email" spellcheck="false" required placeholder="nome@exemplo.com…">
+          <input class="form-input" type="email" id="registration-password-email" name="registration-password-email" autocomplete="email" spellcheck="false" aria-describedby="registration-password-help registration-password-error" required placeholder="nome@exemplo.com">
         </div>
-        <p class="form-help">Use esta opção depois de confirmar seu e-mail para criar a primeira senha. O cadastro continua aguardando aprovação.</p>
+        <p class="form-help" id="registration-password-help">O cadastro continua aguardando aprovação do administrador.</p>
         <p class="error-msg" id="registration-password-error" aria-live="polite"></p>
         <div id="registration-password-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
         <button class="btn-login" type="submit" id="registration-password-btn">Enviar link para criar senha</button>
@@ -375,15 +74,16 @@
       </form>
 
       <form class="register-section" id="register-section">
+        <p class="login-intro">Preencha seus dados para solicitar acesso ao Conecta.</p>
         <div class="form-group">
           <label class="form-label" for="register-name">Nome completo</label>
-          <input class="form-input" type="text" id="register-name" name="name" autocomplete="name" maxlength="120" required>
+          <input class="form-input" type="text" id="register-name" name="name" autocomplete="name" maxlength="120" aria-describedby="register-error" required>
         </div>
         <div class="form-group">
           <label class="form-label" for="register-email">E-mail</label>
-          <input class="form-input" type="email" id="register-email" name="email" autocomplete="email" maxlength="254" spellcheck="false" required>
+          <input class="form-input" type="email" id="register-email" name="email" autocomplete="email" maxlength="254" spellcheck="false" aria-describedby="register-help register-error" required>
         </div>
-        <p class="form-help">Confirme seu e-mail. Depois, use “Primeiro acesso: criar senha” para definir sua senha e aguarde a aprovação do administrador.</p>
+        <p class="form-help" id="register-help">Confirme seu e-mail. Depois, use “Primeiro acesso: criar senha” para definir sua senha e aguarde a aprovação do administrador.</p>
         <p class="error-msg" id="register-error" aria-live="polite"></p>
         <div id="register-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
         <button class="btn-login" type="submit" id="register-btn">Criar cadastro</button>
@@ -391,11 +91,9 @@
       </form>
 
       <a class="support-link" href="mailto:suporte@ownerinc.com.br">Preciso de suporte</a>
-    </div><!-- /.login-box -->
-  </div><!-- /.form-panel -->
-
-</div><!-- /.login-split -->
-
+    </div>
+  </section>
+</main>
 <script type="module" src="./js/login.js"></script>
 </body>
 </html>

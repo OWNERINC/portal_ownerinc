@@ -143,7 +143,7 @@ document.getElementById('register-link').addEventListener('click', () => {
 });
 
 document.getElementById('back-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Entrar no Portal';
+  document.getElementById('login-title').textContent = 'Entrar no Conecta';
   document.getElementById('login-title').focus();
   resetSection.classList.remove('active');
   registerSection.classList.remove('active');
@@ -157,7 +157,7 @@ document.getElementById('back-link').addEventListener('click', () => {
 });
 
 document.getElementById('registration-password-back-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Entrar no Portal';
+  document.getElementById('login-title').textContent = 'Entrar no Conecta';
   document.getElementById('login-title').focus();
   registrationPasswordSection.classList.remove('active');
   resetSection.classList.remove('active');
@@ -171,7 +171,7 @@ document.getElementById('registration-password-back-link').addEventListener('cli
 });
 
 document.getElementById('register-back-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Entrar no Portal';
+  document.getElementById('login-title').textContent = 'Entrar no Conecta';
   document.getElementById('login-title').focus();
   registerSection.classList.remove('active');
   resetSection.classList.remove('active');

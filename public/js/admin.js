@@ -531,13 +531,20 @@ async function loadUsers() {
           ...(isSuperAdmin(me) ? [element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Anonimizar', disabled: !policy.erase, 'aria-describedby': helpId, 'aria-label': `Anonimizar usuário: ${user.name || user.email}`, on: { click: () => { if (current() && policy.erase) void eraseUserData(user.uid); } } })] : []),
           element('p', { id: helpId, className: 'form-help', text: policy.reason, hidden: !policy.reason }),
         );
-        tbody.append(element('tr', {}, [
+        const userCells = [
           cell(user.name || '—'), cell(user.email || '—'),
           cell(user.role === 'admin' ? 'Administrador' : 'Leitor', `badge ${user.role === 'admin' ? 'badge-gold' : 'badge-gray'}`),
           cell(isPJ ? 'PJ' : 'CLT', `badge ${isPJ ? 'badge-gold' : 'badge-gray'}`), jobCell, cell(isPJ ? user.pj_due_day || '—' : '—'),
           cell(stateLabel, `badge ${disabled || enablePending ? 'badge-gray' : 'badge-green'}`),
           rowActions,
-        ]));
+        ];
+        // Keep the same table and controls on mobile, with visible field labels.
+        const labels = ['Nome', 'E-mail', 'Perfil', 'Contrato', 'Cargo', 'Dia NF', 'Status', 'Ações'];
+        userCells.forEach((node, cellIndex) => {
+          node.setAttribute('data-label', labels[cellIndex]);
+          node.setAttribute('role', 'cell');
+        });
+        tbody.append(element('tr', { role: 'row' }, userCells));
     });
   });
 }

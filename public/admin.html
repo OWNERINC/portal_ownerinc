@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0F0F0F">
-  <title>Admin — Portal Ownerinc</title>
+  <meta name="theme-color" content="#F7F6F2">
+  <title>Admin — Conecta Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
   <link rel="stylesheet" href="./css/admin.css">
@@ -17,9 +18,9 @@
 <div class="portal-wrapper">
   <aside class="sidebar" aria-label="Navegação principal">
     <div class="sidebar-header">
-      <a href="./dashboard.html" class="sidebar-brand" aria-label="Ownerinc">
-        <img src="./assets/logo-branco.svg" alt="Ownerinc" class="logo-full" width="130" height="26">
-        <img src="./assets/icon-branco.svg" alt="" class="logo-icon" width="28" height="28" style="display:none">
+      <a href="./dashboard.html" class="sidebar-brand" aria-label="Conecta Ownerinc">
+        <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="logo-full" width="156" height="48">
+        <img src="./assets/conecta/symbol.svg" alt="" class="logo-icon" width="40" height="22">
       </a>
       <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true">
         <svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#chevrons-left"></use></svg>
@@ -27,14 +28,17 @@
     </div>
     <!-- generated:portal-sidebar -->
     <ul class="sidebar-nav">
+      <li class="nav-group-label" aria-hidden="true">PORTAL</li>
       <li><a href="./dashboard.html" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg><span>Dashboard</span></a></li>
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
-      <li><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
-      <li id="admin-link" class="admin-link"><a href="./admin.html" class="active" aria-current="page" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-group-label nav-tools-label" aria-hidden="true">FERRAMENTAS</li>
       <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
       <li class="pos-cards-link"><a href="./cards-pos.html" title="Cards Pós"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg><span>Cards Pós</span></a></li>
+      <li class="nav-group-label admin-link" aria-hidden="true">GESTÃO</li>
+      <li id="admin-link" class="admin-link"><a href="./admin.html" class="active" aria-current="page" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-account"><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
     </ul>
     <!-- /generated:portal-sidebar -->
     <div class="sidebar-footer">
@@ -46,11 +50,14 @@
 
   <div class="main-content">
     <!-- generated:portal-topbar -->
-    <header class="topbar"><span class="topbar-title">Painel Admin</span></header>
+    <header class="topbar"><a class="topbar-brand" href="./dashboard.html" aria-label="Conecta Ownerinc — início"><img src="./assets/conecta/symbol.svg" alt="" width="32" height="18"></a><span class="topbar-title">Painel Admin</span><div class="topbar-actions"><a class="topbar-account" href="./profile.html"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu perfil</span></a></div></header>
     <!-- /generated:portal-topbar -->
-    <main class="page-body" id="main-content" tabindex="-1" data-route-pending>
+    <main class="page-body admin-page" id="main-content" tabindex="-1" data-route-pending>
 
-      <div class="page-header"><h1>Painel Administrativo</h1></div>
+      <div class="page-header admin-page-header">
+        <h1>Painel Administrativo</h1>
+        <p>Gerencie pessoas e acessos ao Conecta.</p>
+      </div>
 
       <div class="admin-tabs" id="admin-tabs" role="tablist" aria-label="Áreas administrativas"></div>
       <div id="job-title-options-feedback" class="form-help" role="status" aria-live="polite"></div>
@@ -61,7 +68,7 @@
           <h2>Solicitações de cadastro</h2>
         </div>
         <p class="card-copy">Revise os novos cadastros. O e-mail precisa estar confirmado; ao aprovar, escolha contrato e cargo ativo antes de liberar o acesso.</p>
-        <div class="table-wrapper">
+        <div class="table-wrapper" tabindex="0" role="region" aria-label="Solicitações de cadastro, tabela com rolagem horizontal">
           <table>
             <caption>Cadastros aguardando aprovação</caption>
             <thead><tr><th scope="col">Nome</th><th scope="col">E-mail</th><th scope="col">Estado</th><th scope="col">Solicitado em</th><th scope="col">Ações</th></tr></thead>
@@ -75,7 +82,7 @@
       <section id="section-users" class="admin-section" role="tabpanel" aria-labelledby="tab-users" hidden>
         <div class="section-header">
           <h2>Usuários</h2>
-          <div class="topbar-actions"><button id="btn-bulk-users" class="btn btn-ghost" type="button">Importar CSV</button><button id="btn-new-user" class="btn btn-primary" type="button">Convidar usuário</button></div>
+          <div class="admin-user-actions"><button id="btn-new-user" class="btn btn-primary" type="button">Convidar usuário</button><button id="btn-bulk-users" class="btn btn-ghost" type="button">Importar CSV</button></div>
         </div>
         <div id="bulk-import-panel" class="card" hidden style="margin-bottom:20px">
           <div class="card-title">Importar usuários em lote</div>
@@ -95,7 +102,7 @@
           <input id="bulk-csv" class="form-input" type="file" accept=".csv,text/csv" aria-describedby="bulk-csv-help bulk-csv-columns bulk-csv-examples">
           <div id="bulk-import-feedback" class="form-feedback" role="alert" aria-live="polite"></div>
           <div id="bulk-preview" hidden style="margin-top:12px"></div>
-          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button id="bulk-preview-button" class="btn btn-ghost" type="button">Pré-visualizar</button><button id="bulk-confirm-button" class="btn btn-primary" type="button" disabled>Confirmar importação</button><button id="bulk-retry-button" class="btn btn-ghost" type="button" hidden>Tentar falhas novamente</button></div>
+          <div class="admin-bulk-actions"><button id="bulk-preview-button" class="btn btn-ghost" type="button">Pré-visualizar</button><button id="bulk-confirm-button" class="btn btn-primary" type="button" disabled>Confirmar importação</button><button id="bulk-retry-button" class="btn btn-ghost" type="button" hidden>Tentar falhas novamente</button></div>
         </div>
         <form id="users-filters" class="filter-bar admin-filters" novalidate>
           <div class="form-group"><label class="form-label" for="users-q">Nome ou e-mail</label><input id="users-q" class="form-input" type="search" maxlength="200" aria-describedby="users-q-error"><span id="users-q-error" class="form-feedback" role="alert"></span></div>
@@ -104,13 +111,13 @@
           <div class="form-group"><label class="form-label" for="users-job-title-id">Cargo</label><select id="users-job-title-id" class="form-select" aria-describedby="users-job-title-id-error"><option value="">Todos</option></select><span id="users-job-title-id-error" class="form-feedback" role="alert"></span></div>
           <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="users-clear" class="btn btn-ghost" type="button">Limpar</button></div>
         </form>
-        <div class="table-wrapper">
-          <table>
+        <div class="table-wrapper admin-users-wrapper" tabindex="0" role="region" aria-label="Usuários autorizados no Portal">
+          <table class="admin-users-table" role="table">
             <caption>Usuários autorizados no Portal</caption>
-            <thead>
-              <tr><th scope="col">Nome</th><th scope="col">E-mail</th><th scope="col">Perfil</th><th scope="col">Contrato</th><th scope="col">Cargo</th><th scope="col">Dia NF</th><th scope="col">Status</th><th scope="col">Ações</th></tr>
+            <thead role="rowgroup">
+              <tr role="row"><th scope="col" role="columnheader">Nome</th><th scope="col" role="columnheader">E-mail</th><th scope="col" role="columnheader">Perfil</th><th scope="col" role="columnheader">Contrato</th><th scope="col" role="columnheader">Cargo</th><th scope="col" role="columnheader">Dia NF</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader">Ações</th></tr>
             </thead>
-            <tbody id="users-tbody">
+            <tbody id="users-tbody" role="rowgroup">
               <tr><td colspan="8" class="empty-state">Carregando…</td></tr>
             </tbody>
           </table>
@@ -125,7 +132,7 @@
             <div class="form-group"><label class="form-label" for="audit-to">Até</label><input id="audit-to" class="form-input" type="date" min="0001-01-01" max="9999-12-31" aria-describedby="audit-dates-help audit-to-error"><span id="audit-to-error" class="form-feedback" role="alert"></span></div>
             <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="audit-clear" class="btn btn-ghost" type="button">Limpar</button></div>
           </form>
-          <div class="table-wrapper">
+          <div class="table-wrapper" tabindex="0" role="region" aria-label="Atividade administrativa, tabela com rolagem horizontal">
             <table>
                <caption>Eventos administrativos</caption>
               <thead><tr><th scope="col">Data (São Paulo)</th><th scope="col">Ator atual</th><th scope="col">Ação</th><th scope="col">Alvo</th><th scope="col">Request ID</th></tr></thead>
@@ -169,7 +176,7 @@
           <div class="form-group"><label class="form-label" for="titles-active">Situação do cargo</label><select id="titles-active" class="form-select" aria-describedby="titles-active-error"><option value="">Todos</option><option value="true">Ativos</option><option value="false">Inativos</option></select><span id="titles-active-error" class="form-feedback" role="alert"></span></div>
           <div class="admin-filter-actions"><button class="btn btn-primary" type="submit">Aplicar</button><button id="titles-clear" class="btn btn-ghost" type="button">Limpar</button></div>
         </form>
-        <div class="table-wrapper">
+        <div class="table-wrapper" tabindex="0" role="region" aria-label="Cargos, tabela com rolagem horizontal">
           <table>
             <caption>Cargos disponíveis para os usuários</caption>
             <thead><tr><th scope="col">Cargo</th><th scope="col">Usuários</th><th scope="col">Status</th><th scope="col">Ações</th></tr></thead>
@@ -185,7 +192,7 @@
           <h2>Academy</h2>
           <button id="btn-new-course" class="btn btn-primary" type="button">Novo curso</button>
         </div>
-        <div class="table-wrapper">
+        <div class="table-wrapper" tabindex="0" role="region" aria-label="Cursos, tabela com rolagem horizontal">
           <table>
             <caption>Cursos cadastrados</caption>
             <thead>
@@ -205,7 +212,7 @@
           <h2>Benefícios</h2>
           <button id="btn-new-benefit" class="btn btn-primary" type="button">Novo benefício</button>
         </div>
-        <div class="table-wrapper">
+        <div class="table-wrapper" tabindex="0" role="region" aria-label="Benefícios, tabela com rolagem horizontal">
           <table>
             <caption>Benefícios cadastrados</caption>
             <thead>
@@ -257,7 +264,7 @@
             <button class="btn btn-primary" id="solides-link-save" type="submit">Salvar vínculo</button>
           </div>
         </form>
-        <div class="table-wrapper">
+        <div class="table-wrapper" tabindex="0" role="region" aria-label="Vínculos Sólides, tabela com rolagem horizontal">
           <table>
             <caption>Vínculos entre usuários do Portal e colaboradores Sólides</caption>
             <thead><tr><th scope="col">Usuário</th><th scope="col">Employee ID</th><th scope="col">External ID</th><th scope="col">Estado</th><th scope="col">Ações</th></tr></thead>
