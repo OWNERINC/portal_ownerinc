@@ -128,6 +128,10 @@ autorização humana, conforme a especificação.
   rolagem natural quando a altura disponível não comporta marca e cartão.
   Os testes medem centralização nos quatro estados e acesso ao rodapé/campos em
   viewports reduzidos de 360 × 480/568/667 px, sem simular um teclado físico real.
+- Refinamento posterior solicitado: retirar “Acesse com o e-mail cadastrado no
+  portal.” do acesso inicial. O cartão começa diretamente por E-mail, sem espaço
+  vazio residual; instruções de cadastro, recuperação e criação de senha,
+  centralização mobile, marca, aurora e PodFalar permanecem preservados.
 - Evidência local dessa revisão: 54 testes direcionados aprovados; navegador em
   dez larguras de 320 a 1920 px, quatro estados por largura sem violações axe
   WCAG A/AA automatizadas, reflow e retorno de foco aprovados. Cadastro, recuperação,

@@ -23,7 +23,6 @@ p, h1, h2 { margin: 0; }
 #login-title { margin-bottom: 16px; font-size: 24px; font-weight: 800; line-height: 1.4; overflow-wrap: anywhere; }
 .login-box form { display: flex; flex-direction: column; gap: 16px; }
 .login-intro { color: var(--text-secondary); font-size: 15px; }
-.login-form-wrap > .login-intro { margin-bottom: 16px; }
 .form-group { display: flex; flex-direction: column; gap: 8px; }
 .form-label { font-size: 14px; font-weight: 600; }
 .form-input { min-width: 0; width: 100%; min-height: 48px; padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 16px; }
