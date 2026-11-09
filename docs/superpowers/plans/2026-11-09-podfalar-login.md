@@ -28,5 +28,18 @@ as instruções relacionadas; preservar formulário e API de primeira senha.
 - [x] Documentar a limitação de acesso à primeira senha em
   `docs/product/feature-inventory.md`; executar o teste isolado e `npm run verify`,
   verificar `git diff --check` e revisar o diff.
-- [ ] Commitar, publicar a branch e criar PR para `main`; conferir revisão e checks,
+- [x] Commitar, publicar a branch e criar PR para `main`; conferir revisão e checks,
   registrar resultado e informar qualquer bloqueio de aprovação formal.
+
+## Resultado
+
+- PR: https://github.com/OWNERINC/portal_ownerinc/pull/90.
+- Revisão independente sem achados bloqueantes; 3 testes direcionados passaram.
+- `npm run verify`: 819 testes aprovados, zero falhas e 2 skips específicos de Linux
+  no Windows. `git diff --check` e `npm run security` aprovados.
+- CI do commit de implementação `adbf42c` aprovado, sem conflitos; deploy de
+  produção ignorado por se tratar de PR. O fechamento documental terá seus checks
+  conferidos separadamente no GitHub.
+- Aprovação formal tentada e recusada pelo GitHub: a identidade autenticada é autora
+  do PR (`Review Can not approve your own pull request`). Exige outro colaborador.
+- Sem merge ou deploy.
