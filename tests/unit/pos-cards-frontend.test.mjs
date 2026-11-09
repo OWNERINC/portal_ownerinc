@@ -55,6 +55,10 @@ test('editor and history retain the source field and view contract', () => {
   }
 });
 
+test('Owner creation defaults do not include the complimentary lunch', () => {
+  assert.doesNotMatch(app, /Cortesia:\s*um almoço/);
+});
+
 test('API calls are authenticated and use only the Pos-Cards routes', () => {
   for (const endpoint of ['/api/pos-cards/media', '/api/pos-cards/cards']) assert.match(`${app}${guard}`, new RegExp(endpoint.replaceAll('/', '\\/')));
   assert.match(app, /fetchAPI\('\/api\/pos-cards\/media'/);
