@@ -59,6 +59,10 @@ test('Owner creation defaults do not include the complimentary lunch', () => {
   assert.doesNotMatch(app, /Cortesia:\s*um almoço/);
 });
 
+test('Owner creation defaults use the updated pet charge', () => {
+  assert.ok(app.includes("pet: '<strong>Cobrança Pet</strong> - R$ 85,00 primeiro pet - a partir do segundo 50%'"));
+});
+
 test('API calls are authenticated and use only the Pos-Cards routes', () => {
   for (const endpoint of ['/api/pos-cards/media', '/api/pos-cards/cards']) assert.match(`${app}${guard}`, new RegExp(endpoint.replaceAll('/', '\\/')));
   assert.match(app, /fetchAPI\('\/api\/pos-cards\/media'/);

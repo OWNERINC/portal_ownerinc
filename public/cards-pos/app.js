@@ -39,7 +39,7 @@ const ownerDefaults = {
   support: '<strong>Equipe de Apoio e portaria:</strong> 24h à disposição para ajudar você no que for preciso.',
   paidTitle: 'O que é PAGO (Consumo individual):',
   utilities: 'GÁS GLP, água e energia elétrica referentes à sua unidade, proporcionais ao período da estadia.',
-  pet: '<strong>Hospedagem Pet:</strong> Cobrança diária de R$ 85,00 por animal.',
+  pet: '<strong>Cobrança Pet</strong> - R$ 85,00 primeiro pet - a partir do segundo 50%',
   servicesIntro: 'Solicite ao time de anfitriões durante a estadia (valores sob consulta):',
   gastronomy: 'Gastronomia',
   chef: 'Chef em Casa',
