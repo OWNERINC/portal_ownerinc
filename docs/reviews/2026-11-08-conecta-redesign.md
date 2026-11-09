@@ -98,6 +98,10 @@ autorização humana, conforme a especificação.
   upload/crop, abas e permissões continuam usando os contratos existentes.
 - Fotografia do login omitida: a referência não estava disponível entre os assets
   locais do Portal. Não foi substituída por fotografia de outra origem.
+- Em 09/11, a frase abaixo da marca no login foi substituída pelo botão PodFalar,
+  disponível também no mobile e sem autenticação. O link informado pelo usuário
+  (`https://app.denouncefy.com/portal/canaldedenunciaownerinc`) abre em nova aba,
+  sem acesso à aba de origem e sem envio de referrer.
 - Lote validado com 130 testes direcionados, 75 checks responsivos nas cinco
   larguras, cinco checks de crop e zero violações axe nas 15 combinações de
   página/largura e nos cinco diálogos de crop. Sucessos de escrita nessas

@@ -224,6 +224,23 @@ test('login keeps a visible heading and uses local icons', async () => {
   assert.doesNotMatch(login, /<script(?![^>]*\bsrc=)[^>]*>/);
 });
 
+test('login replaces the brand headline with a public PodFalar link that opens safely in a new tab', async () => {
+  const [login, css] = await Promise.all([
+    readFile('public/login.html', 'utf8'),
+    readFile('public/css/login.css', 'utf8'),
+  ]);
+  const link = login.match(/<a\b[^>]*class="podfalar-link"[^>]*>PodFalar<\/a>/)?.[0];
+  assert.ok(link);
+  assert.match(link, /href="https:\/\/app\.denouncefy\.com\/portal\/canaldedenunciaownerinc"/);
+  assert.match(link, /target="_blank"/);
+  assert.match(link, /rel="noopener noreferrer"/);
+  assert.match(link, /aria-label="PodFalar \(abre em nova aba\)"/);
+  assert.doesNotMatch(login, /Boas conexões começam aqui\.|brand-headline/);
+  assert.match(css, /\.podfalar-link\s*\{[^}]*min-height:\s*48px/);
+  assert.match(css, /@media \(max-width: 768px\)[\s\S]*\.podfalar-link\s*\{[^}]*display:\s*flex/);
+  assert.doesNotMatch(css, /\.podfalar-link[^{}]*\{[^}]*display:\s*none/);
+});
+
 test('Portal entry verifies Firebase before routing to dashboard or login', async () => {
   const [html, script] = await Promise.all([
     readFile('public/index.html', 'utf8'),
