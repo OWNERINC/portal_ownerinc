@@ -39,11 +39,21 @@ try {
     assert.equal(await page.locator('#btn-new').evaluate(node => document.activeElement === node), true);
 
     await visit('reminders.html');
+    assert.equal(await page.title(), 'Notificações — Conecta Ownerinc');
+    assert.equal(await page.locator('h1').textContent(), 'Notificações');
+    assert.equal(await page.locator('.sidebar-nav a[href="./reminders.html"]').getAttribute('title'), 'Notificações');
+    assert.equal(await page.locator('#btn-new-reminder').textContent(), 'Nova notificação');
     await page.locator('#btn-new-reminder').click();
     await page.locator('#modal-reminder').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#modal-reminder-title').textContent(), 'Nova notificação');
     await capture('reminder-dialog');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#btn-new-reminder').evaluate(node => document.activeElement === node), true);
+    await page.getByRole('button', { name: /^Editar notificação:/ }).first().click();
+    await page.locator('#modal-reminder').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#modal-reminder-title').textContent(), 'Editar notificação');
+    await capture('notification-edit-dialog');
+    await page.keyboard.press('Escape');
     await page.locator('#delivery-reminder').fill('invalid-uuid');
     await page.locator('#delivery-filters button[type="submit"]').click();
     assert.equal(await page.locator('#delivery-reminder').getAttribute('aria-invalid'), 'true');

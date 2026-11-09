@@ -100,7 +100,7 @@ function addCell(row, text, className) {
 }
 
 function renderTable() {
-  if (!reminders.length) return tableState('Nenhum lembrete cadastrado.');
+  if (!reminders.length) return tableState('Nenhuma notificação cadastrada.');
   if (tableStateNode) { tableStateNode.hidden = true; clear(tableStateNode); }
   if (tableWrapper) tableWrapper.hidden = false;
   clear(tbody);
@@ -122,8 +122,8 @@ function renderTable() {
     addCell(row, reminder.active ? 'Ativo' : 'Inativo', `badge ${reminder.active ? 'badge-green' : 'badge-gray'}`);
     const actions = element('td', { className: 'table-actions' });
     if (canManage) actions.append(
-      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar lembrete: ${reminder.title}`, on: { click: () => editReminder(reminder) } }),
-      element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', 'aria-label': `Excluir lembrete: ${reminder.title}`, on: { click: () => deleteReminder(reminder.id) } }),
+      element('button', { className: 'btn btn-ghost btn-sm', type: 'button', text: 'Editar', 'aria-label': `Editar notificação: ${reminder.title}`, on: { click: () => editReminder(reminder) } }),
+      element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Excluir', 'aria-label': `Excluir notificação: ${reminder.title}`, on: { click: () => deleteReminder(reminder.id) } }),
     );
     row.append(actions);
     tbody.append(row);
@@ -147,7 +147,7 @@ function focusReminderDetail() {
 function renderReminderDetailState(message, retry) {
   if (!reminderDetail) return;
   reminderDetail.hidden = false;
-  reminderDetailTitle.textContent = 'Detalhe do lembrete';
+  reminderDetailTitle.textContent = 'Detalhe da notificação';
   reminderDetailMeta.textContent = '';
   clear(reminderDetailContent).append(element('p', { text: message }));
   if (retry) reminderDetailContent.append(element('button', {
@@ -159,12 +159,12 @@ function renderReminderDetailState(message, retry) {
 function renderReminderDetail(reminder) {
   if (!reminderDetail) return;
   reminderDetail.hidden = false;
-  reminderDetailTitle.textContent = reminder.title || 'Lembrete';
+  reminderDetailTitle.textContent = reminder.title || 'Notificação';
   reminderDetailMeta.textContent = `Dia ${reminder.trigger_day || '—'} · ${targetLabel(reminder.target_users)}`;
   clear(reminderDetailContent);
   if (reminder.description) reminderDetailContent.append(element('p', { text: reminder.description }));
   if (!reminderDetailContent.childNodes.length) {
-    reminderDetailContent.append(element('p', { text: 'Este lembrete não possui conteúdo publicado.' }));
+    reminderDetailContent.append(element('p', { text: 'Esta notificação não possui conteúdo publicado.' }));
   }
   focusReminderDetail();
 }
@@ -179,7 +179,7 @@ async function loadReminderDetail() {
     return;
   }
   reminderDetail.hidden = false;
-  reminderDetailTitle.textContent = 'Carregando lembrete…';
+  reminderDetailTitle.textContent = 'Carregando notificação…';
   reminderDetailMeta.textContent = '';
   clear(reminderDetailContent).append(element('p', { className: 'loading-state', text: 'Carregando conteúdo…' }));
   try {
@@ -190,8 +190,8 @@ async function loadReminderDetail() {
     if (requestToken !== reminderDetailRequest || reminderIdFromHash() !== id) return;
     renderReminderDetailState(
       error.status === 404
-        ? 'Este lembrete não está disponível para sua conta.'
-        : 'Não foi possível carregar este lembrete.',
+        ? 'Esta notificação não está disponível para sua conta.'
+        : 'Não foi possível carregar esta notificação.',
       () => loadReminderDetail(),
     );
   }
@@ -202,7 +202,7 @@ async function loadReminders(reset = false) {
   const requestToken = ++remindersRequest;
   const requestPage = page;
   const requestPath = `${canManage ? '/api/reminders?all=true' : '/api/reminders'}${canManage ? '&' : '?'}limit=${PAGE_SIZE}&offset=${requestPage * PAGE_SIZE}`;
-  tableState('Carregando lembretes…');
+  tableState('Carregando notificações…');
   try {
     const result = await fetchAPIPage(requestPath);
     if (requestToken !== remindersRequest) return;
@@ -222,7 +222,7 @@ async function loadReminders(reset = false) {
     totalReminders = loadedTotal;
     renderTable();
   } catch {
-    if (requestToken === remindersRequest) tableState('Não foi possível carregar os lembretes.', () => loadReminders());
+    if (requestToken === remindersRequest) tableState('Não foi possível carregar as notificações.', () => loadReminders());
   }
 }
 
@@ -264,7 +264,7 @@ async function loadDeliveryManager(filters = readDeliveryFilters(), requestPage 
     } else {
       loaded.forEach(delivery => {
         const contentHref = reminderContentHref({ id: delivery.reminder_id, content_url: delivery.content_url });
-        const reminderLabel = delivery.reminder_title || delivery.reminder_id || 'Lembrete removido';
+        const reminderLabel = delivery.reminder_title || delivery.reminder_id || 'Notificação removida';
         const recipient = [delivery.recipient_name, delivery.recipient_email].filter(Boolean).join(' · ')
           || delivery.user_uid || 'Usuário removido';
         deliveriesBody.append(element('tr', {}, [
@@ -322,7 +322,7 @@ function validateDeliveryFilters(filters) {
       && parsed.toISOString().slice(0, 10) === value;
   };
   const errors = {
-    'delivery-reminder': filters.reminder_id && !UUID_PATTERN.test(filters.reminder_id) ? 'Informe um UUID válido de lembrete (versões 1 a 5).' : '',
+    'delivery-reminder': filters.reminder_id && !UUID_PATTERN.test(filters.reminder_id) ? 'Informe um UUID válido de notificação (versões 1 a 5).' : '',
     'delivery-user': filters.user_uid && !UID_PATTERN.test(filters.user_uid) ? 'Use um UID de até 128 letras, números ou os caracteres . _ : -.' : '',
     'delivery-from': filters.scheduled_from && !validDate(filters.scheduled_from) ? 'Informe uma data inicial válida (AAAA-MM-DD).' : '',
     'delivery-to': filters.scheduled_to && !validDate(filters.scheduled_to) ? 'Informe uma data final válida (AAAA-MM-DD).' : '',
@@ -398,13 +398,13 @@ function newReminder() {
   syncTargetFields();
   document.getElementById('r-channel').value = 'email';
   document.getElementById('r-active').checked = true;
-  document.getElementById('modal-reminder-title').textContent = 'Novo Lembrete';
+  document.getElementById('modal-reminder-title').textContent = 'Nova notificação';
   openDialog(modal, document.getElementById('r-title'));
 }
 
 function editReminder(reminder) {
   editingId = reminder.id;
-  document.getElementById('modal-reminder-title').textContent = 'Editar Lembrete';
+  document.getElementById('modal-reminder-title').textContent = 'Editar notificação';
   document.getElementById('r-title').value = reminder.title || '';
   document.getElementById('r-desc').value = reminder.description || '';
   document.getElementById('r-day').value = reminder.trigger_day;
@@ -434,10 +434,10 @@ function readTargetUsers() {
 }
 
 async function deleteReminder(id) {
-  if (!confirm('Excluir este lembrete?')) return;
+  if (!confirm('Excluir esta notificação?')) return;
   try {
     await fetchAPI(`/api/reminders/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    showToast('Lembrete excluído.');
+    showToast('Notificação excluída.');
     await loadReminders(true);
   } catch (error) {
     showToast(`Não foi possível excluir: ${error.message}`);
@@ -466,7 +466,7 @@ form.addEventListener('submit', async event => {
       method: editingId ? 'PUT' : 'POST', body: JSON.stringify(data),
     });
     closeDialog(modal, true);
-    showToast(editingId ? 'Lembrete atualizado.' : 'Lembrete criado.');
+    showToast(editingId ? 'Notificação atualizada.' : 'Notificação criada.');
     await loadReminders(true);
   } catch (error) {
     showToast(`Não foi possível salvar: ${error.message}`);

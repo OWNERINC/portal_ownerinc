@@ -42,8 +42,9 @@ alvos de toque e estados interativos.
 `check-login-approved.mjs` confere as pranchetas P17D-R1 e P17M-R1 do arquivo
 `Conecta-Ownerinc-V3.5-Aprovado.pen`: marca responsiva, frase de boas-vindas,
 botões de largura igual e espaçamento de 12 px. O bloco público PodFalar fica
-integrado à parte inferior do cartão de acesso, fora de todos os formulários,
-conforme o ajuste de composição solicitado após a aprovação das pranchetas.
+em cartão independente logo abaixo do cartão de acesso, com a mesma largura e
+intervalo de 16 px, fora de todos os formulários, conforme a revisão solicitada
+após a aprovação das pranchetas. Confere alinhamento nos quatro estados de acesso.
 Confere também o carregamento da logo horizontal original do PodFalar, sua
 largura de 108 px, proporção e nome acessível, sem distorções ou overflow.
 Percorre login, recuperação, cadastro e criação de senha em dez larguras de

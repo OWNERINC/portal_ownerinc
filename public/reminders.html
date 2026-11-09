@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#F7F6F2">
-  <title>Lembretes — Conecta Ownerinc</title>
+  <title>Notificações — Conecta Ownerinc</title>
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./css/layout.css">
@@ -31,7 +31,7 @@
       <li class="nav-group-label" aria-hidden="true">PORTAL</li>
       <li><a href="./dashboard.html" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg><span>Dashboard</span></a></li>
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
-      <li><a href="./reminders.html" class="active" aria-current="page" title="Lembretes"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Lembretes</span></a></li>
+      <li><a href="./reminders.html" class="active" aria-current="page" title="Notificações"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Notificações</span></a></li>
       <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
       <li class="nav-group-label nav-tools-label" aria-hidden="true">FERRAMENTAS</li>
       <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
@@ -49,17 +49,17 @@
   </aside>
   <div class="main-content">
     <!-- generated:portal-topbar -->
-    <header class="topbar"><a class="topbar-brand" href="./dashboard.html" aria-label="Conecta Ownerinc — início"><img src="./assets/conecta/symbol.svg" alt="" width="32" height="18"></a><span class="topbar-title">Lembretes</span><div class="topbar-actions"><button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Novo lembrete</button><a class="topbar-account" href="./profile.html"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu perfil</span></a></div></header>
+    <header class="topbar"><a class="topbar-brand" href="./dashboard.html" aria-label="Conecta Ownerinc — início"><img src="./assets/conecta/symbol.svg" alt="" width="32" height="18"></a><span class="topbar-title">Notificações</span><div class="topbar-actions"><button id="btn-new-reminder" class="btn btn-primary" type="button" style="display:none">Nova notificação</button><a class="topbar-account" href="./profile.html"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu perfil</span></a></div></header>
     <!-- /generated:portal-topbar -->
     <main class="page-body reminders-page" id="main-content" tabindex="-1" data-route-pending>
       <div class="page-header reminders-header">
-        <h1>Lembretes</h1>
+        <h1>Notificações</h1>
         <p>Datas importantes e avisos para o seu dia.</p>
       </div>
       <div id="reminders-table-state" class="empty-state reminders-table-state" role="status" hidden></div>
-      <div id="reminders-table-wrapper" class="table-wrapper reminders-table-wrapper" role="region" aria-label="Lembretes e seus destinatários" tabindex="0">
+      <div id="reminders-table-wrapper" class="table-wrapper reminders-table-wrapper" role="region" aria-label="Notificações e seus destinatários" tabindex="0">
         <table>
-          <caption>Lembretes e seus destinatários</caption>
+          <caption>Notificações e seus destinatários</caption>
           <thead>
             <tr>
               <th scope="col">Título</th><th scope="col">Dia do mês</th><th scope="col">Destinatários</th>
@@ -73,7 +73,7 @@
       </div>
       <div id="reminders-pagination" class="pagination" role="navigation" aria-label="Paginação"></div>
       <section id="reminder-detail" class="content-section article-view" hidden tabindex="-1" aria-labelledby="reminder-detail-title">
-        <h2 id="reminder-detail-title">Detalhe do lembrete</h2>
+        <h2 id="reminder-detail-title">Detalhe da notificação</h2>
         <p id="reminder-detail-meta" class="table-detail"></p>
         <div id="reminder-detail-content" class="article-content"></div>
       </section>
@@ -97,9 +97,9 @@
             <select id="delivery-channel" class="form-select"><option value="">Todos</option><option value="email">E-mail</option><option value="whatsapp">WhatsApp</option></select>
           </div>
           <div class="form-group">
-            <label for="delivery-reminder">Lembrete</label>
-            <input id="delivery-reminder" class="form-input" type="search" maxlength="36" placeholder="ID do lembrete" aria-describedby="delivery-reminder-help delivery-reminder-error" aria-invalid="false">
-            <small id="delivery-reminder-help" class="form-help">UUID do lembrete, não o título. Deixe vazio para todos.</small>
+            <label for="delivery-reminder">Notificação</label>
+            <input id="delivery-reminder" class="form-input" type="search" maxlength="36" placeholder="ID da notificação" aria-describedby="delivery-reminder-help delivery-reminder-error" aria-invalid="false">
+            <small id="delivery-reminder-help" class="form-help">UUID da notificação, não o título. Deixe vazio para todas.</small>
             <span id="delivery-reminder-error" class="error-msg" hidden></span>
           </div>
           <div class="form-group">
@@ -124,7 +124,7 @@
         <div class="table-wrapper" role="region" aria-label="Histórico das últimas entregas" tabindex="0">
           <table>
             <caption>Histórico compacto das últimas entregas</caption>
-            <thead><tr><th scope="col">Data</th><th scope="col">Lembrete</th><th scope="col">Destinatário</th><th scope="col">Canal</th><th scope="col">Status</th><th scope="col">Motivo</th><th scope="col">Tentativas</th></tr></thead>
+            <thead><tr><th scope="col">Data</th><th scope="col">Notificação</th><th scope="col">Destinatário</th><th scope="col">Canal</th><th scope="col">Status</th><th scope="col">Motivo</th><th scope="col">Tentativas</th></tr></thead>
             <tbody id="deliveries-tbody"><tr><td colspan="7" class="empty-state">Carregando…</td></tr></tbody>
           </table>
         </div>
@@ -134,11 +134,11 @@
   </div>
 </div>
 
-<!-- Modal lembrete -->
+<!-- Modal notificação -->
 <div id="modal-reminder" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-reminder-title">
   <form class="modal" id="reminder-form" autocomplete="off">
     <div class="modal-header">
-      <span class="modal-title" id="modal-reminder-title">Novo Lembrete</span>
+      <span class="modal-title" id="modal-reminder-title">Nova notificação</span>
       <button class="modal-close" id="modal-reminder-close" type="button" aria-label="Fechar">×</button>
     </div>
     <div class="form-group">
@@ -147,7 +147,7 @@
     </div>
     <div class="form-group">
       <label class="form-label" for="r-desc">Descrição</label>
-      <input class="form-input" id="r-desc" name="description" type="text" placeholder="Detalhe do lembrete…" autocomplete="off">
+      <input class="form-input" id="r-desc" name="description" type="text" placeholder="Detalhe da notificação…" autocomplete="off">
     </div>
     <div class="form-group">
       <label class="form-label" for="r-day">Dia do mês (1–31)</label>

@@ -38,7 +38,7 @@ try {
     const layout = await page.evaluate(() => {
       const main = document.querySelector('.login-split');
       const brand = document.querySelector('.brand-panel').getBoundingClientRect();
-      const card = document.querySelector('.form-panel').getBoundingClientRect();
+      const card = document.querySelector('.access-stack').getBoundingClientRect();
       const style = getComputedStyle(main);
       return {
         top: brand.top + scrollY, bottom: card.bottom + scrollY,
@@ -61,6 +61,13 @@ try {
   };
   const audit = async (width, state) => {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width}/${state}: horizontal overflow`);
+    await visible(channel);
+    const access = await page.locator('.form-panel').boundingBox();
+    const podfalar = await page.locator('.podfalar-panel').boundingBox();
+    assert.ok(Math.abs(podfalar.width - access.width) < 1, `${width}/${state}: cards have equal widths`);
+    assert.ok(Math.abs(podfalar.x - access.x) < 1, `${width}/${state}: cards are aligned`);
+    assert.ok(Math.abs(podfalar.y - access.y - access.height - 16) < 1, `${width}/${state}: separate cards have a 16px gap`);
+    assert.equal(await channel.evaluate(link => link.closest('form') === null && link.closest('.form-panel') === null), true);
     const audit = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
     assert.equal(audit.violations.length, 0, JSON.stringify(audit.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) }))));
     const layout = width <= 768 ? await checkMobileCentering(width, state) : undefined;
@@ -104,7 +111,7 @@ try {
     assert.ok(Math.abs(secondary.y - primary.y - primary.height - 12) < 1);
     const channelBox = await channel.boundingBox();
     assert.ok(channelBox.height >= 48 && channelBox.x >= 0 && channelBox.x + channelBox.width <= width);
-    assert.equal(await channel.evaluate(link => link.closest('form') === null && link.closest('.form-panel') !== null), true);
+    assert.equal(await channel.evaluate(link => link.closest('form') === null && link.closest('.form-panel') === null), true);
     assert.ok(channelBox.y >= secondary.y + secondary.height + 24, 'PodFalar sits below the login actions, separated from them');
     const card = await page.locator('.form-panel').boundingBox();
     const initialSpacing = await page.locator('.form-panel').evaluate(panel => {
@@ -114,7 +121,7 @@ try {
     });
     assert.ok(Math.abs(initialSpacing) < 1, 'login starts with the email field, without an empty introduction gap');
     assert.ok(channelBox.x >= card.x && channelBox.x + channelBox.width <= card.x + card.width);
-    assert.ok(channelBox.y + channelBox.height <= card.y + card.height, 'PodFalar remains inside the access card');
+    assert.ok(channelBox.y >= card.y + card.height + 16, 'PodFalar sits outside and below the access card');
     const channelLogo = await channel.locator('img').evaluate(image => ({
       loaded: image.complete && image.naturalWidth > 0,
       source: image.currentSrc, alt: image.alt,

@@ -387,7 +387,7 @@ test('reminder UI derives safe content links and formats civil dates in São Pau
   assert.match(reminders, /error\.status === 404/);
   assert.match(reminders, /focusReminderDetail\(\)/);
   assert.doesNotMatch(reminders, /reminders\.push\(detail\)/);
-  assert.match(html, /Lembrete.*Destinatário.*Motivo.*Tentativas/);
+  assert.match(html, /Notificação.*Destinatário.*Motivo.*Tentativas/);
   assert.match(html, /id="delivery-reminder"/);
   assert.match(html, /id="reminder-detail"/);
 });
