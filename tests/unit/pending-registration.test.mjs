@@ -771,7 +771,7 @@ test('registration contracts exist in API and UI', async () => {
   assert.match(login, /id="register-link"/);
   assert.match(login, /id="register-section"/);
   assert.match(login, /registration-password-section/);
-  assert.match(login, /Primeiro acesso: criar senha/);
+  assert.doesNotMatch(login, /Primeiro acesso: criar senha/);
   assert.match(loginScript, /Se o cadastro puder ser processado/);
   assert.doesNotMatch(loginScript, /Enviamos um link para confirmar seu e-mail/);
   assert.doesNotMatch(login.match(/<form class="register-section"[\s\S]*?<\/form>/)?.[0] || '', /Esqueci minha senha/);
@@ -781,6 +781,24 @@ test('registration contracts exist in API and UI', async () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS pending_registrations/);
   assert.match(provision, /ON pending_registrations TO portal_api/);
   assert.match(service, /recoverPendingRegistration/);
+});
+
+test('login exposes PodFalar as an isolated external link without the old password setup trigger', async () => {
+  const [login, loginScript] = await Promise.all([
+    readFile('public/login.html', 'utf8'),
+    readFile('public/js/login.js', 'utf8'),
+  ]);
+  const firstAccess = login.match(/<div class="first-access">([\s\S]*?)<\/div>/)?.[1] || '';
+  const link = firstAccess.match(/<a\b([^>]*)>PodFalar<\/a>/)?.[1] || '';
+  assert.match(link, /class="forgot-link"/);
+  assert.match(link, /href="https:\/\/app\.denouncefy\.com\/portal\/canaldedenunciaownerinc"/);
+  assert.match(link, /target="_blank"/);
+  assert.match(link, /rel="noopener noreferrer"/);
+  assert.doesNotMatch(login, /id="registration-password-link"/);
+  assert.doesNotMatch(loginScript, /getElementById\(['"]registration-password-link['"]\)/);
+  assert.doesNotMatch(loginScript, /Primeiro acesso: criar senha/);
+  assert.match(login, /Para criar sua primeira senha, contate o suporte/);
+  assert.match(loginScript, /Para criar sua primeira senha, contate o suporte/);
 });
 
 test('registration UI accepts only the exact 202 received contract', async () => {
