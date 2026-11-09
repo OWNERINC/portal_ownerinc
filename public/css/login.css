@@ -53,3 +53,29 @@ p, h1 { margin: 0; }
   .login-split { width: calc(100% - 32px); gap: 32px; padding-top: 32px; }
   .form-panel { padding-inline: 16px; }
 }
+
+/* Aurora decorativa exclusiva do acesso; o fluxo e o layout permanecem intactos. */
+body { isolation: isolate; }
+body::before, body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+body::before {
+  background: radial-gradient(ellipse at 12% 18%, color-mix(in srgb, var(--primary) 12%, transparent), transparent 65%);
+}
+body::after {
+  background: radial-gradient(ellipse at 88% 82%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 62%);
+}
+@keyframes login-aurora-enter {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  body::before, body::after { animation: login-aurora-enter 900ms ease-out both; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before, body::after { animation: none; transform: none; }
+}
