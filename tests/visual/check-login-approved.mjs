@@ -79,6 +79,7 @@ try {
     assert.equal(await page.getByRole('heading', { level: 2, name: 'Boas conexões começam aqui.' }).count(), 1);
     assert.equal(await title.isVisible(), false);
     assert.equal(await setup.isVisible(), false);
+    assert.equal(await page.getByText('Acesse com o e-mail cadastrado no portal.', { exact: true }).count(), 0);
     assert.equal(await page.getByRole('region', { name: 'Acesso ao portal', exact: true }).count(), 1);
     const metrics = await page.evaluate(() => {
       const brand = document.querySelector('.brand-logo');
@@ -106,6 +107,12 @@ try {
     assert.equal(await channel.evaluate(link => link.closest('form') === null && link.closest('.form-panel') !== null), true);
     assert.ok(channelBox.y >= secondary.y + secondary.height + 24, 'PodFalar sits below the login actions, separated from them');
     const card = await page.locator('.form-panel').boundingBox();
+    const initialSpacing = await page.locator('.form-panel').evaluate(panel => {
+      const style = getComputedStyle(panel);
+      return document.querySelector('#email').closest('.form-group').getBoundingClientRect().top
+        - panel.getBoundingClientRect().top - parseFloat(style.borderTopWidth) - parseFloat(style.paddingTop);
+    });
+    assert.ok(Math.abs(initialSpacing) < 1, 'login starts with the email field, without an empty introduction gap');
     assert.ok(channelBox.x >= card.x && channelBox.x + channelBox.width <= card.x + card.width);
     assert.ok(channelBox.y + channelBox.height <= card.y + card.height, 'PodFalar remains inside the access card');
     const channelLogo = await channel.locator('img').evaluate(image => ({

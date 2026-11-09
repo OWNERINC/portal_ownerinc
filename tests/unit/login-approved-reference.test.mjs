@@ -48,6 +48,16 @@ test('approved login uses the original responsive brand as h1 and keeps the welc
   assert.doesNotMatch(h.html, /Entrar no Conecta/);
 });
 
+test('initial login starts with the email field and preserves instructions in secondary flows', async () => {
+  const h = await createLoginHarness();
+  assert.doesNotMatch(h.html, /Acesse com o e-mail cadastrado no portal\./);
+  assert.equal(h.doc.querySelector('.login-form-wrap').firstElementChild.id, 'login-form');
+  assert.equal(h.node('login-form').querySelector('.form-label').textContent, 'E-mail');
+  assert.match(h.node('reset-section').querySelector('.login-intro').textContent, /redefinição de senha/);
+  assert.match(h.node('register-section').querySelector('.login-intro').textContent, /solicitar acesso/);
+  assert.match(h.node('registration-password-section').querySelector('.login-intro').textContent, /primeira senha/);
+});
+
 test('mobile centers the complete login composition while allowing natural vertical growth', async () => {
   const css = await readFile('public/css/login.css', 'utf8');
   const mobile = css.match(/@media \(max-width: 768px\)\s*\{\s*\.login-split\s*\{([^}]+)\}/)?.[1] || '';
