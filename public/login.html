@@ -12,14 +12,22 @@
 <body>
 <main class="login-split">
   <div class="brand-panel">
-    <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="brand-logo" width="390" height="120">
-    <a class="podfalar-link" href="https://app.denouncefy.com/portal/canaldedenunciaownerinc" target="_blank" rel="noopener noreferrer" aria-label="PodFalar (abre em nova aba)">PodFalar</a>
-    <p class="brand-subtitle">Informação, aprendizado e ferramentas para o seu dia.</p>
+    <h1 class="brand-title">
+      <picture>
+        <source media="(max-width: 768px)" srcset="./assets/conecta/symbol.svg" width="104" height="56">
+        <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="brand-logo" width="320" height="98">
+      </picture>
+    </h1>
+    <div class="brand-message">
+      <span class="brand-accent" aria-hidden="true"></span>
+      <h2 class="brand-headline">Boas conexões começam aqui.</h2>
+      <p class="brand-subtitle">Informação, aprendizado e ferramentas para o seu dia.</p>
+    </div>
   </div>
 
-  <section class="form-panel" aria-labelledby="login-title">
+  <section class="form-panel" aria-label="Acesso ao portal">
     <div class="login-box">
-      <h1 id="login-title" tabindex="-1">Entrar no Conecta</h1>
+      <h2 id="login-title" tabindex="-1" hidden></h2>
 
       <div class="login-form-wrap">
         <p class="login-intro">Acesse com o e-mail cadastrado no portal.</p>
@@ -39,11 +47,9 @@
           </div>
           <button class="forgot-link" type="button" id="forgot-link">Esqueci minha senha</button>
           <p class="error-msg" id="error-msg" aria-live="polite"></p>
-          <button class="btn-login" type="submit" id="submit-btn">Entrar no portal</button>
-          <div class="first-access">
-            <p>Ainda não tem acesso?</p>
-            <button class="register-link" type="button" id="register-link">Cadastre-se</button>
-            <a class="forgot-link" href="https://app.denouncefy.com/portal/canaldedenunciaownerinc" target="_blank" rel="noopener noreferrer">PodFalar</a>
+          <div class="login-actions">
+            <button class="btn-login" type="submit" id="submit-btn">Entrar no portal</button>
+            <button class="btn-register" type="button" id="register-link">Cadastre-se</button>
           </div>
         </form>
       </div>
@@ -70,7 +76,7 @@
         <p class="error-msg" id="registration-password-error" aria-live="polite"></p>
         <div id="registration-password-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
         <button class="btn-login" type="submit" id="registration-password-btn">Enviar link para criar senha</button>
-        <button class="back-link" type="button" id="registration-password-back-link">← Voltar ao login</button>
+        <button class="back-link" type="button" id="registration-password-back-link">← Voltar ao cadastro</button>
       </form>
 
       <form class="register-section" id="register-section">
@@ -83,14 +89,24 @@
           <label class="form-label" for="register-email">E-mail</label>
           <input class="form-input" type="email" id="register-email" name="email" autocomplete="email" maxlength="254" spellcheck="false" aria-describedby="register-help register-error" required>
         </div>
-        <p class="form-help" id="register-help">Confirme seu e-mail e aguarde a aprovação do administrador. Para criar sua primeira senha, contate o suporte.</p>
+        <p class="form-help" id="register-help">Confirme seu e-mail. Depois, use “Criar senha do cadastro” para definir sua primeira senha e aguarde a aprovação do administrador.</p>
         <p class="error-msg" id="register-error" aria-live="polite"></p>
         <div id="register-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
         <button class="btn-login" type="submit" id="register-btn">Criar cadastro</button>
+        <button class="forgot-link" type="button" id="registration-password-link">Criar senha do cadastro</button>
         <button class="back-link" type="button" id="register-back-link">← Voltar ao login</button>
+        <a class="support-link" href="mailto:suporte@ownerinc.com.br">Preciso de suporte</a>
       </form>
 
-      <a class="support-link" href="mailto:suporte@ownerinc.com.br">Preciso de suporte</a>
+      <section class="podfalar-panel" aria-label="PodFalar — canal de denúncias">
+        <div class="podfalar-description">
+          <p class="podfalar-title">Canal de denúncias</p>
+          <p class="podfalar-availability">Disponível sem login.</p>
+        </div>
+        <a class="podfalar-link" href="https://app.denouncefy.com/portal/canaldedenunciaownerinc" target="_blank" rel="noopener noreferrer" aria-label="PodFalar (abre em nova aba)">
+          <img src="./assets/podfalar/logo-horizontal.svg" alt="PodFalar" class="podfalar-logo" width="108" height="24">
+        </a>
+      </section>
     </div>
   </section>
 </main>

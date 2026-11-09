@@ -102,6 +102,37 @@ autorização humana, conforme a especificação.
   disponível também no mobile e sem autenticação. O link informado pelo usuário
   (`https://app.denouncefy.com/portal/canaldedenunciaownerinc`) abre em nova aba,
   sem acesso à aba de origem e sem envio de referrer.
+- Revisão posterior aprovada em 09/11: seguir `Conecta-Ownerinc-V3.5-Aprovado.pen`,
+  pranchetas `V5ZIg` (P17D-R1, 1440 × 900) e `rbBzt` (P17M-R1, 402 px),
+  em vez da imagem antiga com fotografia. Marca como H1, logo desktop de 320 px,
+  símbolo mobile de 104 px e frase como H2 de 22/17 px. A frase volta a coexistir
+  com um único bloco público PodFalar, sem duplicá-lo no formulário. O acesso
+  inicial usa a região “Acesso ao portal” sem título visível, com Entrar no portal
+  e Cadastre-se em larguras iguais e intervalo de 12 px. Criação de senha retorna
+  para dentro do cadastro, preservando os endpoints, a confirmação do e-mail e a
+  aprovação administrativa. Títulos específicos e retorno de foco cobrem os
+  fluxos secundários; navegação autenticada e Cards Pós não mudam.
+- O usuário também aprovou a aplicação da logo horizontal original do PodFalar
+  dentro do botão, substituindo somente seu texto visual. Os três SVGs fornecidos
+  foram preservados em `public/assets/podfalar/`, sem recoloração, com teste de
+  integridade SHA-256. Alt, nome acessível, destino e isolamento da nova aba
+  permanecem; o navegador confere carregamento, proporção e reflow da logo.
+- Ajuste de composição solicitado em seguida: PodFalar deixa a coluna da marca e
+  passa para a parte inferior do cartão de acesso, após as ações de login/cadastro,
+  com divisória e espaçamento. Segue fora de todos os formulários e disponível nos
+  fluxos secundários. Essa posição substitui a da prancheta de origem por decisão
+  do usuário; os testes conferem posição dentro do cartão e ordem por teclado.
+- Após aprovar a composição, o usuário solicitou centralizar todo o conjunto no
+  mobile, nos eixos vertical e horizontal. O container mantém altura mínima de
+  viewport e respiros simétricos de 24 px, respeitando safe areas; cresce e permite
+  rolagem natural quando a altura disponível não comporta marca e cartão.
+  Os testes medem centralização nos quatro estados e acesso ao rodapé/campos em
+  viewports reduzidos de 360 × 480/568/667 px, sem simular um teclado físico real.
+- Evidência local dessa revisão: 54 testes direcionados aprovados; navegador em
+  dez larguras de 320 a 1920 px, quatro estados por largura sem violações axe
+  WCAG A/AA automatizadas, reflow e retorno de foco aprovados. Cadastro, recuperação,
+  criação de senha e abertura do canal foram simulados; não comprovam envio de
+  e-mail, autenticação Firebase nem publicação dessa revisão.
 - Lote validado com 130 testes direcionados, 75 checks responsivos nas cinco
   larguras, cinco checks de crop e zero violações axe nas 15 combinações de
   página/largura e nos cinco diálogos de crop. Sucessos de escrita nessas
