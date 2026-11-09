@@ -78,6 +78,11 @@ e [relatório A3](../reports/2026-09-30-owner-news-acceptance.md).
 
 ## Cards Pós
 
+O texto padrão da confirmação de reserva (Owner) não inclui cortesia de almoço,
+tanto na prévia quanto no PDF. A cobrança pet padrão informa “Cobrança Pet -
+R$ 85,00 primeiro pet - a partir do segundo 50%”. Cards antigos do histórico mantêm o conteúdo salvo;
+para retirar a frase deles, edite os dados da reserva e salve o card novamente.
+
 O upload de imagem mantém a mídia anterior até a nova mídia autenticada estar
 carregada. Falhas permanecem em um status próprio da imagem, por modelo, com
 mensagem em português e referência de suporte quando fornecida pela API. O
