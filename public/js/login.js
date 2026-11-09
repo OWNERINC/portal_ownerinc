@@ -120,17 +120,6 @@ document.getElementById('forgot-link').addEventListener('click', () => {
   document.getElementById('reset-email').focus();
 });
 
-document.getElementById('registration-password-link').addEventListener('click', () => {
-  document.getElementById('login-title').textContent = 'Criar senha do cadastro';
-  document.getElementById('login-title').setAttribute('tabindex', '-1');
-  document.getElementById('login-title').focus();
-  loginWrap.classList.add('hidden');
-  resetSection.classList.remove('active');
-  registerSection.classList.remove('active');
-  registrationPasswordSection.classList.add('active');
-  document.getElementById('registration-password-email').focus();
-});
-
 document.getElementById('register-link').addEventListener('click', () => {
   document.getElementById('login-title').textContent = 'Cadastre-se';
   document.getElementById('login-title').setAttribute('tabindex', '-1');
@@ -266,7 +255,7 @@ registerSection.addEventListener('submit', async event => {
       }),
     });
     await requireAcceptedRegistration(response);
-    success.textContent = 'Se o cadastro puder ser processado, você receberá instruções para confirmar o e-mail. Depois, use “Primeiro acesso: criar senha” para definir sua senha e aguarde a aprovação do administrador.';
+    success.textContent = 'Se o cadastro puder ser processado, você receberá instruções para confirmar o e-mail. Aguarde a aprovação do administrador. Para criar sua primeira senha, contate o suporte.';
     success.style.display = 'block';
     registerSection.reset();
     button.textContent = 'Cadastro recebido';
