@@ -216,7 +216,25 @@
   outline-offset: 3px;
 }
 
-@media (max-width: 1020px) {
+@media (width > 1020px) {
+  .dashboard-home {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 24px;
+  }
+
+  .dashboard-home > .dashboard-intro,
+  .dashboard-home > section[aria-labelledby="areas-heading"] {
+    grid-column: 1 / -1;
+  }
+
+  .dashboard-home > section[aria-labelledby="reminders-heading"] {
+    grid-column: 1;
+  }
+
+  .dashboard-home > section[aria-labelledby="academy-heading"] {
+    grid-column: 2;
+  }
 }
 
 @media (max-width: 768px) {

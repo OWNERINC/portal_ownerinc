@@ -1,0 +1,16 @@
+{
+  "default_agent": "chief-of-state",
+  "mcp": {
+    "servers": {
+      "portal_pilot": {
+        "type": "local",
+        "command": ["node", "scripts/portal-team-mcp.mjs"],
+        "codemode": false,
+        "cwd": "."
+      }
+    }
+  },
+  "permissions": [
+    { "action": "portal_pilot_*", "resource": "*", "effect": "deny" }
+  ]
+}
