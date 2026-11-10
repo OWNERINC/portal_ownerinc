@@ -3,6 +3,7 @@ const { getAuth } = require('firebase-admin/auth');
 const pool = require('../db');
 const { can, canUseAutoCard, canUsePosCards } = require('./policy');
 const { rateLimit } = require('./security');
+const { isEthicsBootstrapRequest, term } = require('../ethics');
 
 const writeLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => req.user.uid });
 const progressLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 120, key: (req) => req.user.uid });
@@ -37,9 +38,11 @@ async function authMiddleware(req, res, next) {
 
   try {
      const { rows } = await pool.query(
-       `SELECT u.*, jt.name AS job_title, jt.active AS job_title_active, jt.page_access AS job_title_access
-        FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
-       WHERE u.uid = $1`, [decoded.uid]
+       `SELECT u.*, jt.name AS job_title, jt.active AS job_title_active, jt.page_access AS job_title_access,
+          EXISTS (SELECT 1 FROM ethics_acceptances ea
+            WHERE ea.user_uid = u.uid AND ea.term_version = $2 AND ea.content_sha256 = $3) AS ethics_accepted
+         FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
+        WHERE u.uid = $1`, [decoded.uid, term.version, term.contentHash]
      );
      const user = rows[0];
      if (!user) {
@@ -57,9 +60,13 @@ async function authMiddleware(req, res, next) {
      if (accountDisabled) {
        return res.status(403).json({ error: 'Account is disabled.', reason: 'account-disabled', requestId: req.id });
      }
-     if (user.firebase_enable_pending === true) {
-       return res.status(403).json({ error: 'Account enablement is pending.', reason: 'enable-pending', requestId: req.id });
-     }
+      if (user.firebase_enable_pending === true) {
+        return res.status(403).json({ error: 'Account enablement is pending.', reason: 'enable-pending', requestId: req.id });
+      }
+      // This gate is independent of role, permissions, job title and account age.
+      if (user.ethics_accepted !== true && !isEthicsBootstrapRequest(req.method, req.originalUrl)) {
+        return res.status(403).json({ error: 'Leia e aceite o Código de Ética para acessar o Portal.', reason: 'ethics-required', requestId: req.id });
+      }
      req.firebaseUser = decoded;
      req.user = user;
     req.user.autocard_access = canUseAutoCard(req.user);

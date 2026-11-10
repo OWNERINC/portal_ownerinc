@@ -42,6 +42,7 @@ async function grantRuntimeAccess(client) {
     REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM portal_api, portal_cron;
     REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM portal_api, portal_cron;
     GRANT SELECT, INSERT, UPDATE, DELETE ON users TO portal_api;
+    GRANT SELECT, INSERT ON ethics_acceptances TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON pending_registrations TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON firebase_cleanup_queue TO portal_api;
     GRANT SELECT, INSERT, UPDATE, DELETE ON knowledge_base, reminders, academy, benefits TO portal_api;

@@ -36,6 +36,7 @@ const expectedVersions = [
   '034_owner_news_editorial',
   '035_owner_news_polls',
   '038_disable_legacy_editorial_writes',
+  '039_ethics_acceptances',
 ];
 
 const historicalVersions = Object.freeze([
@@ -382,6 +383,20 @@ async function verifyMigrations() {
     ]);
     if (!apiEditorialPrivilegesDenied || !cronEditorialPrivilegesDenied) {
       throw new Error('Effective editorial privileges remain through a direct grant, PUBLIC, role membership or column grant');
+    }
+    const ethics = await pool.query(`SELECT
+      to_regclass('public.ethics_acceptances') IS NOT NULL AS present,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.ethics_acceptances'::regclass
+        AND contype = 'p' AND pg_get_constraintdef(oid) = 'PRIMARY KEY (user_uid, term_version, content_sha256)') AS identity,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.ethics_acceptances'::regclass
+        AND contype = 'f' AND confrelid = 'public.users'::regclass AND confdeltype = 'c') AS erasure,
+      has_table_privilege('portal_api', 'public.ethics_acceptances', 'SELECT') AS readable,
+      has_table_privilege('portal_api', 'public.ethics_acceptances', 'INSERT') AS writable,
+      NOT has_table_privilege('portal_api', 'public.ethics_acceptances', 'UPDATE') AS immutable_update,
+      NOT has_table_privilege('portal_api', 'public.ethics_acceptances', 'DELETE') AS immutable_delete,
+      NOT has_table_privilege('portal_cron', 'public.ethics_acceptances', 'SELECT,INSERT,UPDATE,DELETE') AS cron_denied`);
+    if (!Object.values(ethics.rows[0]).every(value => value === true)) {
+      throw new Error('Ethics acceptance schema or runtime privileges are incomplete');
     }
     const academyTables = ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress'];
     for (const table of academyTables) {

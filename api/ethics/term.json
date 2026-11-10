@@ -1,0 +1,57 @@
+{
+  "version": "mock-2026-11-v1",
+  "title": "Código de Ética",
+  "mock": true,
+  "notice": "Conteúdo de demonstração. Este texto não é o Código de Ética oficial da Ownerinc. O documento definitivo exigirá um novo aceite.",
+  "sections": [
+    {
+      "title": "1. Nosso compromisso",
+      "paragraphs": [
+        "Este termo demonstrativo apresenta exemplos de compromissos de conduta no ambiente de trabalho. Ele permite conhecer e testar o fluxo de leitura e aceite do Conecta antes da publicação do documento oficial.",
+        "Esperamos relações profissionais orientadas pela integridade, pelo respeito e pela responsabilidade. Cada pessoa contribui para um ambiente em que decisões e atitudes sejam coerentes com esses princípios."
+      ]
+    },
+    {
+      "title": "2. Respeito e inclusão",
+      "paragraphs": [
+        "Trate colegas, parceiros, fornecedores e clientes com dignidade. Respeite diferenças de origem, identidade, crenças, condições pessoais e experiências de vida.",
+        "Não são compatíveis com um ambiente respeitoso práticas de discriminação, assédio, intimidação, humilhação ou violência. A comunicação deve ser cuidadosa tanto nas conversas presenciais quanto nos canais digitais."
+      ]
+    },
+    {
+      "title": "3. Integridade nas relações profissionais",
+      "paragraphs": [
+        "Atue com honestidade e transparência. Não ofereça, solicite ou aceite vantagens indevidas para influenciar decisões profissionais ou obter favorecimento.",
+        "Situações em que interesses pessoais possam interferir nas responsabilidades profissionais devem ser informadas aos responsáveis indicados pela empresa. Em caso de dúvida, procure orientação antes de decidir."
+      ]
+    },
+    {
+      "title": "4. Proteção de informações e dados pessoais",
+      "paragraphs": [
+        "Acesse informações apenas quando necessário para suas atividades. Preserve a confidencialidade de dados de colegas, clientes, parceiros e da organização.",
+        "Não compartilhe senhas nem disponibilize documentos internos em canais não autorizados. Verifique os destinatários antes de enviar informações e comunique possíveis incidentes pelos canais internos apropriados."
+      ]
+    },
+    {
+      "title": "5. Uso responsável dos recursos",
+      "paragraphs": [
+        "Utilize equipamentos, sistemas, materiais e demais recursos de trabalho com zelo e para as finalidades autorizadas. Respeite as regras de segurança e os direitos de propriedade intelectual.",
+        "Mantenha registros profissionais corretos. Não altere, oculte ou elimine informações para induzir pessoas a erro ou encobrir condutas inadequadas."
+      ]
+    },
+    {
+      "title": "6. Comunicação e responsabilidade",
+      "paragraphs": [
+        "Busque esclarecimentos sempre que uma orientação não estiver clara. O diálogo responsável ajuda a prevenir conflitos e a identificar riscos antes que se tornem problemas.",
+        "Relatos de possíveis irregularidades devem ser tratados com cuidado e encaminhados aos canais oficiais definidos pela empresa. Não pratique retaliação contra pessoas que apresentem preocupações de boa-fé."
+      ]
+    },
+    {
+      "title": "7. Ciência e aceite desta demonstração",
+      "paragraphs": [
+        "Ao marcar a confirmação e selecionar “Aceitar e entrar no portal”, você registra que leu e aceita este termo de demonstração. O Conecta armazena a identificação da sua conta, a versão e o identificador do conteúdo apresentado, além da data e hora do aceite.",
+        "Este registro se refere somente ao conteúdo mock acima. Ele não substitui o aceite do Código de Ética oficial. Quando o documento definitivo for disponibilizado, será solicitada uma nova leitura e confirmação."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: 1rem; line-height: 1.6; }
+button, input { font: inherit; }
+button { cursor: pointer; min-height: 44px; border-radius: var(--radius-sm); padding: 10px 18px; font-weight: 700; }
+button:disabled { cursor: not-allowed; background: var(--disabled-bg); color: var(--text-secondary); border-color: var(--border); }
+button:focus-visible, input:focus-visible, .ethics-reader:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.ethics-page { width: min(100% - 48px, 880px); margin: 0 auto; padding: 28px 0 40px; }
+.ethics-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.ethics-header img { display: block; max-width: 48%; height: auto; }
+.ethics-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 32px; }
+h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); line-height: 1.25; }
+.ethics-intro { margin: 12px 0 20px; }
+.ethics-notice { background: var(--warning-bg); color: var(--warning); padding: 12px 16px; border-radius: var(--radius-sm); margin: 0 0 12px; }
+.ethics-version { font-size: 0.875rem; color: var(--text-secondary); margin: 0 0 12px; overflow-wrap: anywhere; }
+.ethics-reader { height: clamp(200px, 35svh, 360px); overflow-y: auto; overscroll-behavior-y: contain; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 20px 24px; overflow-wrap: anywhere; scrollbar-gutter: stable; }
+.ethics-reader h2 { font-size: 1.0625rem; line-height: 1.4; margin: 28px 0 12px; }
+.ethics-reader section:first-child h2 { margin-top: 0; }
+.ethics-reader p { margin: 0 0 14px; }
+.ethics-reader section:last-child p:last-child { margin-bottom: 0; }
+.ethics-reading-status { color: var(--text-secondary); font-size: 0.875rem; margin: 12px 0 16px; }
+.ethics-confirmation { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; min-height: 44px; cursor: pointer; }
+.ethics-confirmation input { width: 20px; height: 20px; flex: 0 0 20px; margin: 3px 0 0; accent-color: var(--primary); }
+.ethics-confirmation:has(input:disabled) { color: var(--text-secondary); cursor: not-allowed; }
+.ethics-primary { display: block; width: 100%; margin-top: 16px; border: 1px solid var(--primary); background: var(--primary); color: var(--on-primary); }
+.ethics-primary:not(:disabled):hover { background: var(--primary-hover); }
+.ethics-secondary { border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.ethics-secondary:not(:disabled):hover { background: var(--selected); }
+.ethics-error { color: var(--danger); margin: 16px 0 8px; }
+.ethics-error:empty { margin: 0; }
+@media (max-width: 600px) {
+  .ethics-page { width: calc(100% - 32px); padding-top: max(16px, env(safe-area-inset-top)); padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+  .ethics-header { gap: 12px; margin-bottom: 16px; }
+  .ethics-header img { width: 148px; }
+  .ethics-header button { padding-inline: 12px; font-size: 0.875rem; }
+  .ethics-panel { padding: 20px 16px; }
+  .ethics-reader { padding: 16px; }
+}

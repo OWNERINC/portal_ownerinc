@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#F7F6F2">
+  <title>Código de Ética — Conecta Ownerinc</title>
+  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/ethics.css">
+</head>
+<body>
+  <main class="ethics-page">
+    <header class="ethics-header">
+      <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" width="196" height="60">
+      <button id="ethics-logout" class="ethics-secondary" type="button">Sair da conta</button>
+    </header>
+    <section class="ethics-panel" aria-labelledby="ethics-title">
+      <h1 id="ethics-title">Código de Ética</h1>
+      <p class="ethics-intro">Antes de acessar o portal, leia o termo até o final e confirme seu aceite.</p>
+      <p id="ethics-loading" role="status">Carregando o termo…</p>
+      <div id="ethics-content" hidden>
+        <p id="ethics-notice" class="ethics-notice"></p>
+        <p id="ethics-version" class="ethics-version"></p>
+        <div id="ethics-reader" class="ethics-reader" role="region" aria-label="Texto do Código de Ética" aria-describedby="ethics-reading-status" tabindex="0">
+          <div id="ethics-document"></div>
+        </div>
+        <p id="ethics-reading-status" class="ethics-reading-status" role="status">Role o termo até o final para liberar a confirmação.</p>
+        <form id="ethics-form">
+          <label class="ethics-confirmation" for="ethics-checkbox">
+            <input id="ethics-checkbox" type="checkbox" disabled required aria-describedby="ethics-reading-status">
+            <span>Li e aceito o Código de Ética apresentado.</span>
+          </label>
+          <button id="ethics-accept" class="ethics-primary" type="submit" disabled>Aceitar e entrar no portal</button>
+        </form>
+      </div>
+      <p id="ethics-error" class="ethics-error" role="alert"></p>
+      <button id="ethics-retry" class="ethics-secondary" type="button" hidden>Tentar novamente</button>
+      <noscript>Ative o JavaScript para ler e aceitar o termo antes de acessar o portal.</noscript>
+    </section>
+  </main>
+  <script type="module" src="./js/ethics.js"></script>
+</body>
+</html>
