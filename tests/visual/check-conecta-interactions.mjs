@@ -8,6 +8,7 @@ const output = resolve(process.env.VISUAL_OUTPUT || '.superpowers/sdd/2026-11-08
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true, channel: 'chrome' });
 const results = [];
+const origin = process.env.VISUAL_ORIGIN || 'http://127.0.0.1:4178';
 try {
   for (const width of [1920, 402, 360]) {
     const context = await browser.newContext({ viewport: { width, height: 950 }, reducedMotion: 'reduce' });
@@ -15,7 +16,7 @@ try {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     const visit = async route => {
-      await page.goto(`http://127.0.0.1:4178/${route}`, { waitUntil: 'networkidle' });
+      await page.goto(`${origin}/${route}`, { waitUntil: 'networkidle' });
       await page.locator('main:not([data-route-pending])').waitFor({ state: 'visible' });
     };
     const capture = async name => {
