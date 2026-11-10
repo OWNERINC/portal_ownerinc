@@ -4,7 +4,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, extname, sep } from 'node:path';
-import { fixtureData, user } from './conecta-fixtures.mjs';
+import { fixtureResponse, user } from './conecta-fixtures.mjs';
 
 const root = process.env.VISUAL_PUBLIC_ROOT ? resolve(process.env.VISUAL_PUBLIC_ROOT) : fileURLToPath(new URL('../../public/', import.meta.url));
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff2': 'font/woff2', '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.json': 'application/json' };
@@ -39,13 +39,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/js/firebase-config.js') return send(200, types['.js'], `export const auth = { currentUser: location.pathname === '/login.html' ? null : ${JSON.stringify(user)}, async authStateReady() {} };`);
     if (url.pathname === '/__fixture/firebase-sdk.js') return send(200, types['.js'], "export async function signOut() {} export async function signInWithEmailAndPassword() { throw new Error('Prévia visual: autenticação real indisponível.'); }");
     if (url.pathname.startsWith('/api/')) {
-      const data = fixtureData(url);
-      return send(data === undefined ? 404 : 200, types['.json'], JSON.stringify(data ?? { error: 'Fixture não definida.' }), { 'X-Total-Count': String(Array.isArray(data) ? data.length : 0) });
+      const response = fixtureResponse(url);
+      return send(response === undefined ? 404 : 200, types['.json'], JSON.stringify(response?.data ?? { error: 'Fixture não definida.' }),
+        response?.total == null ? {} : { 'X-Total-Count': String(response.total) });
     }
     const path = resolve(root, `.${decodeURIComponent(url.pathname === '/' ? '/dashboard.html' : url.pathname)}`);
     if (!path.startsWith(root.endsWith(sep) ? root : root + sep)) return send(403, 'text/plain', 'Forbidden');
     let body = await readFile(path);
-    if (extname(path) === '.html') body = body.toString().replace('</body>', '<div style="position:fixed;bottom:0;left:0;right:0;z-index:1000;padding:3px 8px;background:#2A275E;color:#FFFEFB;font:11px sans-serif;text-align:center;pointer-events:none">PRÉVIA LOCAL · dados demonstrativos · autenticação e gravações simuladas</div></body>');
+    if (extname(path) === '.html') body = body.toString().replace('</body>', '<div style="position:fixed;bottom:0;left:0;right:0;z-index:1000;padding:3px 8px;background:#2A275E;color:#FFFEFB;font:11px sans-serif;text-align:center;pointer-events:none">PRÉVIA LOCAL · dados fictícios · sem gravações · vídeos e integrações reais indisponíveis</div></body>');
     if (url.pathname === '/js/login.js') body = body.toString().replace('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js', '/__fixture/firebase-sdk.js');
     send(200, types[extname(path)] || 'application/octet-stream', body);
   } catch (error) { res.writeHead(error.code === 'ENOENT' ? 404 : 500); res.end('Preview resource unavailable'); }

@@ -18,6 +18,58 @@ PLAYWRIGHT_MODULE_PATH=/caminho/externo/node_modules/playwright/index.mjs \
 node tests/visual/check-conecta.mjs
 ```
 
+### Conteúdo demonstrativo
+
+As páginas compartilham registros fictícios consistentes, sem inserir conteúdo
+no banco ou alterar o frontend de produção:
+
+- **6 lembretes**, com próximos eventos calculados a partir da data local de São
+  Paulo e exemplos de histórico de entregas (nenhum email é enviado).
+- **8 artigos completos** na Base de Conhecimento: integração, pessoas, tecnologia
+  e atendimento. Representam as “postagens” da demonstração, sem feed de notícias
+  ou reativação do CMS. Os textos não são políticas oficiais.
+- **2 trilhas na Academy**, cada uma com dois módulos e seis aulas:
+  `culture` — Primeiros passos na Ownerinc (3/6 concluídas) e `service` —
+  Atendimento e relacionamento com o cliente (não iniciada). Ambas ficam
+  disponíveis à pessoa fictícia. Formação inicial/por cargo são grupos visuais;
+  esta prévia não comprova autorização por cargo real.
+- **6 usuários, 5 cargos, 2 solicitações de cadastro** e exemplos de auditoria;
+  dados pessoais fictícios e emails sob `example.test`.
+- **4 benefícios**, **4 AutoCards** e **2 Cards Pós**, incluindo histórico e
+  abertura de itens salvos. As artes e os renderizadores existentes não mudam.
+- Resumo, jornada semanal, ajustes e marcações **simulados** na página Sólides.
+  A integração administrativa continua desativada: não há consulta externa,
+  vínculo real, alteração de ponto ou aprovação real de ajustes.
+
+Catálogos, filtros, busca e paginação usam os contratos existentes; totais são
+calculados antes do recorte da página. IDs desconhecidos retornam 404.
+O dashboard usa os mesmos lembretes e o progresso da trilha de integração.
+
+As aulas têm descrições próprias, mas **não têm vídeo reproduzível**. O player
+existente exibe seu estado de mídia não suportada, acompanhado da descrição
+demonstrativa. Criação, edição, exclusão e conclusão continuam retornando 405;
+as telas de edição podem ser abertas para inspeção, mas nada é salvo. Login,
+email, exportação autenticada, progresso e integração reais não são validados.
+
+Para conferir os conteúdos e filtros no navegador em 1366/402 px:
+
+```sh
+PLAYWRIGHT_MODULE_PATH=/caminho/externo/node_modules/playwright/index.mjs \
+node tests/visual/check-conecta-content.mjs
+```
+
+`PORT` escolhe outra porta para o servidor. `VISUAL_ORIGIN` informa essa origem
+a `check-conecta-content.mjs`, `check-conecta.mjs`,
+`check-conecta-interactions.mjs` e `check-conecta-accessibility.mjs` (padrão:
+`http://127.0.0.1:4178`). Reinicie o processo do servidor após editar as fixtures:
+os módulos de dados são carregados na inicialização, sem hot reload.
+
+Os testes de dados e isolamento HTTP não precisam de Playwright:
+
+```sh
+node --test tests/unit/conecta-preview.test.mjs
+```
+
 O navegador padrão é Chrome instalado (`BROWSER_CHANNEL=chrome`).
 `VISUAL_OUTPUT` altera a pasta de evidências; `VISUAL_WIDTHS=1920,402` restringe
 uma repetição àquelas larguras. O padrão confere 1920, 402, 360, 768 e 1366 px.

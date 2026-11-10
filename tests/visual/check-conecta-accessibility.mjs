@@ -14,13 +14,14 @@ const widths = (process.env.VISUAL_WIDTHS || '1920,402').split(',').map(Number);
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chrome' });
 const results = [];
+const origin = process.env.VISUAL_ORIGIN || 'http://127.0.0.1:4178';
 try {
   for (const width of widths) {
     const context = await browser.newContext({ viewport: { width, height: width > 1000 ? 1080 : 874 }, reducedMotion: 'reduce' });
     const page = await context.newPage();
     for (const route of routes) {
       const [name, query = ''] = route.split('?');
-      await page.goto(`http://127.0.0.1:4178/${name}.html${query ? `?${query}` : ''}`, { waitUntil: 'networkidle' });
+      await page.goto(`${origin}/${name}.html${query ? `?${query}` : ''}`, { waitUntil: 'networkidle' });
       await page.locator(route === 'login' ? '#login-form' : 'main:not([data-route-pending])').waitFor({ state: 'visible' });
       await page.evaluate(() => document.fonts.ready);
       const audit = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();

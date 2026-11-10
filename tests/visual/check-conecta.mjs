@@ -10,7 +10,7 @@ if (!modulePath) throw new Error('Set PLAYWRIGHT_MODULE_PATH to the installed pl
 const { chromium } = await import(pathToFileURL(resolve(modulePath)).href);
 const output = resolve(process.env.VISUAL_OUTPUT || '.superpowers/sdd/2026-11-08-conecta-orange-redesign/visual');
 await mkdir(output, { recursive: true });
-const origin = 'http://127.0.0.1:4178';
+const origin = process.env.VISUAL_ORIGIN || 'http://127.0.0.1:4178';
 const routes = ['login.html', 'dashboard.html', 'knowledge.html', 'reminders.html', 'academy.html', 'profile.html', 'admin.html', 'autocard.html', 'cards-pos.html', 'benefits.html', 'solides.html'];
 const widths = process.env.VISUAL_WIDTHS ? process.env.VISUAL_WIDTHS.split(',').map(Number) : [1920, 402, 360, 768, 1366];
 const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chrome' });
