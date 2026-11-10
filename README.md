@@ -80,6 +80,7 @@ HTML.
 - [Roadmap](docs/product/roadmap.md)
 - [Roadmap da integração Sólides](docs/product/solides-roadmap.md)
 - [Privacidade e retenção](docs/product/privacy-retention.md)
+- [Aceite obrigatório do Código de Ética](docs/product/ethics-acceptance.md)
 - [Arquitetura](docs/architecture/overview.md)
 - [Auditoria da plataforma](docs/reviews/2026-07-20-platform-audit.md)
 - [Auditoria de UI/UX](docs/design/2026-07-20-ui-ux-audit.md)

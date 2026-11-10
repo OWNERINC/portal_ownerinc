@@ -13,6 +13,20 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Referências em conteúdo, notificações e auditoria passam a nulas; o histórico
   operacional permanece sem UID estável do titular.
 
+## Aceite do Código de Ética
+
+- Finalidade: registrar a confirmação explícita do termo apresentado antes de
+  liberar as funcionalidades do Portal, para todas as contas, sem exceção por
+  perfil ou permissão.
+- Dados mínimos: UID do titular, versão, SHA-256 do conteúdo, indicação de mock e
+  data/hora gerada pelo banco. Não há coleta adicional de IP, dispositivo ou tempo
+  de leitura para este fluxo.
+- O registro mock não representa aceite do documento oficial nem assinatura
+  eletrônica. Rolar até o final não comprova leitura ou compreensão.
+- Retenção: enquanto a conta existir; excluir o usuário remove seus aceites por
+  cascata. O cron não recebe acesso a esses registros. Qualquer obrigação futura
+  de retenção do documento oficial depende de validação jurídica própria.
+
 ## Fotos
 
 - Uploads são decodificados e normalizados para WebP, sem nome baseado em UID.

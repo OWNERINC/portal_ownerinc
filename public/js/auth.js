@@ -101,22 +101,26 @@ function applyNavigation(user) {
   document.documentElement.dataset.authSnapshot = 'true';
 }
 
-function clearVerifiedRole() {
-  sessionEpoch += 1;
-  sessionDenied = true;
-  pendingValidation = null;
+function clearNavigationHints() {
   visualSnapshot = null;
   delete document.documentElement.dataset.portalRole;
   delete document.documentElement.dataset.authSnapshot;
   delete document.documentElement.dataset.autocardAccess;
   delete document.documentElement.dataset.posCardsAccess;
-  setAuthState('error');
   try {
     sessionStorage.removeItem('ownerinc-verified-role');
     sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
   } catch (_) {
     // Nothing else is required when storage is unavailable.
   }
+}
+
+function clearVerifiedRole() {
+  sessionEpoch += 1;
+  sessionDenied = true;
+  pendingValidation = null;
+  clearNavigationHints();
+  setAuthState('error');
 }
 
 function syncSession() {
@@ -168,6 +172,17 @@ function redirectToLogin(reason) {
   window.location.replace(`./login.html?${params.toString()}`);
 }
 
+function requireEthicsAcceptance() {
+  const destination = currentDestination();
+  clearVerifiedRole();
+  document.querySelector('main')?.replaceChildren();
+  const params = new URLSearchParams();
+  if (destination) params.set('next', destination);
+  window.location.replace(`./ethics.html?${params}`);
+  // Stop page mounts and late responses without treating this as a logout.
+  throw new DOMException('O aceite do Código de Ética é necessário.', 'AbortError');
+}
+
 function authRedirectReason(path, response, body) {
   if (response.status === 401) return 'session';
   if (response.status !== 403) return null;
@@ -191,6 +206,7 @@ async function handleAuthenticationFailure(path, response) {
   const session = { uid: sessionUid, epoch: sessionEpoch };
   const body = await response.clone().json().catch(() => ({}));
   assertCurrentSession(session);
+  if (response.status === 403 && body?.reason === 'ethics-required') requireEthicsAcceptance();
   const reason = authRedirectReason(path, response, body);
   if (!reason) return false;
   await endSession(reason);
@@ -290,7 +306,7 @@ export class APIError extends Error {
 // on success, never falls back to storage or renders a transient error view.
 // Returns null without a live session; rejects on errors/stale work. Definitive
 // session denial clears content and redirects, just like other API requests.
-export async function getCurrentUserDoc() {
+export async function getCurrentUserDoc({ allowPendingEthics = false } = {}) {
   const session = await readySession();
   if (!session.uid || sessionDenied) return null;
   assertCurrentSession(session);
@@ -305,9 +321,14 @@ export async function getCurrentUserDoc() {
           throw new APIError('A identidade da sessão não corresponde ao perfil.', 401, 'identity-mismatch');
         }
         if (!['admin', 'viewer'].includes(user.role)) throw new APIError('Perfil inválido.', 502);
-        applyNavigation(user);
-        cacheAuthSnapshot(user);
-        setAuthState('ready');
+        if (user.ethics_accepted === true) {
+          applyNavigation(user);
+          cacheAuthSnapshot(user);
+          setAuthState('ready');
+        } else {
+          clearNavigationHints();
+          setAuthState('pending');
+        }
         return user;
       } catch (error) {
         syncSession();
@@ -321,6 +342,7 @@ export async function getCurrentUserDoc() {
   }
   const user = await pendingValidation;
   assertCurrentSession(session);
+  if (user.ethics_accepted !== true && !allowPendingEthics) requireEthicsAcceptance();
   return user;
 }
 

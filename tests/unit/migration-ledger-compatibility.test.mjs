@@ -22,11 +22,12 @@ test('accepts the current repository and historical production migration ledgers
 
 test('inserts historical markers before 038 when future migrations follow it', () => {
   const futureVersions = Object.freeze([...expectedVersions, '039_future']);
+  const anchorIndex = expectedVersions.indexOf('038_disable_legacy_editorial_writes');
   assert.deepEqual(buildHistoricalExpectedVersions(futureVersions), [
-    ...expectedVersions.filter((version) => version !== '038_disable_legacy_editorial_writes'),
+    ...expectedVersions.slice(0, anchorIndex),
     '036_payload_editorial_control',
     '037_owner_news_cutover',
-    '038_disable_legacy_editorial_writes',
+    ...expectedVersions.slice(anchorIndex),
     '039_future',
   ]);
 });

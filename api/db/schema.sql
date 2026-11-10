@@ -63,6 +63,15 @@ CREATE INDEX IF NOT EXISTS users_job_title_id_idx ON users (job_title_id);
 CREATE INDEX IF NOT EXISTS users_firebase_enable_pending_idx
   ON users (created_at) WHERE firebase_enable_pending = TRUE;
 
+CREATE TABLE IF NOT EXISTS ethics_acceptances (
+  user_uid       TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  term_version   TEXT NOT NULL CHECK (char_length(btrim(term_version)) BETWEEN 1 AND 120),
+  content_sha256 TEXT NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+  is_mock        BOOLEAN NOT NULL,
+  accepted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_uid, term_version, content_sha256)
+);
+
 CREATE TABLE IF NOT EXISTS pending_registrations (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   firebase_uid      TEXT NOT NULL UNIQUE,

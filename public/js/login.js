@@ -1,4 +1,5 @@
 import { auth } from './firebase-config.js';
+import { safeDestination } from './portal-destination.js';
 import {
   signInWithEmailAndPassword, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
@@ -24,19 +25,6 @@ function showView(view, focusTarget) {
   if (target) target.focus();
 }
 
-function safeDestination(value) {
-  if (!value) return './dashboard.html';
-  try {
-    const destination = new URL(value, window.location.origin);
-    if (destination.origin !== window.location.origin || !destination.pathname.startsWith('/') || destination.pathname.endsWith('/login.html')) {
-      return './dashboard.html';
-    }
-    return `${destination.pathname}${destination.search}${destination.hash}`;
-  } catch {
-    return './dashboard.html';
-  }
-}
-
 async function requireAcceptedRegistration(response) {
   if (response.status !== 202) throw new Error('registration-failed');
   const body = await response.json().catch(() => null);
@@ -58,14 +46,23 @@ function setAllDisabled(disabled) {
 }
 
 async function enterPortal() {
+  const uid = auth.currentUser.uid;
   const token = await auth.currentUser.getIdToken();
+  if (auth.currentUser?.uid !== uid) throw new Error('session-changed');
   let response;
   try {
     response = await fetch('/api/users/me', { headers: { Authorization: `Bearer ${token}` } });
   } catch {
     throw new Error('api-unavailable');
   }
-  if (response.ok) return window.location.replace(safeDestination(new URLSearchParams(location.search).get('next')));
+  if (auth.currentUser?.uid !== uid) throw new Error('session-changed');
+  if (response.ok) {
+    const user = await response.json();
+    if (auth.currentUser?.uid !== uid || user.uid !== uid) throw new Error('session-changed');
+    const destination = safeDestination(new URLSearchParams(location.search).get('next'));
+    return window.location.replace(user.ethics_accepted === true
+      ? destination : `./ethics.html?${new URLSearchParams({ next: destination })}`);
+  }
   if (response.status === 401 || response.status === 403) {
     const body = await response.json().catch(() => ({}));
     await signOut(auth);

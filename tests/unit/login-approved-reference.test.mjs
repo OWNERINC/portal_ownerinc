@@ -21,6 +21,7 @@ async function createLoginHarness({ responseStatus = 200, responseBody = {}, sig
       return { status: responseStatus, ok: responseStatus >= 200 && responseStatus < 300, async json() { return responseBody; } };
     },
   });
+  vm.runInContext((await readFile('public/js/portal-destination.js', 'utf8')).replace(/^export /gm, ''), h.context);
   const source = (await readFile('public/js/login.js', 'utf8')).replace(/^import[\s\S]*?from ['"][^'"]+['"];\r?\n/gm, '');
   await vm.runInContext(`(async () => { ${source} })()`, h.context, { filename: 'public/js/login.js' });
   return {

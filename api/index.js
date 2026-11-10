@@ -31,6 +31,7 @@ app.use('/uploads', express.static('/app/uploads'));
 
 // Rotas
 app.use('/api/auth',      require('./routes/auth'));
+app.use('/api/ethics',    require('./routes/ethics'));
 app.use('/api/users',     require('./routes/users'));
 app.use('/api/registrations', require('./routes/registrations'));
 const userImports = require('./routes/user-imports');
