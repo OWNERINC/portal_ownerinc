@@ -6,6 +6,7 @@ const pages = [
   ['knowledge', 'Base de Conhecimento', 'book-open'],
   ['reminders', 'Notificações', 'bell'],
   ['academy', 'Academy', 'graduation-cap'],
+  ['pages', 'Pages', 'layout-template'],
 ];
 
 const generatedPages = [
@@ -13,6 +14,8 @@ const generatedPages = [
   ['knowledge.html', 'knowledge', 'Base de Conhecimento'],
   ['reminders.html', 'reminders', 'Notificações'],
   ['academy.html', 'academy', 'Academy'],
+  ['pages.html', 'pages', 'Pages'],
+  ['page-editor.html', 'pages', 'Editor de Pages'],
   ['benefits.html', 'benefits', 'Benefícios'],
   ['profile.html', 'profile', 'Meu Perfil'],
   ['admin.html', 'admin', 'Painel Admin'],

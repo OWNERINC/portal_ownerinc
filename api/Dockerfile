@@ -7,6 +7,7 @@ RUN npm ci --omit=dev --omit=optional \
       @img/sharp-libvips-linuxmusl-x64@1.3.4
 COPY --chown=node:node . .
 RUN apk upgrade --no-cache \
+ && apk add --no-cache ffmpeg \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
  && mkdir -p /app/uploads \
  && chown node:node /app/uploads \

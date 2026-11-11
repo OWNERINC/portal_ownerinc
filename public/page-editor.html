@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#F7F6F2">
+  <title>Editor de Pages — Conecta Ownerinc</title>
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="icon" href="./assets/conecta/symbol.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./css/layout.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <link rel="stylesheet" href="./css/pages.css">
+  <link rel="stylesheet" href="./css/pages-editor-v2.css">
+  <script src="./js/auth-shell.js"></script>
+</head>
+<body>
+<script src="./js/sidebar-state.js"></script>
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+<div class="portal-wrapper">
+  <aside class="sidebar" aria-label="Navegação principal">
+    <div class="sidebar-header">
+      <a href="./dashboard.html" class="sidebar-brand" aria-label="Conecta Ownerinc">
+        <img src="./assets/conecta/logo.svg" alt="Conecta Ownerinc" class="logo-full" width="156" height="48">
+        <img src="./assets/conecta/symbol.svg" alt="" class="logo-icon" width="40" height="22">
+      </a>
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Recolher menu" aria-expanded="true"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#chevrons-left"></use></svg></button>
+    </div>
+    <!-- generated:portal-sidebar -->
+    <ul class="sidebar-nav">
+      <li class="nav-group-label" aria-hidden="true">PORTAL</li>
+      <li><a href="./dashboard.html" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg><span>Dashboard</span></a></li>
+      <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
+      <li><a href="./reminders.html" title="Notificações"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Notificações</span></a></li>
+      <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
+      <li><a href="./pages.html" class="active" aria-current="page" title="Pages"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>Pages</span></a></li>
+      <li class="nav-group-label nav-tools-label" aria-hidden="true">FERRAMENTAS</li>
+      <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
+      <li class="pos-cards-link"><a href="./cards-pos.html" title="Cards Pós"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#badge-check"></use></svg><span>Cards Pós</span></a></li>
+      <li class="nav-group-label admin-link" aria-hidden="true">GESTÃO</li>
+      <li id="admin-link" class="admin-link"><a href="./admin.html" title="Admin"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#settings-2"></use></svg><span>Admin</span></a></li>
+      <li class="nav-account"><a href="./profile.html" title="Meu Perfil"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu Perfil</span></a></li>
+    </ul>
+    <!-- /generated:portal-sidebar -->
+    <div class="sidebar-footer"><button class="sidebar-logout" type="button" aria-label="Sair"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#log-out"></use></svg><span>Sair</span></button></div>
+  </aside>
+  <div class="main-content">
+    <!-- generated:portal-topbar -->
+    <header class="topbar"><a class="topbar-brand" href="./dashboard.html" aria-label="Conecta Ownerinc — início"><img src="./assets/conecta/symbol.svg" alt="" width="32" height="18"></a><span class="topbar-title">Editor de Pages</span><div class="topbar-actions"><a class="topbar-account" href="./profile.html"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#user"></use></svg><span>Meu perfil</span></a></div></header>
+    <!-- /generated:portal-topbar -->
+    <main class="page-body pages-page" id="main-content" tabindex="-1" data-route-pending>
+      <div id="page-editor-root"><h1>Editor de Pages</h1><p role="status">Carregando editor…</p></div>
+    </main>
+  </div>
+</div>
+<div id="toast" class="toast hidden" aria-live="polite"></div>
+<script src="./js/sidebar.js"></script>
+<script type="module" src="./js/router-bootstrap.js"></script>
+</body>
+</html>

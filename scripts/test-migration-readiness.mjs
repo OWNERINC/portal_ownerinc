@@ -46,6 +46,8 @@ const nonEditorialMigrations = [
   '028_firebase_cleanup_queue',
   '030_dho_job_title_catalog',
   '039_ethics_acceptances',
+  '040_pages',
+  '041_pages_media',
 ];
 const omittedEditorialVersions = [
   '015_cms_editor',

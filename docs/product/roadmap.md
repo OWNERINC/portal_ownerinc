@@ -1,6 +1,6 @@
 # Roadmap do Portal Ownerinc
 
-Atualizado em 3 de novembro de 2026.
+Atualizado em 10 de novembro de 2026.
 
 ## Status de Implementação
 
@@ -12,7 +12,7 @@ Atualizado em 3 de novembro de 2026.
 | Gate 3 - Notificações | Concluído | Ledger, claim/sending, retry, catch-up, heartbeat, histórico e retenção |
 | Gate 4 - Governança | Concluído | Audit log, exportação, erasure e política de retenção |
 | Gate 5 - Produção recuperável | Concluído no código | Digests, backup consistente, restore transacional, smoke e rollback |
-| Gate 6 - Expansões condicionais | Não iniciado por decisão | Somente após demanda validada |
+| Gate 6 - Expansões condicionais | Parcial — Pages em piloto local | Expansão Pages autorizada e validada; demais expansões dependem de demanda |
 | OWN-43 - Migrations isoladas | Aprovado | Cluster PostgreSQL descartável, ledger/readiness/grants, preservação histórica e auditoria read-only |
 | OWN-44 - Resíduos órfãos | Aprovado | Inventário nominal, remoção de um arquivo sem consumidor e renames de artefatos compartilhados |
 | OWN-45 - Documentação sem editorial | Aprovado | Escopo ativo e histórico preservado reconciliados; revisão Astra medium `ship` |
@@ -21,6 +21,27 @@ Os checks locais passam. Testes com Firebase, Resend SMTP, VPS, restauração re
 NVDA e VoiceOver permanecem gates operacionais antes do lançamento, pois exigem
 credenciais, serviços ou dispositivos externos. A integração Sólides permanece
 em `off` até o Gate 0 externo.
+
+### Editor de páginas do Conecta
+
+O usuário autorizou uma nova área independente de modelos/blocos. Isso não
+reativa o CMS/Owner News histórico, importadores ou permissões anteriores.
+
+| Lote | Estado | Critério de aceite |
+| --- | --- | --- |
+| Fundação e comunicado | Concluído e validado localmente | Texto rico, imagem privada, revisões, audiência por cargo, prévia/leitura, arquivamento; 880 testes gerais, 75 checks HTTP e 12 cenários Chrome do primeiro lote |
+| Composição e personalização | Concluído e validado localmente | Uma/duas colunas, arraste por mouse/touch e destino por teclado, presets, destaque/botão/separador, compatibilidade v1 e undo de texto preservado |
+| Mídias privadas ampliadas | Concluído e validado localmente | GIF/MP3/MP4 reais, probe/decode por arquivo/frame, reprodução opt-in, transcrição/legendas e autorização por tipo |
+| Piloto sintético Owner News | Concluído e validado localmente | Capa/índice, matéria, entrevista e reconhecimentos no mesmo renderer; catálogo, seções/deep links; sem material real publicado |
+| Disponibilização operacional | Não autorizada nesta tarefa | PostgreSQL nativo, Firebase/Nginx efetivos, capacidade do pacote Linux, dispositivos físicos, migration/permissões/deploy aprovados separadamente |
+
+Contratos e evidências em [Páginas do Conecta](../architecture/pages.md).
+Aceite integrado da expansão: 908 testes aprovados, zero falhas, dois skips de
+Linux; 75+125 checks HTTP e 12+16 cenários Chrome, incluindo reflow/axe nas cinco
+larguras. Revisão fresca Astra high: `ship`, sem correções obrigatórias pendentes.
+Os testes usam PGlite serializado, Firebase sintético e FFmpeg local Windows; não
+substituem a disponibilização operacional. Nenhuma publicação real foi realizada.
+O desenvolvimento até piloto não autoriza commit, merge, publicação ou deploy.
 
 A Academy tem implementação local documentada e o ledger foi validado no cluster
 PostgreSQL descartável da OWN-43, mas não está marcada como homologação full-stack:

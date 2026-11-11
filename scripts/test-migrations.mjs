@@ -56,6 +56,8 @@ const expectedVersions = [
   '035_owner_news_polls',
   '038_disable_legacy_editorial_writes',
   '039_ethics_acceptances',
+  '040_pages',
+  '041_pages_media',
 ];
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });

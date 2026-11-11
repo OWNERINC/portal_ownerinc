@@ -4,6 +4,7 @@
 
 # Dependências — instaladas no build do Docker
 api/node_modules/
+node_modules/
 cron/node_modules/
 
 # Cache Firebase (projeto legado)

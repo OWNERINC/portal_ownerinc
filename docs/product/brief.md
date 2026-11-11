@@ -25,6 +25,9 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
   inicial.
 - Notificações mensais enviadas por email (rotas e contratos técnicos reminders).
 - Upload de foto de perfil.
+- Páginas internas do Conecta por modelos/blocos: comunicado, composição em uma ou
+  duas colunas, texto rico, presets e mídia privada; rascunho e publicação por cargo
+  separados. O piloto Owner News é uma receita sintética, não uma edição oficial.
 
 ## Restrições
 
@@ -37,11 +40,12 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 ## Limite editorial do produto atual
 
 O Portal mantém Knowledge, Academy, Benefits e Reminders com contratos próprios de
-texto, mídia, rotas e tabelas. CMS, Payload CMS, Owner News, editor editorial,
+texto, mídia, rotas e tabelas. CMS, Payload CMS, Owner News histórico, editor editorial legado,
 enquetes, importadores e a URL `/announcements.html` não fazem parte do runtime
 ativo. Migrations, tabelas, uploads e documentação desses fluxos antigos são
 preservados para compatibilidade, auditoria e eventual decisão futura; preservação
-histórica não significa capacidade disponível.
+histórica não significa capacidade disponível. O novo módulo Pages é independente;
+seu modelo sintético Owner News não acessa acervo, importadores ou tabelas históricas.
 
 ### Limite de aceite da entrega Academy
 
