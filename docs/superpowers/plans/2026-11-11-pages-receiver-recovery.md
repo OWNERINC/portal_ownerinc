@@ -76,12 +76,12 @@ outras worktrees, screenshots e todos os serviços/configurações do Brain.
 ## Steps
 
 - [x] Implementar contrato restrito e testes RED/GREEN, sem operação real.
-- [ ] Ensaiar SQL produtivo exato: nenhuma Pages, 040 apenas, 040/041 vazias,
+- [x] Ensaiar SQL produtivo exato: nenhuma Pages, 040 apenas, 040/041 vazias,
       estado parcial, conteúdo, dependência externa, permissões/RLS e backup com Pages.
 - [x] Testar funções reais de rollback em Bash isolado com doubles de comandos,
       sem executar o receiver completo com paths produtivos.
-- [ ] Verify, revisão fresca e CI completo na feature com PostgreSQL16.
-- [ ] Instalar apenas o receptor comum: lock existente, conferir hash anterior,
+- [x] Verify, revisão fresca e CI completo na feature com PostgreSQL16.
+- [x] Instalar apenas o receptor comum: lock existente, conferir hash anterior,
       backup verificável, candidato root:root0755, bash -n, troca atômica e hash final.
 - [ ] Confirmar gates, promover remotamente e acompanhar CI/deploy normal e aceite.
 
@@ -111,3 +111,11 @@ como fallback genérico pré-Pages e exige procedimento específico aprovado.
 - Nenhuma instalação ou operação destrutiva foi executada na VPS nesta etapa.
 - Revisão fresca Astra high: `ship` para fonte/CI da feature; aceite nativo e
   instalação continuam condicionados ao resultado do próximo CI e aos hashes.
+
+## Resultado operacional
+
+As condições nativas e de instalação acima foram fechadas pelo CI `43021688751`
+e instalação do hash candidato sob lock/backup em12:38:58Z. A tentativa posterior
+de deploy de `6221a09` falhou por sintaxe Nginx e voltou o código anterior,
+preservando banco040/041 pelo limite pós-public-start. Não ocorreu restore manual.
+Registro e novo bloqueio em [Deploy Pages](../../operations/2026-11-11-pages-deploy.md).
