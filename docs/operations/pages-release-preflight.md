@@ -22,6 +22,16 @@ a primária reproduziu ENOENT em mkdtemp antes de executar FFmpeg. A correção 
 o pai de forma idempotente e mantém os casos reais de decode; não pula Linux nem
 modifica o caminho de mídia produtivo.
 
+O primeiro CI da feature (`43015229339`, commit `fcb1d6c`) encontrou outra
+pré-condição ausente no runner: FFmpeg não instalado. Dois testes falharam com
+`spawn ffmpeg ENOENT`; o ensaio PG16 não chegou a executar e produção foi pulada.
+O workflow passa a instalar e verificar `ffmpeg`/`ffprobe` antes de `verify`,
+sem pular os testes de mídia real ou alterar a imagem produtiva.
+Após essa correção, `verify` local: 928 testes, 926 PASS, zero falhas, dois skips
+Linux; revisão da alteração de CI: `ship`. Uma execução local anterior encerrou
+o processo de `academy-catalog` sem diagnóstico de assertion; o arquivo isolado
+e a suíte completa subsequente passaram, sem alteração de código da Academy.
+
 ## Ensaio nativo de banco
 
 `scripts/test-pages-recovery.mjs` exige NODE_ENV=test, autorização de banco

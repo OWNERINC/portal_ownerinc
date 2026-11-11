@@ -48,3 +48,10 @@ test('CI recovery uses a separate disposable database and keeps main-only deploy
   assert.match(script, /assertEmptyMigrationDatabase\(existing\.rows\)/);
   assert.doesNotMatch(script, /DROP DATABASE|TRUNCATE|ssh\s|portal\.ownerinc\.com\.br/);
 });
+test('CI installs and checks real media tools before verify instead of skipping decode tests', async () => {
+  const workflow = await readFile('.github/workflows/ci.yml', 'utf8');
+  const install = workflow.indexOf('sudo apt-get install --yes --no-install-recommends ffmpeg');
+  assert.ok(install >= 0 && install < workflow.indexOf('- run: npm run verify'));
+  assert.match(workflow, /command -v ffmpeg/);
+  assert.match(workflow, /command -v ffprobe/);
+});

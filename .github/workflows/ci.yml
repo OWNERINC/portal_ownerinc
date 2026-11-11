@@ -40,6 +40,14 @@ jobs:
            api/package-lock.json
            cron/package-lock.json
       - run: npm run bootstrap
+      - name: Install real media test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+          command -v ffmpeg
+          command -v ffprobe
+          ffmpeg -version
+          ffprobe -version
       - run: npm run verify
       - name: Create migration setup databases
         env:
