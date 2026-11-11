@@ -749,7 +749,7 @@ async function loadAudit() {
 }
 
 function resetPermissions() {
-  ['p-super', 'p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-solides'].forEach(id => {
+  ['p-super', 'p-users', 'p-knowledge', 'p-reminders', 'p-academy', 'p-benefits', 'p-solides', 'p-pages-edit', 'p-pages-publish'].forEach(id => {
     const input = document.getElementById(id);
     input.checked = false;
     input.disabled = false;
@@ -776,7 +776,7 @@ function setUserFields(user = {}) {
   document.getElementById('u-role').disabled = !mayEditPrivileges;
   resetPermissions();
   const permissions = user.permissions || {};
-  const permissionMap = { 'p-super': 'superAdmin', 'p-users': 'manageUsers', 'p-knowledge': 'manageKnowledge', 'p-reminders': 'manageReminders', 'p-academy': 'manageAcademy', 'p-benefits': 'manageBenefits', 'p-solides': 'manageSolides' };
+  const permissionMap = { 'p-super': 'superAdmin', 'p-users': 'manageUsers', 'p-knowledge': 'manageKnowledge', 'p-reminders': 'manageReminders', 'p-academy': 'manageAcademy', 'p-benefits': 'manageBenefits', 'p-solides': 'manageSolides', 'p-pages-edit': 'editPages', 'p-pages-publish': 'publishPages' };
   Object.entries(permissionMap).forEach(([id, permission]) => { document.getElementById(id).checked = permissions[permission] === true; });
   document.getElementById('permissions-group').hidden = !(document.getElementById('u-role').value === 'admin' && mayEditPrivileges);
 }
@@ -857,6 +857,8 @@ document.getElementById('user-form').addEventListener('submit', async event => {
       manageAcademy: document.getElementById('p-academy').checked,
       manageBenefits: document.getElementById('p-benefits').checked,
       manageSolides: document.getElementById('p-solides').checked,
+      editPages: document.getElementById('p-pages-edit').checked,
+      publishPages: document.getElementById('p-pages-publish').checked,
     } : {};
     if (document.getElementById('p-knowledge').checked) data.permissions.manageKnowledge = true;
   }

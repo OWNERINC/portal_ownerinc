@@ -100,6 +100,8 @@ test('permission normalization accepts only known true booleans', () => {
     manageBenefits: false,
     manageKnowledge: false,
     manageSolides: false,
+    editPages: false,
+    publishPages: false,
   });
 });
 

@@ -5,6 +5,8 @@ const PERMISSIONS = new Set([
   'manageBenefits',
   'manageKnowledge',
   'manageSolides',
+  'editPages',
+  'publishPages',
 ]);
 
 const JOB_TITLE_PAGES = ['autocard', 'posCards'];
