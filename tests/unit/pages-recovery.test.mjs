@@ -55,3 +55,11 @@ test('CI installs and checks real media tools before verify instead of skipping 
   assert.match(workflow, /command -v ffmpeg/);
   assert.match(workflow, /command -v ffprobe/);
 });
+test('CI pins the validation OS and installs PostgreSQL 16 clients before rehearsal', async () => {
+  const workflow = await readFile('.github/workflows/ci.yml', 'utf8');
+  const validate = workflow.slice(workflow.indexOf('  validate:'), workflow.indexOf('  deploy-production:'));
+  assert.match(validate, /runs-on: ubuntu-24\.04/);
+  assert.match(validate, /apt-get install[^\n]*postgresql-client-16/);
+  assert.match(validate, /\/usr\/lib\/postgresql\/16\/bin\/pg_dump --version/);
+  assert.match(validate, /\/usr\/lib\/postgresql\/16\/bin\/pg_restore --version/);
+});

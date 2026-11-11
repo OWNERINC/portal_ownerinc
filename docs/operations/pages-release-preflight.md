@@ -32,6 +32,16 @@ Linux; revisão da alteração de CI: `ship`. Uma execução local anterior ence
 o processo de `academy-catalog` sem diagnóstico de assertion; o arquivo isolado
 e a suíte completa subsequente passaram, sem alteração de código da Academy.
 
+O segundo CI (`43015699581`, commit `c98edc5`) passou `verify`, migrations,
+readiness e Academy. O ensaio de recuperação parou antes do primeiro dump com
+`spawn /usr/lib/postgresql/16/bin/pg_dump ENOENT`. Não houve teste efetivo do
+restore, build/scan das imagens ou deploy nessa execução. O job de validação
+passa a usar Ubuntu 24.04 e instalar explicitamente `postgresql-client-16`,
+verificando as versões de dump/restore antes de iniciar os testes. Não se altera
+o runner do job de deploy nem se substituem ferramentas 16 por outra major.
+Correção revisada (`ship`); `verify` local com 929 testes, 927 PASS, zero falhas e
+dois skips Linux. A instalação e recuperação nativas ainda dependem do novo CI.
+
 ## Ensaio nativo de banco
 
 `scripts/test-pages-recovery.mjs` exige NODE_ENV=test, autorização de banco
