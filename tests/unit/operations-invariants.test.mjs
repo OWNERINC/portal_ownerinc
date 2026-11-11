@@ -392,7 +392,7 @@ test('green main revisions deploy through a restricted serialized production gat
   assert.match(hostDeploy, /pg_restore --clean --if-exists --no-owner --single-transaction/);
   assert.match(hostDeploy, /DROP TABLE IF EXISTS public\.pending_registrations CASCADE/);
   assert.match(hostDeploy, /DROP TABLE IF EXISTS public\.firebase_cleanup_queue CASCADE/);
-  assert.match(hostDeploy, /if ! docker exec[\s\S]*database_restored=false/);
+  assert.match(hostDeploy, /if ! restore_previous_database; then\s+database_restored=false/);
   assert.match(hostDeploy, /Database restore failed; services remain stopped/);
   assert.match(hostDeploy, /cron_container="\$project-cron-1"/);
   assert.match(hostDeploy, /stop_services\(\)/);

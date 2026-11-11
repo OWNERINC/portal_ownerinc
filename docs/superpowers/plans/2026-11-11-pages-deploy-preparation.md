@@ -28,8 +28,8 @@ Atualizar o receptor instalado na VPS exige autorização operacional específic
 
 - [x] Corrigir helper e testar temporário limpo sem enfraquecer o decode real.
 - [x] Adicionar ensaio PG16 pré-Pages → 040/041 → falha pré-tráfego → recuperação.
-- [ ] Executar verificações locais e revisão fresca; commitar preparação.
-- [ ] Push da feature e validação CI sem promoção à main.
+- [x] Executar verificações locais e revisão fresca; commitar preparação.
+- [x] Push da feature e validação CI sem promoção à main.
 - [ ] Registrar evidência nativa e fechar gate operacional de recuperação.
 - [ ] Somente após o gate: promoção remota, CI e deploy oficial, aceite externo.
 
@@ -91,3 +91,17 @@ acionar workflow em main; informar claramente o bloqueio restante ao usuário.
 - Migration 040 preservada byte a byte, SHA-256
   `be822d6384830b775b397010929d87560e145f126c3d5fb953c09a32e59929bc`.
 - Ensaio PG16 permanece pendente do CI na feature. Nenhuma mudança produtiva.
+
+## Atualização após CI da feature
+
+A preparação evoluiu em commits separados para declarar FFmpeg e cliente PG16,
+fixar Ubuntu24.04 e comparar schema com uma referência restaurada. CI final
+`43016622141`, commit `7c2c97b`, passou com938 testes Linux, sem falhas/skips,
+recuperação de banco, build, scans, audit e SBOM. Deploy de produção foi pulado.
+A evidência pendente acima é histórica e foi resolvida por esse CI.
+
+O usuário autorizou a etapa operacional específica. Inspeção somente leitura
+confirmou receptor real idêntico ao antigo e baseline pré-Pages. A correção
+produtiva integrada, seus testes e instalação seguem no plano
+[Pages receiver recovery](2026-11-11-pages-receiver-recovery.md), ainda sem
+autorizar teste destrutivo de rollback na produção.

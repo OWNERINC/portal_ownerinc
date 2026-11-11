@@ -71,3 +71,14 @@ test('recovery compares full schemas against a pre-upgrade restored reference wi
   assert.match(script, /assert\.deepEqual\(await schemaSnapshot\(\), restoredBaselineSchema/);
   assert.match(script, /constraints: constraints\.rows, indexes: indexes\.rows/);
 });
+test('native recovery executes the unique receiver SQL rather than an independent cleanup implementation', async () => {
+  const [script, receiver] = await Promise.all(['scripts/test-pages-recovery.mjs', 'ops/deploy-from-ci.sh'].map(path => readFile(path, 'utf8')));
+  assert.equal([...receiver.matchAll(/<<'PAGES_RECOVERY_SQL'\n([\s\S]*?)\nPAGES_RECOVERY_SQL/g)].length, 1);
+  assert.match(script, /new URL\('\.\.\/ops\/deploy-from-ci\.sh', import\.meta\.url\)/);
+  assert.match(script, /client\.query\(recoverySql\)/);
+  assert.doesNotMatch(script, /ALTER TABLE pages DROP CONSTRAINT|`DROP TABLE \$\{table\}`/);
+  for (const label of ['no-Pages no-op', '040-only recovery', 'partial relations', 'nonordinary relation', 'external dependency', 'nonempty pages', 'nonempty page_requests', 'insufficient role', 'RLS-hidden row']) {
+    assert.ok(script.includes(label), `native coverage: ${label}`);
+  }
+  assert.match(script, /catch \(error\) \{ await client\.query\('ROLLBACK'\); throw error; \}/);
+});

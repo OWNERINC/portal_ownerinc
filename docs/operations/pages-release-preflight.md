@@ -53,6 +53,49 @@ mesmo dump pré-Pages antes do upgrade e captura essa estrutura como referência
 Após a recuperação, compara integralmente tabelas/colunas/constraints/índices
 contra essa referência restaurada; ledger e dados são comparados ao original.
 
+## Resultado aprovado da preparação
+
+CI [`43016622141`](https://github.com/OWNERINC/portal_ownerinc/actions/runs/43016622141),
+commit `7c2c97b6a050b992c7a72f8356babdb794b3b7da`: **verde**.
+
+- Linux: 938 testes PASS, zero falhas/skips; migrations, readiness e Academy passam.
+- PostgreSQL16: falha legado reproduzida, alternativa restrita recupera schema,
+  ledger e fixtures; upgrade repetido e backup posterior com Pages preservados.
+- Build API/cron, scans configurados HIGH/CRITICAL, audit e SBOM aprovados.
+- Imagens não publicadas e deploy de produção pulado por ser branch de feature.
+
+Isso aceita o ensaio de banco de preparação, **não a integração de uma correção
+no receptor instalado**. Essa integração tem seu próprio gate abaixo.
+
+## Etapa operacional autorizada
+
+O usuário autorizou verificar/corrigir/testar/instalar o receptor com backup,
+sem restore/DROP/migration/restart no ambiente real durante a instalação.
+
+Inspeção somente leitura confirmou o receiver comum root:root0755 com hash
+`c976d36abb8ed70561eaf38dedf0b5b9bd72735d41a05b81bc196e4272bf500e`, idêntico ao
+arquivo versionado antigo. A release atual é `2cecbe8`, ledger039 e Pages ausente.
+API/cron/PostgreSQL saudáveis, Nginx rodando; cerca de24GB livres, volume de uploads
+6,75MB e banco11,77MB no preflight (não equivalem ao tamanho de backups futuros).
+
+O alias produtivo instalado é `/usr/local/sbin/portal-ownerinc-deploy-from-ci`,
+com o conteúdo do wrapper de produção versionado; não é necessário alterar
+chaves ou normalizá-lo para o caminho documental em libexec.
+
+A correção candidata permanecerá em um único arquivo. Só permitirá cleanup
+pré-tráfego após validar o dump real e seu inventário, com seis tabelas Pages
+ausentes no backup e vazias no destino sob bloqueios/SQL transacional. Backups
+com Pages não autorizam esse cleanup. Estados parciais, linhas, permissões,
+RLS, dependências externas ou falha de ferramentas devem recusar a recuperação
+automática sem reiniciar serviços. O ensaio executará a SQL produtiva exata e
+testes funcionais executarão as funções Bash reais em ambiente simulado.
+
+Depois de revisão e CI dessa integração, a instalação usará o lock de deploy,
+hash anterior, backup verificável, sintaxe/hash do candidato e troca atômica do
+receptor root:root0755. Não executar o receptor como teste de instalação.
+`scripts/restore.sh` continua sem correção Pages: não o anunciar como fallback
+automático para esse restore; procedimento manual segue exigindo escopo aprovado.
+
 ## Ensaio nativo de banco
 
 `scripts/test-pages-recovery.mjs` exige NODE_ENV=test, autorização de banco

@@ -456,6 +456,17 @@ release anterior quando disponível, preservando possíveis escritas públicas;
 uploads não são restaurados por esse rollback. Restauração manual destrutiva
 exige backup validado, confirmação e janela aprovada conforme [rollback.md](rollback.md).
 
+O receptor classifica o inventário do dump validado antes de iniciar migrations
+e o revalida no rollback. Somente um backup comprovadamente sem as seis tabelas
+Pages pode acionar o preparo especial: SQL transacional privilegiada, bloqueios
+exclusivos e todas as tabelas vazias, com remoção limitada e sem CASCADE. Backup
+com Pages usa restore normal; inventário parcial/desconhecido, dados, tipo de
+relação inesperado ou falha do guard impedem a recuperação automática e mantêm
+serviços parados. O ensaio PG16 executa o mesmo bloco SQL literal do receptor;
+os testes Bash exercitam suas funções com comandos simulados. Isso não altera
+o comportamento de `scripts/restore.sh`: para um dump pré-Pages, o procedimento
+manual precisa de escopo próprio e não é um fallback automático validado.
+
 A retenção **best-effort é exclusivamente a limpeza pós-smoke do receiver** em
 `ops/deploy-from-ci.sh`: falha ao remover diretórios de backup com mais de 14 dias
 gera aviso e permite continuar os gates restantes. Backup, manifesto, checksum,
