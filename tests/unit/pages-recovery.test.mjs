@@ -63,3 +63,11 @@ test('CI pins the validation OS and installs PostgreSQL 16 clients before rehear
   assert.match(validate, /\/usr\/lib\/postgresql\/16\/bin\/pg_dump --version/);
   assert.match(validate, /\/usr\/lib\/postgresql\/16\/bin\/pg_restore --version/);
 });
+test('recovery compares full schemas against a pre-upgrade restored reference without filtering constraints', async () => {
+  const script = await readFile('scripts/test-pages-recovery.mjs', 'utf8');
+  const reference = script.indexOf('const restoredBaselineSchema = await schemaSnapshot()');
+  assert.ok(reference > script.indexOf('await legacyPreparation(); await restore(beforePages)'));
+  assert.ok(reference < script.indexOf('await migrate(); await verifyMigrations()'));
+  assert.match(script, /assert\.deepEqual\(await schemaSnapshot\(\), restoredBaselineSchema/);
+  assert.match(script, /constraints: constraints\.rows, indexes: indexes\.rows/);
+});

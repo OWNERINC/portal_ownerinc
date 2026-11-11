@@ -42,6 +42,17 @@ o runner do job de deploy nem se substituem ferramentas 16 por outra major.
 Correção revisada (`ship`); `verify` local com 929 testes, 927 PASS, zero falhas e
 dois skips Linux. A instalação e recuperação nativas ainda dependem do novo CI.
 
+O terceiro CI (`43016147355`, commit `ed80098`) executou dump/restore em PG16 e
+reproduziu a falha esperada do restore legado por dependências Pages. A limpeza
+restrita e o restore seguinte terminaram, mas a comparação textual de schema
+falhou: o parser reagrupou ANDs em dois CHECKs de `autocard_cards`, removendo
+parênteses associativos. Ledger/dados após recuperação e o backup posterior com
+Pages ainda não foram aceitos nessa execução. Para evitar um falso negativo sem
+ignorar constraints ou remover parênteses por regex, o ensaio agora restaura o
+mesmo dump pré-Pages antes do upgrade e captura essa estrutura como referência.
+Após a recuperação, compara integralmente tabelas/colunas/constraints/índices
+contra essa referência restaurada; ledger e dados são comparados ao original.
+
 ## Ensaio nativo de banco
 
 `scripts/test-pages-recovery.mjs` exige NODE_ENV=test, autorização de banco

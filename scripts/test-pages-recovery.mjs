@@ -108,9 +108,16 @@ try {
   assert.equal((await client.query("SELECT to_regclass('public.pages') AS relation")).rows[0].relation, null);
   await client.query('INSERT INTO job_titles(id,name,active) VALUES($1,$2,true)', [titleId, 'Cargo sintético do ensaio de recuperação']);
   await client.query('INSERT INTO users(uid,email,name,job_title_id) VALUES($1,$2,$3,$4)', [uid, `${uid}@example.test`, 'Pessoa sintética do ensaio', titleId]);
-  const baseline = { schema: await schemaSnapshot(), ledger: await ledger(), data: await fixtureSnapshot() };
+  const baseline = { ledger: await ledger(), data: await fixtureSnapshot() };
   const base = join(tmpdir(), 'opencode'); await mkdir(base, { recursive: true }); directory = await mkdtemp(join(base, 'pages-recovery-'));
   const beforePages = await dump('before-pages.dump');
+  // A dump/restore can flatten associative AND groups when CHECK expressions are
+  // parsed again. Use an independently restored pre-Pages reference, not string
+  // stripping or skipped constraints, for the subsequent recovery comparison.
+  await legacyPreparation(); await restore(beforePages);
+  assert.deepEqual(await ledger(), baseline.ledger, 'reference roundtrip preserves baseline ledger');
+  assert.deepEqual(await fixtureSnapshot(), baseline.data, 'reference roundtrip preserves baseline data');
+  const restoredBaselineSchema = await schemaSnapshot();
   await migrate(); await verifyMigrations();
   assert.ok((await ledger()).some(row => row.version === '040_pages'));
   assert.ok((await ledger()).some(row => row.version === '041_pages_media'));
@@ -133,7 +140,7 @@ try {
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   await restore(beforePages);
-  assert.deepEqual(await schemaSnapshot(), baseline.schema, 'baseline schema restored exactly');
+  assert.deepEqual(await schemaSnapshot(), restoredBaselineSchema, 'recovery schema matches independently restored baseline exactly');
   assert.deepEqual(await ledger(), baseline.ledger, 'baseline migration ledger/timestamps restored');
   assert.deepEqual(await fixtureSnapshot(), baseline.data, 'baseline fixture rows restored');
   console.log('Recovery rehearsal: narrowly scoped disposable cleanup + restore recovers baseline schema, ledger and fixture data.');
