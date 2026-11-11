@@ -1,12 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { createPagesMediaFixtures } from '../helpers/pages-media-fixtures.mjs';
 const require = createRequire(import.meta.url);
 const sharp = createRequire(new URL('../../api/package.json', import.meta.url))('sharp');
 const { admit, run, binary, inputArgs } = require('../../api/pages/media-runner');
 const { normalizePageMedia } = require('../../api/pages/media');
+const execute = promisify(execFile);
+
+function mediaBinaryPath(name) {
+  const key = name === 'ffmpeg' ? 'FFMPEG_PATH' : 'FFPROBE_PATH';
+  if (process.env[key]) return process.env[key];
+  if (process.platform !== 'win32') return name;
+  return Buffer.from(execFileSync('powershell.exe', ['-NoProfile','-Command', `[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((Get-Command ${name}).Source))`], { encoding: 'ascii' }).trim(), 'base64').toString('utf16le');
+}
 
 test('one admission, no queue, idempotent release, before any buffering/decoding', () => {
   const release = admit(); assert.throws(() => admit(), { status: 429, reason: 'media_busy' });
@@ -32,12 +44,55 @@ test('demuxers, file-only protocols and MOV external references are fixed, not g
   assert.deepEqual(inputArgs('video','/generated/input.mp4'), ['-protocol_whitelist','file','-f','mov','-enable_drefs','0','-use_absolute_path','0','-i','/generated/input.mp4']);
   assert.ok(inputArgs('audio','/generated/input.mp3').includes('mp3'));
 });
+test('real media fixtures create a missing temporary parent and clean their unique directory', async () => {
+  const temporaryParent = join(tmpdir(), 'opencode');
+  await mkdir(temporaryParent, { recursive: true });
+  const temporaryRoot = await mkdtemp(join(temporaryParent, 'pages-media-temp-'));
+  const helperUrl = new URL('../helpers/pages-media-fixtures.mjs', import.meta.url).href;
+  const source = `
+    import assert from 'node:assert/strict';
+    import { stat, readdir } from 'node:fs/promises';
+    import { tmpdir } from 'node:os';
+    import { basename, dirname, join } from 'node:path';
+    import { createPagesMediaFixtures } from ${JSON.stringify(helperUrl)};
+    const parent = join(tmpdir(), 'opencode');
+    await assert.rejects(stat(parent), { code: 'ENOENT' });
+    const fixtures = await createPagesMediaFixtures();
+    try {
+      assert.equal(dirname(fixtures.directory), parent);
+      assert.ok(basename(fixtures.directory).startsWith('pages-media-fixtures-'));
+      assert.ok((await stat(parent)).isDirectory());
+      for (const name of ['synthetic.gif', 'synthetic.mp3', 'synthetic.mp4']) {
+        assert.ok(fixtures.files[name], name);
+      }
+      for (const { path, buffer } of Object.values(fixtures.files)) {
+        assert.equal(dirname(path), fixtures.directory);
+        assert.ok(buffer.length > 0);
+        assert.equal((await stat(path)).size, buffer.length);
+      }
+    } finally {
+      await fixtures.close();
+    }
+    await assert.rejects(stat(fixtures.directory), { code: 'ENOENT' });
+    assert.deepEqual(await readdir(parent), []);
+    process.stdout.write('real fixtures generated and cleaned');
+  `;
+  try {
+    const { stdout } = await execute(process.execPath, ['--input-type=module', '-e', source], {
+      env: { ...process.env, TEMP: temporaryRoot, TMP: temporaryRoot, TMPDIR: temporaryRoot, FFMPEG_PATH: mediaBinaryPath('ffmpeg') },
+      timeout: 120000, maxBuffer: 262144, windowsHide: true
+    });
+    assert.equal(stdout, 'real fixtures generated and cleaned');
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
 test('real generated animations/audio/video fully decode; abusive/truncated/confused inputs fail closed', async () => {
   const old = { FFMPEG_PATH: process.env.FFMPEG_PATH, FFPROBE_PATH: process.env.FFPROBE_PATH };
   if (process.platform === 'win32') {
     for (const name of ['ffmpeg','ffprobe']) {
       const key = name === 'ffmpeg' ? 'FFMPEG_PATH' : 'FFPROBE_PATH';
-      if (!process.env[key]) process.env[key] = Buffer.from(execFileSync('powershell.exe', ['-NoProfile','-Command', `[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((Get-Command ${name}).Source))`], { encoding: 'ascii' }).trim(), 'base64').toString('utf16le');
+      if (!process.env[key]) process.env[key] = mediaBinaryPath(name);
     }
   }
   let fixtures;

@@ -1,13 +1,15 @@
 // Generated from lavfi only; no copyrighted uploads or checked-in binary fixtures.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const run = promisify(execFile);
 export async function createPagesMediaFixtures() {
-  const directory = await mkdtemp(join(tmpdir(), 'opencode', 'pages-media-fixtures-'));
+  const parent = join(tmpdir(), 'opencode');
+  await mkdir(parent, { recursive: true });
+  const directory = await mkdtemp(join(parent, 'pages-media-fixtures-'));
   const executable = process.env.FFMPEG_PATH || 'ffmpeg';
   const files = {};
   async function generate(name, args) {

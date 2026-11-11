@@ -364,6 +364,12 @@ e a limpeza de órfãos compartilham o advisory lock `7193003`.
 
 ## Deploy automático da `main`
 
+**Primeira entrega com Pages:** antes de promover a branch, fechar o gate de
+[recuperação pré-Pages](pages-release-preflight.md). O ensaio nativo do CI valida
+somente a recuperação de banco em ambiente descartável; não atualiza o receptor
+instalado na VPS nem comprova retomada da API/cron. A passagem por main abaixo
+não deve ser usada como teste dessa condição operacional.
+
 Depois que o job `validate` termina verde em um push para `main`, o job
 `deploy-production` empacota exatamente o commit validado e o envia ao receptor
 SSH de produção. O mesmo fluxo pode ser iniciado por `workflow_dispatch` na
