@@ -1,6 +1,5 @@
-const { randomBytes } = require('node:crypto');
 const { firebaseAuth } = require('../middleware/auth');
-const { sendRegistrationPassword, sendVerificationEmail } = require('../integrations/password-reset-email');
+const { sendRegistrationPassword } = require('../integrations/password-reset-email');
 const { normalizeContract } = require('../middleware/validation');
 const {
   cleanupFirebaseIdentity, enableActiveUser, lockFirebaseIdentity, lockPendingRegistrationIdentity,
@@ -52,10 +51,6 @@ function discardClient(result) {
 function maxPendingRegistrationsPerHour(env = process.env) {
   const value = Number.parseInt(env.MAX_PENDING_REGISTRATIONS_PER_HOUR || '', 10);
   return Number.isInteger(value) && value > 0 ? value : DEFAULT_MAX_PENDING_REGISTRATIONS_PER_HOUR;
-}
-
-function temporaryPassword() {
-  return randomBytes(32).toString('hex');
 }
 
 async function cleanupPendingRegistrationUser({ pool, client, uid, email, pendingRegistrationId, requestId }) {
@@ -183,10 +178,15 @@ async function createPendingRegistration({ client, data, requestId }) {
       [data.email],
     );
     if (existingUser) throw serviceError('REGISTRATION_ALREADY_EXISTS', 'An account already exists for this email.');
+    const { rows: existingRegistrations } = await client.query(
+      'SELECT id FROM pending_registrations WHERE lower(email) = lower($1) LIMIT 1',
+      [data.email],
+    );
+    if (existingRegistrations.length) throw serviceError('REGISTRATION_PENDING_EXISTS', 'A registration already owns this email.');
     await reserveRegistrationWindow(client);
     firebaseUser = await firebaseAuth.createUser({
       email: data.email,
-      password: temporaryPassword(),
+      password: data.password,
       displayName: data.name,
       emailVerified: false,
       disabled: true,
@@ -197,8 +197,6 @@ async function createPendingRegistration({ client, data, requestId }) {
        VALUES ($1, $2, $3)`,
       [firebaseUser.uid, data.email, data.name],
     );
-    const link = await firebaseAuth.generateEmailVerificationLink(data.email, verificationSettings());
-    await sendVerificationEmail({ to: data.email, name: data.name, link });
     return { uid: firebaseUser.uid };
   } catch (error) {
     if (firebaseUser?.uid) {
@@ -235,7 +233,13 @@ async function requestPendingRegistrationPassword({ pool, email }) {
       'SELECT 1 FROM firebase_cleanup_queue WHERE firebase_uid = $1',
       [registration.firebase_uid],
     );
-    if (!firebaseUser || firebaseUser.emailVerified !== true || firebaseUser.disabled !== true || queuedCleanup) {
+    const { rowCount: admittedUser } = await client.query(
+      'SELECT 1 FROM users WHERE uid = $1 OR lower(email) = lower($2) LIMIT 1',
+      [registration.firebase_uid, email],
+    );
+    if (!firebaseUser || firebaseUser.uid !== registration.firebase_uid
+        || String(firebaseUser.email || '').toLowerCase() !== email
+        || firebaseUser.disabled !== true || queuedCleanup || admittedUser) {
       commitAttempted = true;
       await client.query('COMMIT');
       commitCompleted = true;
@@ -284,37 +288,27 @@ async function recoverPendingRegistration({ pool, data, requestId }) {
     const identity = await lockPendingRegistrationIdentity(client, { email: data.email });
     if (identity.changed) return false;
     const pending = identity.registration;
-    if (pending?.firebase_cleanup_pending) return false;
+    if (!pending || pending.status !== 'pending' || pending.firebase_cleanup_pending) return false;
     const { rowCount: existingUser } = await client.query(
       `SELECT 1 FROM users
        WHERE ($1::text IS NOT NULL AND uid = $1) OR lower(email) = lower($2)
        LIMIT 1`,
-      [pending?.firebase_uid || null, data.email],
+      [pending.firebase_uid, data.email],
     );
     if (existingUser) return false;
-    const firebaseUser = pending
-      ? await firebaseAuth.getUser(pending.firebase_uid).catch((error) => {
-         if (error.code === 'auth/user-not-found') return null;
-         throw error;
-       })
-       : await firebaseAuth.getUserByEmail(data.email).catch((error) => {
-         if (error.code === 'auth/user-not-found') return null;
-         throw error;
-       });
+    const firebaseUser = await firebaseAuth.getUser(pending.firebase_uid).catch((error) => {
+      if (error.code === 'auth/user-not-found') return null;
+      throw error;
+    });
+    const { rowCount: pendingCleanup } = await client.query(
+      'SELECT 1 FROM firebase_cleanup_queue WHERE firebase_uid = $1 LIMIT 1',
+      [pending.firebase_uid],
+    );
+    if (pendingCleanup) return false;
     if (firebaseUser) {
-      if (!pending) await lockFirebaseIdentity(client, { uid: firebaseUser.uid });
-      const { rowCount: queuedCleanup } = await client.query(
-        'SELECT 1 FROM firebase_cleanup_queue WHERE firebase_uid = $1 LIMIT 1',
-        [firebaseUser.uid],
-      );
-      if (queuedCleanup) return false;
-    }
-    if (pending?.status === 'approved' && !firebaseUser) return false;
-    if (firebaseUser && firebaseUser.disabled !== true) return false;
-
-    const recentPending = pending?.status === 'pending'
-      && Date.now() - new Date(pending.created_at).getTime() < 60 * 60 * 1000;
-    if (recentPending && firebaseUser) {
+      if (firebaseUser.uid !== pending.firebase_uid
+          || String(firebaseUser.email || '').toLowerCase() !== data.email
+          || firebaseUser.disabled !== true) return false;
       commitAttempted = true;
       await client.query('COMMIT');
       committed = true;
@@ -324,45 +318,32 @@ async function recoverPendingRegistration({ pool, data, requestId }) {
 
     await reserveRegistrationWindow(client);
 
-    let recoveredUser = firebaseUser;
-    if (!recoveredUser) {
-      recoveredUser = await firebaseAuth.createUser({
-        email: data.email,
-        password: temporaryPassword(),
-        displayName: data.name,
-        emailVerified: false,
-        disabled: true,
-      });
-      createdUid = recoveredUser.uid;
-    }
+    const recoveredUser = await firebaseAuth.createUser({
+      email: data.email,
+      password: data.password,
+      displayName: pending.name,
+      emailVerified: false,
+      disabled: true,
+    });
+    createdUid = recoveredUser.uid;
     await lockFirebaseIdentity(client, { uid: recoveredUser.uid });
 
-    if (pending) {
-      const latest = (await client.query(
-        `SELECT id, firebase_uid, email, status, created_at, firebase_cleanup_pending
-         FROM pending_registrations WHERE id = $1 FOR UPDATE`,
-        [pending.id],
-      )).rows[0];
-      if (!latest || latest.id !== pending.id || latest.firebase_uid !== pending.firebase_uid || latest.email !== pending.email) return false;
-      const { rowCount } = await client.query(
-        `UPDATE pending_registrations
-         SET firebase_uid = $1, name = $2, status = 'pending', reviewed_at = NULL,
-             reviewed_by = NULL, rejection_reason = NULL, created_at = NOW()
-         WHERE id = $3`,
-        [recoveredUser.uid, data.name, pending.id],
-      );
-      if (rowCount !== 1) throw new Error('Pending registration recovery update failed.');
-    } else {
-      const { rowCount } = await client.query(
-        `INSERT INTO pending_registrations (firebase_uid, email, name)
-         VALUES ($1, $2, $3)
-         ON CONFLICT DO NOTHING`,
-        [recoveredUser.uid, data.email, data.name],
-      );
-      if (rowCount !== 1) throw new Error('Pending registration recovery insert failed.');
+    const latest = (await client.query(
+      `SELECT id, firebase_uid, email, status, created_at, firebase_cleanup_pending
+       FROM pending_registrations WHERE id = $1 FOR UPDATE`,
+      [pending.id],
+    )).rows[0];
+    if (!latest || latest.id !== pending.id || latest.firebase_uid !== pending.firebase_uid
+        || latest.email !== pending.email || latest.status !== 'pending' || latest.firebase_cleanup_pending) {
+      throw serviceError('REGISTRATION_IDENTITY_CHANGED', 'Pending identity changed during recovery.');
     }
-    const link = await firebaseAuth.generateEmailVerificationLink(data.email, verificationSettings());
-    await sendVerificationEmail({ to: data.email, name: data.name, link });
+    const { rowCount } = await client.query(
+      `UPDATE pending_registrations
+       SET firebase_uid = $1
+       WHERE id = $2 AND firebase_uid = $3 AND status = 'pending' AND firebase_cleanup_pending = FALSE`,
+      [recoveredUser.uid, pending.id, pending.firebase_uid],
+    );
+    if (rowCount !== 1) throw new Error('Pending registration recovery update failed.');
     commitAttempted = true;
     await client.query('COMMIT');
     committed = true;
@@ -376,14 +357,14 @@ async function recoverPendingRegistration({ pool, data, requestId }) {
     if (createdUid && !commitAttempted && !rollbackFailed) {
        const cleanupError = await cleanupPendingRegistrationUser({ pool, uid: createdUid, email: data.email, requestId });
       if (cleanupError) {
-        await queueFirebaseCleanup({ pool, uid: createdUid, reason: 'registration_recovery' }).catch((queueError) => {
-          console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId, error: queueError.message }));
+        await queueFirebaseCleanup({ pool, uid: createdUid, reason: 'registration_recovery' }).catch(() => {
+          console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId }));
         });
       }
     }
     if (createdUid && (commitAttempted && !committed || rollbackFailed)) {
-      await queueFirebaseCleanup({ pool, uid: createdUid, reason: 'registration_recovery_ambiguous' }).catch((queueError) => {
-        console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId, error: queueError.message }));
+      await queueFirebaseCleanup({ pool, uid: createdUid, reason: 'registration_recovery_ambiguous' }).catch(() => {
+        console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId }));
       });
     }
     console.error(JSON.stringify({ service: 'api', event: 'pending_registration_recovery_failed', requestId }));
@@ -544,11 +525,10 @@ async function approvePendingRegistration({ client, pool, id, jobTitleId, contra
     );
     if (!titleCount) throw serviceError('INVALID_JOB_TITLE', 'Job title is not active.');
 
-    const firebaseUser = await firebaseAuth.getUser(registration.firebase_uid).catch((error) => {
+    await firebaseAuth.getUser(registration.firebase_uid).catch((error) => {
       if (error.code === 'auth/user-not-found') throw serviceError('REGISTRATION_IDENTITY_MISSING', 'Registration identity is missing.');
       throw error;
     });
-    if (firebaseUser.emailVerified !== true) throw serviceError('EMAIL_NOT_VERIFIED', 'Email is not verified.');
 
     const { rowCount: existingUser } = await client.query(
        'SELECT 1 FROM users WHERE uid = $1 OR lower(email) = lower($2) LIMIT 1',

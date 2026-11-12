@@ -55,7 +55,7 @@
       </div>
 
       <form class="reset-section" id="reset-section">
-        <p class="login-intro">Informe seu e-mail para receber as orientações de redefinição de senha.</p>
+        <p class="login-intro">Informe seu e-mail para receber as orientações de redefinição de senha. Use esta opção também se fez um cadastro antigo sem definir senha.</p>
         <div class="form-group">
           <label class="form-label" for="reset-email">Seu e-mail cadastrado</label>
           <input class="form-input" type="email" id="reset-email" name="reset-email" autocomplete="email" spellcheck="false" aria-label="Seu e-mail cadastrado" aria-describedby="reset-error" required placeholder="nome@exemplo.com">
@@ -64,19 +64,6 @@
         <div id="reset-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
         <button class="btn-login" type="submit" id="reset-btn">Enviar link de redefinição</button>
         <button class="back-link" type="button" id="back-link">← Voltar ao login</button>
-      </form>
-
-      <form class="registration-password-section" id="registration-password-section">
-        <p class="login-intro">Crie sua primeira senha após confirmar o e-mail do cadastro.</p>
-        <div class="form-group">
-          <label class="form-label" for="registration-password-email">E-mail do cadastro</label>
-          <input class="form-input" type="email" id="registration-password-email" name="registration-password-email" autocomplete="email" spellcheck="false" aria-describedby="registration-password-help registration-password-error" required placeholder="nome@exemplo.com">
-        </div>
-        <p class="form-help" id="registration-password-help">O cadastro continua aguardando aprovação do administrador.</p>
-        <p class="error-msg" id="registration-password-error" aria-live="polite"></p>
-        <div id="registration-password-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
-        <button class="btn-login" type="submit" id="registration-password-btn">Enviar link para criar senha</button>
-        <button class="back-link" type="button" id="registration-password-back-link">← Voltar ao cadastro</button>
       </form>
 
       <form class="register-section" id="register-section">
@@ -89,11 +76,18 @@
           <label class="form-label" for="register-email">E-mail</label>
           <input class="form-input" type="email" id="register-email" name="email" autocomplete="email" maxlength="254" spellcheck="false" aria-describedby="register-help register-error" required>
         </div>
-        <p class="form-help" id="register-help">Confirme seu e-mail. Depois, use “Criar senha do cadastro” para definir sua primeira senha e aguarde a aprovação do administrador.</p>
+        <div class="form-group">
+          <label class="form-label" for="register-password">Senha</label>
+          <input class="form-input" type="password" id="register-password" name="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="register-help register-error" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="register-password-confirm">Confirmar senha</label>
+          <input class="form-input" type="password" id="register-password-confirm" name="password-confirm" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="register-help register-error" required>
+        </div>
+        <p class="form-help" id="register-help">Use de 12 a 128 caracteres na senha. Após enviar, aguarde a aprovação do administrador. Você entrará com o email e a senha informados.</p>
         <p class="error-msg" id="register-error" aria-live="polite"></p>
         <div id="register-success" class="success-msg" role="status" aria-live="polite" style="display:none"></div>
         <button class="btn-login" type="submit" id="register-btn">Criar cadastro</button>
-        <button class="forgot-link" type="button" id="registration-password-link">Criar senha do cadastro</button>
         <button class="back-link" type="button" id="register-back-link">← Voltar ao login</button>
         <a class="support-link" href="mailto:suporte@ownerinc.com.br">Preciso de suporte</a>
       </form>

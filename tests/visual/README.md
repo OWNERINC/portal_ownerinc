@@ -59,12 +59,13 @@ intervalo de 16 px, fora de todos os formulários, conforme a revisão solicitad
 após a aprovação das pranchetas. Confere alinhamento nos quatro estados de acesso.
 Confere também o carregamento da logo horizontal original do PodFalar, sua
 largura de 108 px, proporção e nome acessível, sem distorções ou overflow.
-Percorre login, recuperação, cadastro e criação de senha em dez larguras de
+Percorre login, recuperação e cadastro com senha em dez larguras de
 320 a 1920 px, com axe WCAG A/AA e restauração do foco. No mobile, mede a
 centralização vertical/horizontal do conjunto; em 360 × 480/568/667 px verifica
-rolagem natural e acesso aos campos e ao rodapé, sem cortes no topo. Isso não
+rolagem natural e acesso aos campos de login/cadastro e ao rodapé, sem cortes no topo. Isso não
 substitui teste com teclado virtual em aparelho físico. Exercita ordem por Tab,
-mostrar/ocultar senha, contratos de envio simulados e nova aba isolada do canal.
+mostrar/ocultar senha, confirmação divergente sem envio, limpeza das senhas,
+contratos de envio simulados e nova aba isolada do canal.
 
 ```sh
 PLAYWRIGHT_MODULE_PATH=/caminho/externo/node_modules/playwright/index.mjs \

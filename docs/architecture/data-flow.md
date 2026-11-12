@@ -4,18 +4,22 @@
 
 1. O usuário autentica no Firebase pelo frontend.
 2. `public/js/auth.js` inclui o token Bearer na requisição.
-3. A API valida o token pelo Firebase Admin.
-4. A API cria ou carrega o perfil correspondente no PostgreSQL.
+3. A API valida o token pelo Firebase Admin, incluindo revogação; email verificado não é requisito de admissão.
+4. A API carrega o perfil previamente admitido no PostgreSQL e exige conta ativa e habilitação externa concluída. Identidade Firebase sem perfil admitido não ganha acesso.
 5. A rota aplica a permissão necessária; só depois valida o payload de domínio e
    consulta ou altera o banco.
 
 ## Cadastro pendente
 
-1. O visitante envia nome e e-mail para `/api/auth/register`; a rota aplica validação estrita e rate limit.
-2. A API cria uma identidade Firebase desabilitada com senha aleatória não exposta e uma linha `pending_registrations` dentro da transação PostgreSQL.
-3. O Firebase gera o link de verificação e o SMTP existente envia a mensagem; falhas compensam a identidade criada e, se a exclusão externa falhar, gravam `firebase_cleanup_queue` para retry pelo cron. Cadastro pendente, convites/importações e o worker compartilham locks transacionais determinísticos por e-mail/UID; o cleanup verifica referências locais antes de apagar.
-4. Depois da confirmação do e-mail, o solicitante usa `Primeiro acesso: criar senha` para criar a própria senha pelo fluxo do Firebase; a solicitação continua pendente de aprovação e não aceita role ou permissões privilegiadas.
+1. O visitante informa nome, email, senha e confirmação da senha em “Cadastre-se”. O navegador compara as senhas e envia somente `{name,email,password}` para `/api/auth/register`; a API aplica validação estrita e rate limit. Senha tem de 12 a 128 unidades UTF-16, não é composta só por espaços e não sofre trim ou normalização.
+2. A API cria a identidade Firebase com a senha escolhida, `disabled:true` e `emailVerified:false`, e uma linha `pending_registrations` na transação PostgreSQL. Não gera nem envia confirmação de email. Senha não é persistida em SQL, fila, auditoria, logs ou storage do navegador; os campos são limpos após tentativa ou abandono.
+3. Falhas compensam apenas a identidade criada pela operação e, se a exclusão externa não for segura ou falhar, gravam `firebase_cleanup_queue` para retry. Cadastro, convites/importações e workers compartilham locks transacionais por email/UID; o cleanup verifica referências antes de apagar. Commit ambíguo descarta a conexão sem apagar uma identidade potencialmente admitida.
+4. A resposta pública permanece HTTP 202 `{status:"accepted",state:"received"}` e orienta aguardar aprovação. Repetição nunca troca senha, nome, idade ou decisão anterior e não adota identidade órfã por email. Se uma solicitação pendente perdeu a identidade, a recuperação sob locks reconstrói somente essa identidade e atualiza apenas o UID, preservando os metadados. A lista administrativa mostra “Pendente de aprovação”, sem consultar verificação Firebase por item.
 5. A aprovação exige cargo ativo e `contract_type`; PJ persiste `is_pj=true` com dia de nota de 1 a 31, enquanto CLT persiste `is_pj=false` e `pj_due_day=NULL`. O usuário nasce como `viewer`, marca a habilitação externa como pendente e o helper de enable bloqueia a linha local, decide o estado ativo e atualiza o Firebase na mesma seção crítica; falhas ou commit ambíguos mantêm o marcador para retry/reconciliação sem reativar contas localmente desativadas. A rejeição registra auditoria e remove a identidade, mantendo-a desabilitada e sujeita à retenção/retry se a remoção externa falhar.
+6. Email é identificador de login, não prova de posse da caixa postal: o administrador deve conferir identidade e endereço informado antes de aprovar. Após habilitação, o funcionário entra com a senha escolhida, sem exigir ou falsificar `emailVerified:true`.
+7. “Esqueci minha senha” usa `/api/auth/password-reset`: atende admitidos ativos mesmo não verificados e solicitações antigas ainda pendentes/desabilitadas, com UID/email correspondentes e sem usuário admitido/cleanup. O endpoint antigo `/api/auth/registration-password` permanece compatível para pendentes; não há tela separada. Recuperação não aprova, habilita ou reativa contas, e respostas não revelam existência. Aplicação real dos links em identidades disabled depende de homologação do Firebase, sem habilitação antecipada para contornar o provedor.
+
+Evidências e limites da validação local: [cadastro com senha e aprovação](../reviews/2026-11-11-registration-without-email-verification.md). Essa validação não comprova publicação em produção.
 
 ## Convite e importação administrativa
 

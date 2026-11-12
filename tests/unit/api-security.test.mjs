@@ -136,14 +136,21 @@ test('user and profile validation rejects unsafe privilege, URL, photo, and date
   assert.equal(isHttpUrl('https://www.linkedin.com/in/user'), true);
 });
 
-test('public registration validation accepts only the name and email contract', () => {
-  assert.equal(validateRegistration({ name: 'Ana Silva', email: 'ana@example.com' }), true);
-  assert.equal(validateRegistration({ name: ' Ana Silva ', email: ' ana@example.com ' }), true);
-  assert.equal(validateRegistration({ name: 'A', email: 'ana@example.com' }), false);
-  assert.equal(validateRegistration({ name: 'Ana\nSilva', email: 'ana@example.com' }), false);
-  assert.equal(validateRegistration({ name: 'Ana Silva', email: 'bad' }), false);
-  assert.equal(validateRegistration({ name: 'Ana Silva', email: 'ana@example.com', password: 'known-secret' }), false);
-  assert.equal(validateRegistration({ name: 'Ana Silva', email: 'ana@example.com', role: 'admin' }), false);
+test('public registration requires name, email and an unmodified bounded password only', () => {
+  const valid = { name: 'Ana Silva', email: 'ana@example.com', password: '  senha com espaços  ' };
+  assert.equal(validateRegistration(valid), true);
+  assert.equal(validateRegistration({ ...valid, name: ' Ana Silva ', email: ' ana@example.com ' }), true);
+  for (const name of ['A', 'Ana\nSilva', 'a'.repeat(121)]) assert.equal(validateRegistration({ ...valid, name }), false);
+  assert.equal(validateRegistration({ ...valid, email: 'bad' }), false);
+  for (const password of [undefined, null, 123, 'a'.repeat(11), 'a'.repeat(129), ' '.repeat(12)]) {
+    assert.equal(validateRegistration({ ...valid, password }), false);
+  }
+  for (const password of ['a'.repeat(12), 'a'.repeat(128), '😀'.repeat(6)]) {
+    assert.equal(validateRegistration({ ...valid, password }), true);
+  }
+  assert.equal(validateRegistration({ ...valid, confirmPassword: valid.password }), false);
+  assert.equal(validateRegistration({ ...valid, role: 'admin' }), false);
+  assert.equal(validateRegistration({ ...valid, permissions: {} }), false);
 });
 
 test('image validation uses file signatures rather than supplied MIME or extension', () => {

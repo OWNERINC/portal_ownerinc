@@ -16,12 +16,16 @@ const registrationLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
 const registrationPasswordLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
 const accepted = { status: 'accepted' };
 const registrationAccepted = { status: 'accepted', state: 'received' };
+const failureCodes = new Set(['auth/invalid-email', 'auth/invalid-password', 'auth/too-many-requests',
+  'auth/internal-error', 'auth/insufficient-permission', 'ECONNECTION', 'ETIMEDOUT']);
+const failureCode = (error) => failureCodes.has(error.code) ? error.code : 'unknown';
 
 router.post('/register', registrationLimit, async (req, res, next) => {
   if (!validateRegistration(req.body)) return res.status(400).json({ error: 'Invalid request.', requestId: req.id });
   const data = {
     email: req.body.email.trim().toLowerCase(),
     name: req.body.name.trim(),
+    password: req.body.password,
   };
   let client;
   let createdUid;
@@ -55,13 +59,13 @@ router.post('/register', registrationLimit, async (req, res, next) => {
         pool, uid: cleanupUid, email: data.email, requestId: req.id,
       });
       if (cleanupError) {
-        await queueFirebaseCleanup({ pool, uid: cleanupUid, reason: 'registration' }).catch((queueError) => {
-          console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId: req.id, error: queueError.message }));
+        await queueFirebaseCleanup({ pool, uid: cleanupUid, reason: 'registration' }).catch(() => {
+          console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId: req.id }));
         });
         console.error(JSON.stringify({ service: 'api', event: 'pending_registration_cleanup_failed', requestId: req.id }));
       }
     }
-    if (error.code === 'auth/email-already-exists' || error.code === '23505') {
+    if (error.code === 'auth/email-already-exists' || error.code === '23505' || error.code === 'REGISTRATION_PENDING_EXISTS') {
       client?.release(discardClient || rollbackFailed);
       client = null;
       await withRegistrationOperation(() => recoverPendingRegistration({ pool, data, requestId: req.id })).catch(() => false);
@@ -70,7 +74,7 @@ router.post('/register', registrationLimit, async (req, res, next) => {
     if (error.code === 'REGISTRATION_ALREADY_EXISTS') return res.status(202).json(registrationAccepted);
     if (error.code === 'REGISTRATION_BUSY') return res.status(503).json({ error: 'Cadastro temporariamente indisponível.', requestId: req.id });
     if (error.code === 'REGISTRATION_RATE_LIMITED') return res.status(429).json({ error: 'Muitos cadastros recentes. Tente novamente mais tarde.', requestId: req.id });
-    console.error(JSON.stringify({ service: 'api', event: 'pending_registration_failed', requestId: req.id, code: error.code || 'unknown' }));
+    console.error(JSON.stringify({ service: 'api', event: 'pending_registration_failed', requestId: req.id, code: failureCode(error) }));
     return res.status(503).json({ error: 'Cadastro temporariamente indisponível.', requestId: req.id });
   } finally {
     client?.release(discardClient || (commitAttempted && !commitCompleted));
@@ -90,7 +94,10 @@ router.post('/password-reset', resetLimit, async (req, res, next) => {
     });
     if (!firebaseUser) return res.status(202).json(accepted);
 
-    if (firebaseUser.disabled || firebaseUser.emailVerified !== true) return res.status(202).json(accepted);
+    if (firebaseUser.disabled) {
+      await withRegistrationOperation(() => requestPendingRegistrationPassword({ pool, email }));
+      return res.status(202).json(accepted);
+    }
     const { rowCount } = await pool.query(
       `SELECT 1 FROM users WHERE uid = $1
        AND permissions->>'accountDisabled' IS DISTINCT FROM 'true'
@@ -104,7 +111,7 @@ router.post('/password-reset', resetLimit, async (req, res, next) => {
     console.log(JSON.stringify({ service: 'api', event: 'password_reset_email_accepted', requestId: req.id }));
     res.status(202).json(accepted);
   } catch (error) {
-    console.error(JSON.stringify({ service: 'api', event: 'password_reset_failed', requestId: req.id, code: error.code || 'unknown' }));
+    console.error(JSON.stringify({ service: 'api', event: 'password_reset_failed', requestId: req.id, code: failureCode(error) }));
     return res.status(202).json(accepted);
   }
 });
@@ -122,7 +129,7 @@ router.post('/registration-password', registrationPasswordLimit, async (req, res
     if (error.code === 'REGISTRATION_BUSY') {
       return res.status(503).json({ error: 'Cadastro temporariamente indisponível.', requestId: req.id });
     }
-    console.error(JSON.stringify({ service: 'api', event: 'registration_password_failed', requestId: req.id, code: error.code || 'unknown' }));
+    console.error(JSON.stringify({ service: 'api', event: 'registration_password_failed', requestId: req.id, code: failureCode(error) }));
     return res.status(202).json(accepted);
   }
 });
