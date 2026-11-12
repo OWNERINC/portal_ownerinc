@@ -11,7 +11,7 @@ const account = uid => ({ uid, getIdToken: async () => `token-${uid}` });
 const userDoc = (uid = 'a', overrides = {}) => ({
   uid, role: 'admin', name: 'Private name', email: `${uid}@example.test`,
   permissions: { manageUsers: true, manageKnowledge: true },
-  autocard_access: true, pos_cards_access: true, ...overrides,
+  autocard_access: true, pos_cards_access: true, ethics_accepted: true, ...overrides,
 });
 const visualSnapshot = (uid = 'a', overrides = {}) => ({
   version: 2, uid, firebaseStorageKey: firebaseKey, savedAt: Date.now() - 86400000,
@@ -97,6 +97,41 @@ test('early shell retains old same-account navigation, but rejects legacy, misma
     const h = harness({ ...options, loadModule: false });
     assert.equal(h.document.documentElement.dataset.portalRole, undefined);
     assert.equal(h.sessionStorage.getItem(snapshotKey), null);
+  }
+});
+
+test('pending ethics clears cached navigation and blocks direct loads for every role without logout', async () => {
+  for (const profile of [{ role: 'viewer', permissions: {} }, { role: 'admin', permissions: { manageUsers: true } }, { role: 'admin', permissions: { superAdmin: true } }]) {
+    const h = harness({ fetchImpl: () => response(userDoc('a', { ...profile, ethics_accepted: false })) });
+    assert.equal(await h.api.requireAuth(), null);
+    assert.equal(h.signouts, 0);
+    assert.equal(h.main.children.length, 0);
+    assert.equal(h.sessionStorage.getItem(snapshotKey), null);
+    assert.equal(h.document.documentElement.dataset.portalRole, undefined);
+    const redirect = new URL(h.redirects.at(-1), h.location.href);
+    assert.equal(redirect.pathname, '/ethics.html');
+    assert.equal(redirect.searchParams.get('next'), '/admin.html');
+  }
+});
+
+test('only the consent bootstrap may retrieve a pending profile, without rendering navigation', async () => {
+  const h = harness({ fetchImpl: () => response(userDoc('a', { ethics_accepted: false })) });
+  const user = await h.api.getCurrentUserDoc({ allowPendingEthics: true });
+  assert.equal(user.uid, 'a');
+  assert.equal(user.ethics_accepted, false);
+  assert.equal(h.redirects.length, 0);
+  assert.equal(h.signouts, 0);
+  assert.equal(h.api.getCachedUserSnapshot(), null);
+  assert.equal(h.document.documentElement.dataset.authState, 'pending');
+});
+
+test('ethics denial from any protected API redirects without ending Firebase session', async () => {
+  for (const path of ['/api/users/me', '/api/academy', '/api/autocard/media/id']) {
+    const h = harness({ fetchImpl: () => response({ reason: 'ethics-required' }, 403) });
+    await assert.rejects(h.api.fetchAPI(path), error => error.name === 'AbortError');
+    assert.equal(h.signouts, 0);
+    assert.equal(h.main.children.length, 0);
+    assert.match(h.redirects.at(-1), /ethics\.html/);
   }
 });
 

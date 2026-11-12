@@ -2,7 +2,7 @@
   "name": "ownerinc-portal",
   "private": true,
   "scripts": {
-    "bootstrap": "npm --prefix api ci && npm --prefix cron ci",
+    "bootstrap": "npm ci && npm --prefix api ci && npm --prefix cron ci",
     "db:migrate": "node api/db/migrate.js",
     "db:provision": "node api/db/provision.js",
     "test:migration-readiness": "node scripts/test-migration-readiness.mjs",
@@ -13,9 +13,22 @@
     "sbom": "node scripts/sbom.mjs",
     "solides:probe": "node scripts/solides-probe.mjs",
     "build:public": "node scripts/generate-public-shell.mjs",
+    "build:pages": "node scripts/build-pages.mjs",
+    "check:pages-build": "node scripts/build-pages.mjs --check",
     "test": "node --test tests/unit/*.test.mjs",
     "test:migrations": "node scripts/test-migrations.mjs",
     "verify": "node scripts/verify.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "prosemirror-commands": "1.7.2",
+    "prosemirror-history": "1.5.1",
+    "prosemirror-keymap": "1.2.3",
+    "prosemirror-model": "1.25.13",
+    "prosemirror-schema-list": "1.6.0",
+    "prosemirror-state": "1.4.4",
+    "prosemirror-view": "1.42.9",
+    "sortablejs": "1.15.6"
   },
   "engines": {
     "node": ">=24 <25"

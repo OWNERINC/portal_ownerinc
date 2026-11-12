@@ -10,7 +10,7 @@ require('dotenv').config({ path: new URL('../.env', import.meta.url) });
 requireDisposableMigrationEnvironment();
 
 const { Pool } = require('pg');
-const { provision } = require('../api/db/provision');
+const { provision, provisionRoles } = require('../api/db/provision');
 const { expectedVersions, verifyMigrations } = require('../api/db/verify-migrations');
 
 const representedVersions = new Set([
@@ -45,6 +45,9 @@ const nonEditorialMigrations = [
   '027_pending_registration_cleanup',
   '028_firebase_cleanup_queue',
   '030_dho_job_title_catalog',
+  '039_ethics_acceptances',
+  '040_pages',
+  '041_pages_media',
 ];
 const omittedEditorialVersions = [
   '015_cms_editor',
@@ -73,6 +76,7 @@ try {
 
   await client.query('BEGIN');
   try {
+    await provisionRoles(client);
     await client.query(await readFile(new URL('../api/db/schema.sql', import.meta.url), 'utf8'));
     const schemaLedger = await client.query('SELECT version FROM schema_migrations ORDER BY version');
     assert.deepEqual(

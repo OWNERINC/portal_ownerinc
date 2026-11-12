@@ -1,5 +1,17 @@
 # Prévia visual Conecta
 
+## Aceite do Código de Ética
+
+`check-ethics.mjs` tem servidor loopback próprio e não usa `serve-conecta.mjs`.
+Exercita a tela e os helpers/rotas reais com Firebase e SQL substituídos, incluindo
+as contas viewer/admin/superadmin, links diretos, aceite entre navegadores,
+teclado, falhas, versão e troca de conta. Audita seis larguras com axe WCAG A/AA.
+Use as variáveis `PLAYWRIGHT_MODULE_PATH` e `AXE_MODULE_PATH` descritas abaixo e
+execute `node tests/visual/check-ethics.mjs`. Consulte os contratos e limites em
+[`docs/product/ethics-acceptance.md`](../../docs/product/ethics-acceptance.md).
+
+## Prévia geral
+
 O servidor abaixo é exclusivo para inspeção local. Serve o frontend real com
 substitutos de autenticação e dados claramente rotulados. Escuta somente em
 `127.0.0.1`, recusa gravações e não encaminha requisições para serviços externos.

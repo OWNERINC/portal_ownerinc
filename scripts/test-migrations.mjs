@@ -55,6 +55,9 @@ const expectedVersions = [
   '034_owner_news_editorial',
   '035_owner_news_polls',
   '038_disable_legacy_editorial_writes',
+  '039_ethics_acceptances',
+  '040_pages',
+  '041_pages_media',
 ];
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
@@ -775,6 +778,25 @@ try {
     /users_contract_consistency/,
   );
   await verifyMigrations();
+  const { acceptTerm, term } = require('../api/ethics');
+  for (const profile of [
+    { role: 'viewer', permissions: {} },
+    { role: 'admin', permissions: { manageUsers: true } },
+    { role: 'admin', permissions: { superAdmin: true } },
+  ]) {
+    const uid = `migration-fixture-ethics-${randomUUID()}`;
+    fixtureUids.push(uid);
+    await client.query('INSERT INTO users (uid, email, role, permissions) VALUES ($1, $2, $3, $4::jsonb)',
+      [uid, `${uid}@example.com`, profile.role, JSON.stringify(profile.permissions)]);
+    assert.equal((await client.query('SELECT 1 FROM ethics_acceptances WHERE user_uid = $1', [uid])).rowCount, 0);
+    const accepted = await acceptTerm(client, uid);
+    assert.deepEqual(await acceptTerm(client, uid), accepted, 'retry keeps original PostgreSQL timestamp');
+    const saved = await client.query('SELECT term_version, content_sha256, is_mock FROM ethics_acceptances WHERE user_uid = $1', [uid]);
+    assert.deepEqual(saved.rows, [{ term_version: term.version, content_sha256: term.contentHash, is_mock: true }]);
+    await client.query('DELETE FROM users WHERE uid = $1', [uid]);
+    assert.equal((await client.query('SELECT 1 FROM ethics_acceptances WHERE user_uid = $1', [uid])).rowCount, 0);
+  }
+  console.log('migration integration: ethics acceptance, retry and erasure for all roles ok');
   console.log('migration integration: ok');
 } finally {
   try {

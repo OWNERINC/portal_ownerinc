@@ -124,7 +124,7 @@ function validateRegistration(body) {
 }
 
 function validPermissions(value) {
-  const allowed = new Set(['superAdmin', 'manageUsers', 'manageReminders', 'manageAcademy', 'manageBenefits', 'manageKnowledge', 'manageSolides']);
+  const allowed = new Set(['superAdmin', 'manageUsers', 'manageReminders', 'manageAcademy', 'manageBenefits', 'manageKnowledge', 'manageSolides', 'editPages', 'publishPages']);
   return value && typeof value === 'object' && !Array.isArray(value)
     && Object.entries(value).every(([key, enabled]) => allowed.has(key) && typeof enabled === 'boolean');
 }

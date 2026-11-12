@@ -17,9 +17,19 @@ disponível como rota futura, fora da navegação inicial.
 - `public/`: páginas estáticas das áreas mantidas pelo Portal; a antiga URL
   `/announcements.html` não é mais uma página do produto e responde 404
   controlado.
-- O runtime atual não inclui CMS, Owner News, editor editorial, enquetes ou
+- `public/pages.html` e `public/page-editor.html`: módulo independente de páginas
+  por modelo/blocos, com comunicado, composição em uma/duas colunas, presets,
+  texto rico, destaque, botão, separador e mídias privadas (imagem, GIF, MP3 e MP4).
+  Inclui um modelo Owner News sintético, não oficial, com cinco seções. Rascunho
+  e publicação por cargo permanecem separados; edição/publicação exigem capacidades
+   administrativas. Desenvolver o módulo não concede acesso ou publica conteúdo real.
+   O Editor V2 usa workspace dedicado, estrutura de seções e propriedades contextuais;
+   no celular, as propriedades ficam em painel inferior. Salvar continua explícito.
+- O runtime atual não inclui CMS, Owner News histórico, editor editorial legado, enquetes ou
   Payload CMS. Migrations, tabelas, uploads e documentos editoriais antigos
-  permanecem preservados como histórico sem consumidores executáveis.
+  permanecem preservados como histórico sem consumidores executáveis. O novo
+  módulo de páginas não reativa esses contratos. Seu piloto sintético é apenas
+  uma receita dos mesmos blocos genéricos, sem importar edições históricas.
 - `api/`: API Express, autorização e persistência PostgreSQL.
 - `cron/`: processamento diário de lembretes e notificações.
 - `firebase-emulator/`: imagem do Auth Emulator usada apenas no perfil local.
@@ -80,6 +90,7 @@ HTML.
 - [Roadmap](docs/product/roadmap.md)
 - [Roadmap da integração Sólides](docs/product/solides-roadmap.md)
 - [Privacidade e retenção](docs/product/privacy-retention.md)
+- [Aceite obrigatório do Código de Ética](docs/product/ethics-acceptance.md)
 - [Arquitetura](docs/architecture/overview.md)
 - [Auditoria da plataforma](docs/reviews/2026-07-20-platform-audit.md)
 - [Auditoria de UI/UX](docs/design/2026-07-20-ui-ux-audit.md)
@@ -90,6 +101,7 @@ HTML.
 - [Histórico da importação privada da Owner News](docs/operations/owner-news-import.md)
   (fluxo removido do runtime; mantido apenas como registro)
 - [Arquitetura do Portal sem editorial](docs/architecture/portal-without-editorial.md)
+- [Páginas do Conecta: contratos e verificação local](docs/architecture/pages.md)
 - [Deploy](docs/operations/deployment.md)
 - [Checklist de release V1](docs/operations/v1-release-checklist.md)
 - [Status final da V1](docs/operations/2026-08-12-v1-final-status.md)

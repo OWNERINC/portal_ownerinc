@@ -36,6 +36,9 @@ const expectedVersions = [
   '034_owner_news_editorial',
   '035_owner_news_polls',
   '038_disable_legacy_editorial_writes',
+  '039_ethics_acceptances',
+  '040_pages',
+  '041_pages_media',
 ];
 
 const historicalVersions = Object.freeze([
@@ -383,6 +386,20 @@ async function verifyMigrations() {
     if (!apiEditorialPrivilegesDenied || !cronEditorialPrivilegesDenied) {
       throw new Error('Effective editorial privileges remain through a direct grant, PUBLIC, role membership or column grant');
     }
+    const ethics = await pool.query(`SELECT
+      to_regclass('public.ethics_acceptances') IS NOT NULL AS present,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.ethics_acceptances'::regclass
+        AND contype = 'p' AND pg_get_constraintdef(oid) = 'PRIMARY KEY (user_uid, term_version, content_sha256)') AS identity,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.ethics_acceptances'::regclass
+        AND contype = 'f' AND confrelid = 'public.users'::regclass AND confdeltype = 'c') AS erasure,
+      has_table_privilege('portal_api', 'public.ethics_acceptances', 'SELECT') AS readable,
+      has_table_privilege('portal_api', 'public.ethics_acceptances', 'INSERT') AS writable,
+      NOT has_table_privilege('portal_api', 'public.ethics_acceptances', 'UPDATE') AS immutable_update,
+      NOT has_table_privilege('portal_api', 'public.ethics_acceptances', 'DELETE') AS immutable_delete,
+      NOT has_table_privilege('portal_cron', 'public.ethics_acceptances', 'SELECT,INSERT,UPDATE,DELETE') AS cron_denied`);
+    if (!Object.values(ethics.rows[0]).every(value => value === true)) {
+      throw new Error('Ethics acceptance schema or runtime privileges are incomplete');
+    }
     const academyTables = ['academy_course_job_titles', 'academy_modules', 'academy_lessons', 'academy_lesson_progress'];
     for (const table of academyTables) {
       for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
@@ -407,6 +424,7 @@ async function verifyMigrations() {
     if (!Object.values(academy.rows[0]).every((value) => value === true)) {
       throw new Error('Academy delivery or media schema checks are incomplete');
     }
+    await verifyPages(pool);
     console.log('migration verification: current schema ok');
   } finally {
     await pool.end();
@@ -420,7 +438,36 @@ if (require.main === module) {
   });
 }
 
+async function verifyPages(pool) {
+  const tables = ['pages', 'page_revisions', 'page_revision_job_titles', 'page_media', 'page_revision_media', 'page_requests'];
+  for (const table of tables) {
+    const present = await pool.query('SELECT to_regclass($1) IS NOT NULL AS present', [`public.${table}`]);
+    if (!present.rows[0].present) throw new Error(`Missing Pages table: ${table}`);
+    for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+      const expected = ['SELECT', 'INSERT'].includes(privilege) || (table === 'pages' && privilege === 'UPDATE');
+      const result = await pool.query(`SELECT has_table_privilege('portal_api', $1, $2) AS api,
+        has_table_privilege('portal_cron', $1, $2) AS cron`, [`public.${table}`, privilege]);
+      if (result.rows[0].api !== expected || result.rows[0].cron !== false) throw new Error(`Unexpected Pages privilege: ${table} ${privilege}`);
+    }
+    for (const privilege of ['SELECT', 'INSERT', 'UPDATE']) {
+      const result = await pool.query(`SELECT has_any_column_privilege('portal_api', $1, $2) AS api,
+        has_any_column_privilege('portal_cron', $1, $2) AS cron`, [`public.${table}`, privilege]);
+      if (result.rows[0].cron !== false || (privilege === 'UPDATE' && table !== 'pages' && result.rows[0].api !== false)) throw new Error(`Unexpected Pages column privilege: ${table}`);
+    }
+  }
+  const shape = await pool.query(`SELECT
+    (SELECT count(*) = 2 FROM pg_constraint WHERE conrelid = 'pages'::regclass AND conname IN ('pages_draft_revision_fk','pages_published_revision_fk') AND contype = 'f' AND array_length(conkey,1) = 2 AND confdeltype = 'r') AS heads,
+    (SELECT count(*) = 2 FROM pg_constraint WHERE conrelid = 'page_revision_media'::regclass AND contype = 'f' AND array_length(conkey,1) = 2 AND confdeltype = 'r') AS media_same_page,
+    EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'page_revision_job_titles'::regclass AND confrelid = 'job_titles'::regclass AND confdeltype = 'r') AS audience_restrict,
+    (SELECT count(*) = 4 FROM pg_constraint WHERE conrelid IN ('pages'::regclass,'page_revisions'::regclass,'page_media'::regclass) AND confrelid = 'users'::regclass AND confdeltype = 'n') AS anonymization,
+    EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'page_requests'::regclass AND contype = 'p' AND pg_get_constraintdef(oid) = 'PRIMARY KEY (actor_uid, client_mutation_id)') AS requests_identity,
+    EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'page_media'::regclass AND conname = 'page_media_typed_check' AND pg_get_constraintdef(oid) LIKE '%IS TRUE%') AS typed_media,
+    EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'page_revisions'::regclass AND conname = 'page_revisions_schema_version_check' AND pg_get_constraintdef(oid) LIKE '%2%') AS versions`);
+  if (!Object.values(shape.rows[0]).every(value => value === true)) throw new Error('Pages relational invariants are incomplete');
+}
+
 module.exports = {
+  verifyPages,
   expectedVersions,
   historicalVersions,
   historicalExpectedVersions,

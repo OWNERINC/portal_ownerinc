@@ -217,6 +217,7 @@ staging="$releases/.staging-${requested_commit}-$$"
 release="$releases/$requested_commit"
 backup=
 backup_complete=false
+backup_pages_state=unknown
 migration_started=false
 services_stopped=false
 public_started=false
@@ -240,7 +241,7 @@ stop_container() {
     return 0
   fi
   if [[ $(docker inspect --format '{{.State.Running}}' "$container") == true ]]; then
-    docker stop "$container" >/dev/null
+    docker stop "$container" >/dev/null || return 1
   fi
   [[ $(docker inspect --format '{{.State.Running}}' "$container") == false ]] || {
     echo "Container is still running: $container" >&2
@@ -313,6 +314,135 @@ if [[ -d $release ]]; then
 fi
 mv "$staging" "$release"
 
+verify_recovery_backup() {
+  [[ -s $backup/postgres.dump && -s $backup/uploads.tar.gz && -s $backup/manifest.sha256 ]] || return 1
+  # A checksum of an unrelated file (or a truncated manifest) is not a full backup.
+  awk '
+    !/^[0-9a-f]+  (postgres\.dump|uploads\.tar\.gz)$/ || length($1) != 64 { invalid=1 }
+    { seen[$2]++ }
+    END { if (invalid || NR != 2 || seen["postgres.dump"] != 1 || seen["uploads.tar.gz"] != 1) exit 1 }
+  ' "$backup/manifest.sha256" || return 1
+  (cd "$backup" && sha256sum --check --strict manifest.sha256 >/dev/null) || return 1
+  return 0
+}
+
+classify_backup_pages() {
+  local listing
+  listing=$(docker exec -i "$postgres_container" sh -c 'pg_restore --list' <"$backup/postgres.dump") || return 1
+  # Parse qualified TABLE records, never TABLE DATA, ACL, or COMMENT records.
+  # Headers, record syntax, unique IDs and Portal anchors rule out an empty or
+  # unrecognized inventory being mistaken for proof that Pages was absent.
+  awk '
+    BEGIN {
+      split("pages page_revisions page_revision_job_titles page_media page_revision_media page_requests", names, " ")
+      for (i in names) reserved[names[i]]=1
+    }
+    /^;[[:space:]]+Format: CUSTOM[[:space:]]*$/ { format=1 }
+    /^;[[:space:]]+TOC Entries: [0-9]+[[:space:]]*$/ { entries=1 }
+    /^;[[:space:]]+Selected TOC Entries:[[:space:]]*$/ { selected=1 }
+    /^;/ || /^[[:space:]]*$/ { next }
+    !/^[0-9]+; [0-9]+ [0-9]+ [A-Z]/ { invalid=1; next }
+    {
+      records++
+      if (ids[$1]++) invalid=1
+      if ($4 == "TABLE" && $5 == "public") {
+        if (NF != 7 || tables[$6]++) invalid=1
+      } else {
+        for (i=5; i<NF; i++) {
+          if ($i == "public" && $(i+1) in reserved &&
+              !(($4 == "TABLE" && $5 == "DATA") || $4 == "CONSTRAINT" ||
+                ($4 == "FK" && $5 == "CONSTRAINT") || $4 == "POLICY" ||
+                ($4 == "ROW" && $5 == "SECURITY"))) invalid=1
+        }
+      }
+    }
+    END {
+      if (invalid || !format || !entries || !selected || !records ||
+          tables["users"] != 1 || tables["job_titles"] != 1 || tables["schema_migrations"] != 1) exit 1
+      for (i in reserved) if (tables[i] == 1) found++
+      if (found == 0) print "absent"
+      else if (found == 6) print "present"
+      else exit 1
+    }
+  ' <<<"$listing" || return 1
+  return 0
+}
+
+cleanup_new_pages() {
+  # This literal is also executed unchanged by the guarded native PG16 rehearsal.
+  docker exec -i "$postgres_container" sh -c \
+    'psql -X -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' <<'PAGES_RECOVERY_SQL'
+BEGIN;
+SET LOCAL search_path = pg_catalog;
+SET LOCAL row_security = off;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '30s';
+DO $pages_recovery$
+DECLARE
+  allowed CONSTANT text[] := ARRAY['page_media', 'page_requests', 'page_revision_job_titles', 'page_revision_media', 'page_revisions', 'pages'];
+  relation_count integer;
+  table_name text;
+  occupied boolean;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user AND (rolsuper OR rolbypassrls)) THEN
+    RAISE EXCEPTION 'Pages recovery requires a superuser or BYPASSRLS role';
+  END IF;
+  SELECT count(*) INTO relation_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY(allowed);
+  IF relation_count = 0 THEN RETURN; END IF;
+  IF relation_count <> 6 OR EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY(allowed) AND c.relkind <> 'r'
+  ) THEN
+    RAISE EXCEPTION 'Pages recovery refuses partial or nonordinary relations';
+  END IF;
+  LOCK TABLE public.page_media, public.page_requests, public.page_revision_job_titles,
+    public.page_revision_media, public.page_revisions, public.pages IN ACCESS EXCLUSIVE MODE;
+  -- Recheck types under the locks, including any concurrent pre-lock DDL.
+  IF EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY(allowed) AND c.relkind <> 'r'
+  ) THEN
+    RAISE EXCEPTION 'Pages recovery refuses nonordinary locked relations';
+  END IF;
+  FOREACH table_name IN ARRAY allowed LOOP
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM public.%I)', table_name) INTO occupied;
+    IF occupied THEN RAISE EXCEPTION 'Pages recovery refuses nonempty relation %', table_name; END IF;
+  END LOOP;
+  ALTER TABLE public.pages DROP CONSTRAINT pages_draft_revision_fk, DROP CONSTRAINT pages_published_revision_fk;
+  DROP TABLE public.page_revision_media;
+  DROP TABLE public.page_revision_job_titles;
+  DROP TABLE public.page_media;
+  DROP TABLE public.page_requests;
+  DROP TABLE public.page_revisions;
+  DROP TABLE public.pages;
+END
+$pages_recovery$;
+COMMIT;
+PAGES_RECOVERY_SQL
+  local status=$?
+  [[ $status == 0 ]] || return 1
+  return 0
+}
+
+restore_previous_database() {
+  local observed
+  verify_recovery_backup || return 1
+  observed=$(classify_backup_pages) || return 1
+  [[ $backup_pages_state == absent || $backup_pages_state == present ]] || return 1
+  [[ $observed == "$backup_pages_state" ]] || return 1
+  if [[ $observed == absent ]]; then
+    cleanup_new_pages || return 1
+  fi
+  # Historical preparation follows the Pages guard, never precedes its refusal.
+  docker exec "$postgres_container" sh -c \
+    'psql -X -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER" -c "DROP TABLE IF EXISTS public.firebase_cleanup_queue CASCADE; DROP TABLE IF EXISTS public.pending_registrations CASCADE"' || return 1
+  docker exec -i "$postgres_container" sh -c \
+    'pg_restore --clean --if-exists --no-owner --single-transaction --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' \
+    <"$backup/postgres.dump" || return 1
+  return 0
+}
+
 rollback() {
   local exit_code=$?
   trap - ERR INT TERM
@@ -325,13 +455,7 @@ rollback() {
   fi
   database_restored=true
   if [[ $migration_started == true && $backup_complete == true && $public_started != true ]]; then
-    # The backup predates this release's table, so pg_restore --clean cannot drop it first.
-    if ! docker exec "$postgres_container" sh -c \
-      'psql -v ON_ERROR_STOP=1 --dbname="$POSTGRES_DB" --username="$POSTGRES_USER" -c "DROP TABLE IF EXISTS public.firebase_cleanup_queue CASCADE; DROP TABLE IF EXISTS public.pending_registrations CASCADE"'; then
-      database_restored=false
-    elif ! docker exec -i "$postgres_container" sh -c \
-      'pg_restore --clean --if-exists --no-owner --single-transaction --dbname="$POSTGRES_DB" --username="$POSTGRES_USER"' \
-      <"$backup/postgres.dump"; then
+    if ! restore_previous_database; then
       database_restored=false
     fi
   fi
@@ -344,10 +468,15 @@ rollback() {
   fi
   if [[ -n $current ]]; then
     current_tmp="$runtime/current-release.rollback.$$"
-    printf '%s\n' "$current" >"$current_tmp"
-    chmod 644 "$current_tmp"
-    mv "$current_tmp" "$current_file"
-    compose_for "$current" up -d --remove-orphans
+    if ! { printf '%s\n' "$current" >"$current_tmp" && chmod 644 "$current_tmp" && mv "$current_tmp" "$current_file"; }; then
+      echo "Unable to record previous release; services remain stopped." >&2
+      exit 1
+    fi
+    if ! compose_for "$current" up -d --remove-orphans; then
+      echo "Unable to restart previous release; stopping rollback services." >&2
+      stop_services || true
+      exit 1
+    fi
     restored=false
     for _ in {1..30}; do
       if curl --fail --silent --show-error --max-time 5 \
@@ -367,6 +496,7 @@ rollback() {
         echo "Unable to stop failed rollback services; leaving services stopped." >&2
         exit 1
       fi
+      exit 1
     fi
   else
     rm -f "$current_file"
@@ -397,8 +527,9 @@ docker run --rm --read-only \
   --volume "$uploads_volume:/data:ro" \
   "$nginx_image" tar -czf - -C /data . >"$backup/uploads.tar.gz"
 (cd "$backup" && sha256sum postgres.dump uploads.tar.gz >manifest.sha256)
-(cd "$backup" && sha256sum --check manifest.sha256 >/dev/null)
+verify_recovery_backup
 chmod 600 "$backup/postgres.dump" "$backup/uploads.tar.gz" "$backup/manifest.sha256"
+backup_pages_state=$(classify_backup_pages)
 backup_complete=true
 
 migration_started=true

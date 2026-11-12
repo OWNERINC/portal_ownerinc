@@ -63,6 +63,15 @@ CREATE INDEX IF NOT EXISTS users_job_title_id_idx ON users (job_title_id);
 CREATE INDEX IF NOT EXISTS users_firebase_enable_pending_idx
   ON users (created_at) WHERE firebase_enable_pending = TRUE;
 
+CREATE TABLE IF NOT EXISTS ethics_acceptances (
+  user_uid       TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  term_version   TEXT NOT NULL CHECK (char_length(btrim(term_version)) BETWEEN 1 AND 120),
+  content_sha256 TEXT NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+  is_mock        BOOLEAN NOT NULL,
+  accepted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_uid, term_version, content_sha256)
+);
+
 CREATE TABLE IF NOT EXISTS pending_registrations (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   firebase_uid      TEXT NOT NULL UNIQUE,
@@ -390,6 +399,90 @@ CREATE UNIQUE INDEX IF NOT EXISTS solides_employee_links_external_unique
   WHERE external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS solides_employee_links_status_idx
   ON solides_employee_links (status, updated_at DESC);
+
+-- Pages starts at 040 shape. Both 040 (runtime grants) and 041 (typed media/v2)
+-- remain pending and run in order after historical bootstrap migrations.
+CREATE TABLE IF NOT EXISTS pages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  author_uid TEXT REFERENCES users(uid) ON DELETE SET NULL,
+  version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
+  draft_revision_id UUID,
+  published_revision_id UUID,
+  published_at TIMESTAMPTZ,
+  published_by TEXT REFERENCES users(uid) ON DELETE SET NULL,
+  archived_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT pages_publication_check CHECK ((published_revision_id IS NULL) = (published_at IS NULL)),
+  CONSTRAINT pages_archive_check CHECK (archived_at IS NULL OR published_revision_id IS NULL)
+);
+CREATE TABLE IF NOT EXISTS page_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  page_id UUID NOT NULL REFERENCES pages(id) ON DELETE RESTRICT,
+  schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+  title TEXT NOT NULL CHECK (length(title) <= 200),
+  document JSONB NOT NULL CHECK (jsonb_typeof(document) = 'object'),
+  audience TEXT NOT NULL DEFAULT 'job_titles' CHECK (audience = 'job_titles'),
+  created_by TEXT REFERENCES users(uid) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(page_id, id)
+);
+CREATE TABLE IF NOT EXISTS page_revision_job_titles (
+  revision_id UUID NOT NULL REFERENCES page_revisions(id) ON DELETE RESTRICT,
+  job_title_id UUID NOT NULL REFERENCES job_titles(id) ON DELETE RESTRICT,
+  PRIMARY KEY(revision_id, job_title_id)
+);
+CREATE TABLE IF NOT EXISTS page_media (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  page_id UUID NOT NULL REFERENCES pages(id) ON DELETE RESTRICT,
+  uploaded_by TEXT REFERENCES users(uid) ON DELETE SET NULL,
+  storage_key TEXT NOT NULL UNIQUE CHECK (storage_key ~ '^pages-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.webp$'),
+  mime_type TEXT NOT NULL CHECK (mime_type = 'image/webp'),
+  byte_size INTEGER NOT NULL CHECK (byte_size > 0 AND byte_size <= 5242880),
+  width INTEGER NOT NULL CHECK (width > 0 AND width <= 2400),
+  height INTEGER NOT NULL CHECK (height > 0 AND height <= 2400),
+  sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(page_id, id)
+);
+CREATE TABLE IF NOT EXISTS page_revision_media (
+  page_id UUID NOT NULL,
+  revision_id UUID NOT NULL,
+  media_id UUID NOT NULL,
+  PRIMARY KEY(revision_id, media_id),
+  FOREIGN KEY(page_id, revision_id) REFERENCES page_revisions(page_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY(page_id, media_id) REFERENCES page_media(page_id, id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS page_requests (
+  actor_uid TEXT NOT NULL,
+  client_mutation_id UUID NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('create','draft','publish','archive','restore','media')),
+  target_id UUID NOT NULL,
+  request_hash TEXT NOT NULL CHECK (request_hash ~ '^[0-9a-f]{64}$'),
+  response JSONB NOT NULL CHECK (jsonb_typeof(response) = 'object' AND octet_length(response::text) <= 2048),
+  status INTEGER NOT NULL CHECK (status IN (200,201)),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(actor_uid, client_mutation_id)
+);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'pages'::regclass AND conname = 'pages_draft_revision_fk') THEN
+    ALTER TABLE pages ADD CONSTRAINT pages_draft_revision_fk FOREIGN KEY(id, draft_revision_id) REFERENCES page_revisions(page_id, id) ON DELETE RESTRICT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'pages'::regclass AND conname = 'pages_published_revision_fk') THEN
+    ALTER TABLE pages ADD CONSTRAINT pages_published_revision_fk FOREIGN KEY(id, published_revision_id) REFERENCES page_revisions(page_id, id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS pages_author_idx ON pages(author_uid);
+CREATE INDEX IF NOT EXISTS pages_publisher_idx ON pages(published_by);
+CREATE INDEX IF NOT EXISTS pages_draft_revision_idx ON pages(draft_revision_id);
+CREATE INDEX IF NOT EXISTS pages_published_revision_idx ON pages(published_revision_id);
+CREATE INDEX IF NOT EXISTS pages_catalog_idx ON pages(published_at DESC, id) WHERE archived_at IS NULL AND published_revision_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS page_revisions_creator_idx ON page_revisions(created_by);
+CREATE INDEX IF NOT EXISTS page_revision_job_titles_job_idx ON page_revision_job_titles(job_title_id, revision_id);
+CREATE INDEX IF NOT EXISTS page_media_uploader_idx ON page_media(uploaded_by);
+CREATE INDEX IF NOT EXISTS page_revision_media_page_revision_idx ON page_revision_media(page_id, revision_id);
+CREATE INDEX IF NOT EXISTS page_revision_media_page_media_idx ON page_revision_media(page_id, media_id);
+CREATE INDEX IF NOT EXISTS page_requests_target_idx ON page_requests(target_id);
 
 -- The legacy catalog seed is superseded by migration 030 on fresh databases.
 -- Migration 033 must remain pending: migration 015 creates CMS tables first,

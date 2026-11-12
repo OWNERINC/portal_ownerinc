@@ -269,7 +269,8 @@ test('authenticated middleware selects 120/UID only for exact progress PUT, reta
   const context = vm.createContext({ module: { exports: {} }, process: { env: {} }, require(name) {
     if (name === 'firebase-admin/app') return { getApps: () => [1] };
     if (name === 'firebase-admin/auth') return { getAuth: () => ({ verifyIdToken: async token => ({ uid: token, email_verified: true }) }) };
-    if (name === '../db') return { query: async (_sql, [uid]) => ({ rows: [{ uid }] }) };
+    if (name === '../db') return { query: async (_sql, [uid]) => ({ rows: [{ uid, ethics_accepted: true }] }) };
+    if (name === '../ethics') return require('../../api/ethics');
     if (name === './policy') return { can() {}, canUseAutoCard() {}, canUsePosCards() {} };
     if (name === './security') return { rateLimit: options => (req, _res, next) => { selected.push([options.max, options.windowMs, options.key(req)]); next(); } };
     throw new Error(name);

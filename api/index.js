@@ -16,11 +16,13 @@ app.use(safeResponses);
 app.use(cors(allowedOrigins(process.env)));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 app.use('/api/users/bulk', express.json({ limit: '1mb' }));
+app.use('/api/pages', express.json({ limit: '1mb' }));
 app.use(express.json({ limit: '100kb' }));
 
 // Only profile-photo filenames are public; generated card media stays behind
 // its authenticated API route.
 app.use('/uploads/cms-private', (req, res) => res.sendStatus(404));
+app.use('/uploads/pages-private', (req, res) => res.sendStatus(404));
 app.use('/uploads', (req, res, next) => {
   if (/^\/pos-card-[0-9a-f-]+\.webp$/i.test(req.path)) return res.sendStatus(404);
   if (/^\/autocard-[0-9a-f-]+\.webp$/i.test(req.path)) return res.sendStatus(404);
@@ -31,6 +33,7 @@ app.use('/uploads', express.static('/app/uploads'));
 
 // Rotas
 app.use('/api/auth',      require('./routes/auth'));
+app.use('/api/ethics',    require('./routes/ethics'));
 app.use('/api/users',     require('./routes/users'));
 app.use('/api/registrations', require('./routes/registrations'));
 const userImports = require('./routes/user-imports');
@@ -40,6 +43,7 @@ app.use('/api/job-titles', require('./routes/job-titles'));
 app.use('/api/knowledge', require('./routes/knowledge'));
 app.use('/api/reminders', require('./routes/reminders'));
 app.use('/api/academy',   require('./routes/academy'));
+app.use('/api/pages',     require('./routes/pages'));
 app.use('/api/benefits',  require('./routes/benefits'));
 app.use('/api/upload',    require('./routes/upload'));
 app.use('/api/solides',   require('./routes/solides'));
