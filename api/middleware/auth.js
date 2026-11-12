@@ -31,10 +31,6 @@ async function authMiddleware(req, res, next) {
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token.', requestId: req.id });
   }
-  if (decoded.email_verified !== true) {
-    return res.status(403).json({ error: 'A verified email is required.', reason: 'email-not-verified', requestId: req.id });
-  }
-
   try {
      const { rows } = await pool.query(
        `SELECT u.*, jt.name AS job_title, jt.active AS job_title_active, jt.page_access AS job_title_access

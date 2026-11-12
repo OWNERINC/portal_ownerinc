@@ -7,13 +7,20 @@ const errorMsg = document.getElementById('error-msg');
 const loginWrap = document.querySelector('.login-form-wrap');
 const resetSection = document.getElementById('reset-section');
 const registerSection = document.getElementById('register-section');
-const registrationPasswordSection = document.getElementById('registration-password-section');
 const loginTitle = document.getElementById('login-title');
+let registrationPending = false;
+
+function clearRegistrationPasswords() {
+  document.getElementById('register-password').value = '';
+  document.getElementById('register-password-confirm').value = '';
+}
 
 function showView(view, focusTarget) {
-  const titles = { reset: 'Redefinir senha', register: 'Cadastre-se', password: 'Criar senha do cadastro' };
+  if (registrationPending) return;
+  if (view !== 'register') clearRegistrationPasswords();
+  const titles = { reset: 'Redefinir senha', register: 'Cadastre-se' };
   loginWrap?.classList.toggle('hidden', view !== 'login');
-  for (const [name, section] of [['reset', resetSection], ['register', registerSection], ['password', registrationPasswordSection]]) {
+  for (const [name, section] of [['reset', resetSection], ['register', registerSection]]) {
     section?.classList.toggle('active', view === name);
   }
   if (loginTitle) {
@@ -83,8 +90,8 @@ function handleAuthError(err) {
     'auth/invalid-credential': 'E-mail ou senha incorretos.',
     'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos.',
     'auth/user-disabled': 'A conta ainda não está habilitada ou foi desativada. Se você fez um cadastro, aguarde a aprovação.',
-    'portal/email-not-verified': 'Confirme seu e-mail antes de entrar no Portal.',
-    'portal/pending-approval': 'Cadastro confirmado. Aguarde a aprovação do administrador.',
+    'portal/email-not-verified': 'Não foi possível liberar o acesso. Contate o suporte.',
+    'portal/pending-approval': 'Cadastro recebido. Aguarde a aprovação do administrador.',
     'portal/enable-pending': 'Sua conta está aguardando habilitação. Tente novamente em instantes.',
     'portal/account-disabled': 'Conta desativada. Contate o suporte.',
     'portal/session': 'Sua sessão expirou. Entre novamente.',
@@ -100,8 +107,8 @@ await auth.authStateReady();
 const reason = new URLSearchParams(location.search).get('reason');
 if (reason === 'access') errorMsg.textContent = 'Esta conta não está autorizada no Portal. Solicite acesso ao administrador.';
 if (reason === 'session') errorMsg.textContent = 'Sua sessão expirou. Entre novamente.';
-if (reason === 'email') errorMsg.textContent = 'Confirme seu e-mail antes de entrar no Portal.';
-if (reason === 'pending-approval') errorMsg.textContent = 'Cadastro confirmado. Aguarde a aprovação do administrador.';
+if (reason === 'email') errorMsg.textContent = 'Não foi possível liberar o acesso. Contate o suporte.';
+if (reason === 'pending-approval') errorMsg.textContent = 'Cadastro recebido. Aguarde a aprovação do administrador.';
 if (reason === 'enable-pending') errorMsg.textContent = 'Sua conta está aguardando habilitação. Tente novamente em instantes.';
 if (reason === 'account-disabled') errorMsg.textContent = 'Conta desativada. Contate o suporte.';
 if (auth.currentUser) {
@@ -132,10 +139,6 @@ document.getElementById('register-link').addEventListener('click', () => {
   showView('register');
 });
 
-document.getElementById('registration-password-link').addEventListener('click', () => {
-  showView('password');
-});
-
 document.getElementById('back-link').addEventListener('click', () => {
   showView('login', document.getElementById('forgot-link'));
   document.getElementById('reset-error').textContent = '';
@@ -145,16 +148,8 @@ document.getElementById('back-link').addEventListener('click', () => {
   document.getElementById('reset-btn').textContent = 'Enviar link de redefinição';
 });
 
-document.getElementById('registration-password-back-link').addEventListener('click', () => {
-  showView('register', document.getElementById('registration-password-link'));
-  document.getElementById('registration-password-error').textContent = '';
-  document.getElementById('registration-password-success').style.display = 'none';
-  document.getElementById('registration-password-section').reset();
-  document.getElementById('registration-password-btn').disabled = false;
-  document.getElementById('registration-password-btn').textContent = 'Enviar link para criar senha';
-});
-
 document.getElementById('register-back-link').addEventListener('click', () => {
+  if (registrationPending) return;
   showView('login', document.getElementById('register-link'));
   document.getElementById('register-error').textContent = '';
   document.getElementById('register-success').style.display = 'none';
@@ -196,46 +191,33 @@ resetSection.addEventListener('submit', async event => {
   }
 });
 
-registrationPasswordSection.addEventListener('submit', async event => {
-  event.preventDefault();
-  if (!event.currentTarget.reportValidity()) return;
-  const email = document.getElementById('registration-password-email').value.trim();
-  const setupError = document.getElementById('registration-password-error');
-  const setupSuccess = document.getElementById('registration-password-success');
-  const setupBtn = document.getElementById('registration-password-btn');
-  setupError.textContent = '';
-  setupSuccess.style.display = 'none';
-  setupBtn.disabled = true;
-  setupBtn.textContent = 'Enviando…';
-  try {
-    const response = await fetch('/api/auth/registration-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
-    if (!response.ok) throw new Error(response.status === 429 ? 'too-many-requests' : 'delivery-failed');
-    setupSuccess.textContent = `Se o cadastro estiver confirmado, o link para criar a senha será enviado para ${email}. Verifique também a pasta de spam.`;
-    setupSuccess.style.display = 'block';
-    setupBtn.textContent = 'Solicitação recebida';
-  } catch (error) {
-    setupError.textContent = error.message === 'too-many-requests'
-      ? 'Muitas tentativas. Aguarde alguns minutos.'
-      : 'Não foi possível enviar agora. Tente novamente.';
-    setupBtn.disabled = false;
-    setupBtn.textContent = 'Enviar link para criar senha';
-  }
-});
-
+registerSection.addEventListener('invalid', clearRegistrationPasswords, true);
 registerSection.addEventListener('submit', async event => {
   event.preventDefault();
-  if (!event.currentTarget.reportValidity()) return;
+  if (registrationPending) return;
   const error = document.getElementById('register-error');
   const success = document.getElementById('register-success');
   const button = document.getElementById('register-btn');
   error.textContent = '';
   success.style.display = 'none';
-  button.disabled = true;
+  const password = document.getElementById('register-password').value;
+  const confirmation = document.getElementById('register-password-confirm').value;
+  if (password.length < 12 || password.length > 128 || !password.trim() || password !== confirmation) {
+    error.textContent = password !== confirmation ? 'As senhas precisam ser iguais.' : 'Use de 12 a 128 caracteres na senha, não apenas espaços.';
+    clearRegistrationPasswords();
+    document.getElementById('register-password').focus();
+    return;
+  }
+  if (!event.currentTarget.reportValidity()) {
+    clearRegistrationPasswords();
+    return;
+  }
+  registrationPending = true;
+  const controls = registerSection.querySelectorAll('input, button');
+  controls.forEach(control => { control.disabled = true; });
   button.textContent = 'Enviando…';
+  let submitted = false;
+  clearRegistrationPasswords();
   try {
     const response = await fetch('/api/auth/register', {
       method: 'POST',
@@ -243,16 +225,22 @@ registerSection.addEventListener('submit', async event => {
       body: JSON.stringify({
         name: document.getElementById('register-name').value.trim(),
         email: document.getElementById('register-email').value.trim(),
+        password,
       }),
     });
     await requireAcceptedRegistration(response);
-    success.textContent = 'Se o cadastro puder ser processado, você receberá instruções para confirmar o e-mail. Depois, use “Criar senha do cadastro” para definir sua primeira senha e aguarde a aprovação do administrador.';
+    success.textContent = 'Se o cadastro puder ser processado, aguarde a aprovação do administrador. Quando seu acesso for liberado, entre com o email e a senha escolhida no cadastro.';
     success.style.display = 'block';
     registerSection.reset();
     button.textContent = 'Cadastro recebido';
+    submitted = true;
   } catch {
     error.textContent = 'Não foi possível concluir o cadastro agora. Tente novamente.';
-    button.disabled = false;
     button.textContent = 'Criar cadastro';
+  } finally {
+    clearRegistrationPasswords();
+    registrationPending = false;
+    controls.forEach(control => { control.disabled = false; });
+    button.disabled = submitted;
   }
 });

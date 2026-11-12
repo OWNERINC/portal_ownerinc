@@ -10,12 +10,26 @@
 
 ## Steps
 
-- [ ] Proteger credenciais e implementar cadastro com senha e repetição segura, sem enviar confirmação.
-- [ ] Retirar a exigência de email verificado da aprovação e da autorização, preservando os outros bloqueios.
-- [ ] Unificar recuperação para ativos e pendentes, incluindo cadastros antigos sem senha conhecida.
-- [ ] Atualizar formulário, mensagens, estados administrativos e testes de interação.
-- [ ] Atualizar documentação, revisar o diff e concluir a verificação local.
+- [x] Proteger credenciais e implementar cadastro com senha e repetição segura, sem enviar confirmação.
+- [x] Retirar a exigência de email verificado da aprovação e da autorização, preservando os outros bloqueios.
+- [x] Unificar recuperação para ativos e pendentes, incluindo cadastros antigos sem senha conhecida.
+- [x] Atualizar formulário, mensagens, estados administrativos e testes de interação.
+- [x] Atualizar documentação, revisar o diff e concluir a verificação local.
 - [ ] Homologar Firebase e a jornada externa somente com autorização específica.
+
+### Execução em 11/11/2026
+
+Usuário confirmou o fluxo e autorizou implementação. Tasks 1–5 aplicadas na
+sessão principal, sem delegação, commits ou publicação. Os comandos de commit
+abaixo continuam como proposta, não como histórico executado. O checklist
+detalhado original permanece como referência do plano; o acompanhamento de
+entrega está nas etapas acima e nas evidências abaixo.
+
+Gate final: `npm run verify` com 865 PASS, 0 FAIL, 2 SKIP Linux (867 testes).
+Navegador local: 10 larguras, três estados de acesso, axe sem violações
+automatizadas e cadastro acessível em 360 × 480/568/667.
+Relatório: `docs/reviews/2026-11-11-registration-without-email-verification.md`.
+Task 6, integração Git e deploy continuam pendentes; nenhuma escrita externa.
 
 ## Global Constraints
 
@@ -278,4 +292,4 @@ git commit -m "docs: record approval-only registration and local evidence"
 
 ## Handoff e condição de parada
 
-Plano técnico para revisão; implementação não iniciada. A especificação foi aprovada nesta sessão. Ao aprovar a execução, escolher sessão principal com checkpoints ou delegação explícita. As Tasks 1–5 entregam o candidato local; Task 6 e deploy permanecem pendentes de autorização específica. Não afirmar que a confirmação foi retirada do sistema em produção antes da mudança publicada e homologada.
+Implementação local das Tasks 1–5 concluída em 11/11/2026, no working tree da sessão principal. Task 6, integração Git e deploy permanecem pendentes de autorização específica. Não afirmar que a confirmação foi retirada do sistema em produção antes da mudança publicada e homologada.

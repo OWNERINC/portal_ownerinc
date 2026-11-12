@@ -5,7 +5,7 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 
-test('pending registration stores no password and sends a verification link', async (t) => {
+test('pending registration passes the chosen password only to Firebase without verification email', async (t) => {
   const authPath = require.resolve('../../api/middleware/auth');
   const mailerPath = require.resolve('../../api/integrations/password-reset-email');
   const servicePath = require.resolve('../../api/services/pending-registration');
@@ -20,11 +20,11 @@ test('pending registration stores no password and sends a verification link', as
     id: authPath, filename: authPath, loaded: true,
     exports: { firebaseAuth: {
       createUser: async (data) => { created = data; return { uid: 'pending-uid' }; },
-      generateEmailVerificationLink: async () => 'https://example.test/verify',
+      generateEmailVerificationLink: async () => { throw new Error('Verification must not be generated'); },
       deleteUser: async (uid) => { deleted = uid; },
     } },
   };
-  mailer.sendVerificationEmail = async (message) => { calls.push(message); return {}; };
+  mailer.sendVerificationEmail = async () => { throw new Error('Verification must not be sent'); };
   delete require.cache[servicePath];
   const { createPendingRegistration, verificationSettings } = require(servicePath);
   const client = { query: async (sql, params) => {
@@ -42,7 +42,7 @@ test('pending registration stores no password and sends a verification link', as
 
   const result = await createPendingRegistration({
     client,
-    data: { name: 'Ana Silva', email: 'ana@example.com' },
+    data: { name: 'Ana Silva', email: 'ana@example.com', password: '  senha com espaços  ' },
   });
 
   assert.deepEqual(result, { uid: 'pending-uid' });
@@ -50,13 +50,11 @@ test('pending registration stores no password and sends a verification link', as
   assert.throws(() => verificationSettings({ PORTAL_PUBLIC_URL: 'javascript:alert(1)' }), /invalid/i);
   assert.equal(created.disabled, true);
   assert.equal(created.emailVerified, false);
-  assert.equal(typeof created.password, 'string');
-  assert.equal(created.password.length, 64);
+  assert.equal(created.password, '  senha com espaços  ');
   assert.match(calls.find((call) => call?.sql?.includes('pending_registrations'))?.sql, /pending_registrations/);
-  assert.equal(calls.find((call) => call?.to)?.to, 'ana@example.com');
-  assert.equal(calls.find((call) => call?.to)?.link, 'https://example.test/verify');
+  assert.equal(calls.some((call) => call?.to), false);
   assert.equal(deleted, undefined);
-  assert.doesNotMatch(JSON.stringify(calls.filter((call) => call?.to)), /secret-password/);
+  assert.doesNotMatch(JSON.stringify(calls), /senha com espaços/);
 });
 
 test('pending registration refuses a local duplicate before creating Firebase', async (t) => {
@@ -99,7 +97,7 @@ test('pending registration refuses a local duplicate before creating Firebase', 
   assert.equal(createCalls, 0);
 });
 
-test('first password link is sent only after email confirmation for a pending registration', async (t) => {
+test('legacy pending registration can recover a password without confirming its email', async (t) => {
   const authPath = require.resolve('../../api/middleware/auth');
   const mailerPath = require.resolve('../../api/integrations/password-reset-email');
   const servicePath = require.resolve('../../api/services/pending-registration');
@@ -111,7 +109,7 @@ test('first password link is sent only after email confirmation for a pending re
   require.cache[authPath] = {
      id: authPath, filename: authPath, loaded: true,
      exports: { firebaseAuth: {
-       getUser: async () => ({ uid: 'pending-uid', email: 'ana@example.com', emailVerified: true, disabled: true }),
+       getUser: async () => ({ uid: 'pending-uid', email: 'ana@example.com', emailVerified: false, disabled: true }),
        getUserByEmail: async () => ({ uid: 'pending-uid', emailVerified: true, disabled: true }),
       generatePasswordResetLink: async () => 'https://example.test/first-password',
     } },
@@ -127,7 +125,7 @@ test('first password link is sent only after email confirmation for a pending re
         rows: [{ id: 'registration-id', firebase_uid: 'pending-uid', email: 'ana@example.com', name: 'Ana Silva', status: 'pending', firebase_cleanup_pending: false }],
         rowCount: 1,
       };
-      if (sql.includes('firebase_cleanup_queue')) return { rows: [], rowCount: 0 };
+      if (sql.includes('firebase_cleanup_queue') || sql.includes('FROM users')) return { rows: [], rowCount: 0 };
       return { rows: [], rowCount: 1 };
     },
     release() {},
@@ -173,7 +171,7 @@ test('registration side effects are capped before acquiring more database connec
   await assert.doesNotReject(withRegistrationOperation(async () => {}));
 });
 
-test('duplicate registration recovers a disabled Firebase orphan even after verification', async (t) => {
+test('duplicate registration never adopts a Firebase orphan by email', async (t) => {
   const authPath = require.resolve('../../api/middleware/auth');
   const mailerPath = require.resolve('../../api/integrations/password-reset-email');
   const servicePath = require.resolve('../../api/services/pending-registration');
@@ -211,9 +209,9 @@ test('duplicate registration recovers a disabled Firebase orphan even after veri
 
   assert.equal(await recoverPendingRegistration({
     pool, data: { name: 'Ana Silva', email: 'ana@example.com' }, requestId: 'request-id',
-  }), true);
-  assert.ok(calls.some((sql) => typeof sql === 'string' && sql.includes('INSERT INTO pending_registrations')));
-  assert.deepEqual(calls.find((call) => call?.to), { to: 'ana@example.com', name: 'Ana Silva', link: 'https://example.test/recover' });
+  }), false);
+  assert.equal(calls.some((sql) => typeof sql === 'string' && sql.includes('INSERT INTO pending_registrations')), false);
+  assert.equal(calls.find((call) => call?.to), undefined);
   const pendingReads = calls.reduce((indexes, call, index) => {
     if (typeof call === 'string' && call.startsWith('SELECT id, firebase_uid')) indexes.push(index);
     return indexes;
@@ -273,7 +271,7 @@ test('ambiguous recovery commit never deletes the Firebase identity', async (t) 
   require.cache[authPath] = {
     id: authPath, filename: authPath, loaded: true,
     exports: { firebaseAuth: {
-      getUserByEmail: async () => null,
+       getUser: async () => null,
       createUser: async () => ({ uid: 'ambiguous-uid' }),
       generateEmailVerificationLink: async () => 'https://example.test/recover',
       deleteUser: async (uid) => { deleted = uid; },
@@ -286,7 +284,8 @@ test('ambiguous recovery commit never deletes the Firebase identity', async (t) 
     query: async () => ({ rowCount: 1 }),
     connect: async () => ({
     async query(sql) {
-      if (sql.startsWith('SELECT id, firebase_uid')) return { rows: [] };
+      if (sql.startsWith('SELECT id, firebase_uid')) return { rows: [{ id: 'pending-id', firebase_uid: 'missing-uid', email: 'ana@example.com', name: 'Ana Silva', status: 'pending', firebase_cleanup_pending: false }] };
+      if (sql.startsWith('SELECT 1 FROM users')) return { rows: [], rowCount: 0 };
       if (sql.startsWith('SELECT 1 FROM firebase_cleanup_queue')) return { rows: [], rowCount: 0 };
       if (sql.includes('COUNT(*)')) return { rows: [{ count: 0 }] };
       if (sql === 'COMMIT') throw new Error('connection lost after commit');
@@ -325,7 +324,7 @@ test('pending registration returns its Firebase UID for post-rollback compensati
       deleteUser: async () => {},
     } },
   };
-  mailer.sendVerificationEmail = async () => { throw new Error('smtp unavailable'); };
+  mailer.sendVerificationEmail = async () => { throw new Error('Verification must not be sent'); };
   delete require.cache[servicePath];
   const { createPendingRegistration } = require(servicePath);
 
@@ -338,10 +337,13 @@ test('pending registration returns its Firebase UID for post-rollback compensati
 
   await assert.rejects(
     createPendingRegistration({
-        client: { query: async () => ({ rows: [] }) },
+        client: { query: async (sql) => {
+          if (sql.includes('INSERT INTO pending_registrations')) throw new Error('SQL unavailable');
+          return { rows: [] };
+        } },
         data: { name: 'Ana Silva', email: 'ana@example.com' },
     }),
-    (error) => error.message === 'smtp unavailable' && error.firebaseUid === 'failed-pending-uid',
+    (error) => error.message === 'SQL unavailable' && error.firebaseUid === 'failed-pending-uid',
   );
 });
 
@@ -363,11 +365,12 @@ test('failed Firebase compensation is deferred to the post-rollback queue', asyn
       updateUser: async () => {},
     } },
   };
-  mailer.sendVerificationEmail = async () => { throw new Error('smtp unavailable'); };
+  mailer.sendVerificationEmail = async () => { throw new Error('Verification must not be sent'); };
   delete require.cache[servicePath];
   const { createPendingRegistration } = require(servicePath);
   const client = { query: async (sql, params) => {
     queries.push({ sql, params });
+    if (sql.includes('INSERT INTO pending_registrations')) throw new Error('SQL unavailable');
     if (sql.includes('COUNT(*)')) return { rows: [{ count: 0 }] };
     if (sql.includes('FROM users')) return { rows: [], rowCount: 0 };
     return { rows: [], rowCount: 1 };
@@ -442,10 +445,12 @@ test('approval enables a viewer only after assigning an active job title', async
    assert.ok(rowLocks.length >= 2 && identityLock < rowLocks[0] && rowLocks[0] < rowLocks[1]);
 });
 
-test('approval refuses an unverified registration before enabling Firebase', async (t) => {
+test('approval accepts an unverified registration without changing its password or email verification', async (t) => {
   const authPath = require.resolve('../../api/middleware/auth');
   const servicePath = require.resolve('../../api/services/pending-registration');
   const originalAuth = require.cache[authPath];
+  const invitationPath = require.resolve('../../api/services/user-invitation');
+  const originalInvitation = require.cache[invitationPath];
   const firebaseCalls = [];
 
   require.cache[authPath] = {
@@ -455,6 +460,7 @@ test('approval refuses an unverified registration before enabling Firebase', asy
       updateUser: async (...args) => firebaseCalls.push(args),
     } },
   };
+  delete require.cache[invitationPath];
   delete require.cache[servicePath];
   const { approvePendingRegistration } = require(servicePath);
   const queries = [];
@@ -462,22 +468,24 @@ test('approval refuses an unverified registration before enabling Firebase', asy
     query: async (sql) => {
       queries.push(sql);
        if (sql.startsWith('SELECT id, firebase_uid') || sql.startsWith('SELECT * FROM pending_registrations')) return { rows: [{ id: 'registration-id', firebase_uid: 'uid-3', email: 'ana@example.com', name: 'Ana Silva', status: 'pending', firebase_cleanup_pending: false }] };
-      if (sql.startsWith('SELECT 1 FROM job_titles')) return { rowCount: 1 };
+       if (sql.startsWith('SELECT 1 FROM job_titles')) return { rowCount: 1 };
+       if (sql.startsWith('SELECT 1 FROM users')) return { rowCount: 0 };
+       if (sql.startsWith('SELECT uid, email, permissions')) return { rows: [{ uid: 'uid-3', email: 'ana@example.com', permissions: {}, firebase_enable_pending: true }] };
       return { rows: [], rowCount: 1 };
     },
   };
   t.after(() => {
     delete require.cache[servicePath];
+    if (originalInvitation) require.cache[invitationPath] = originalInvitation;
+    else delete require.cache[invitationPath];
     if (originalAuth) require.cache[authPath] = originalAuth;
     else delete require.cache[authPath];
   });
 
-  await assert.rejects(
-     approvePendingRegistration({ client, id: 'registration-id', jobTitleId: 'job-title-id', contractType: 'clt', pjDueDay: null, reviewerUid: 'admin-uid', requestId: 'request-id' }),
-    (error) => error.code === 'EMAIL_NOT_VERIFIED',
-  );
-  assert.equal(firebaseCalls.length, 0);
-  assert.equal(queries.some((sql) => sql.includes('INSERT INTO users')), false);
+  const result = await approvePendingRegistration({ client, id: 'registration-id', jobTitleId: 'job-title-id', contractType: 'clt', pjDueDay: null, reviewerUid: 'admin-uid', requestId: 'request-id' });
+  assert.deepEqual(result, { status: 'approved', state: 'active' });
+  assert.deepEqual(firebaseCalls, [['uid-3', { disabled: false }]]);
+  assert.equal(queries.some((sql) => sql.includes('INSERT INTO users')), true);
 });
 
 test('ambiguous approval commit returns a reconcile state and discards the connection', async (t) => {
@@ -770,7 +778,8 @@ test('registration contracts exist in API and UI', async () => {
   assert.match(registrations, /manageUsers/);
   assert.match(login, /id="register-link"/);
   assert.match(login, /id="register-section"/);
-  assert.match(login, /registration-password-section/);
+  assert.match(login, /id="register-password"/);
+  assert.doesNotMatch(login, /registration-password-section/);
   assert.doesNotMatch(login, /Primeiro acesso: criar senha/);
   assert.match(loginScript, /Se o cadastro puder ser processado/);
   assert.doesNotMatch(loginScript, /Enviamos um link para confirmar seu e-mail/);
@@ -783,7 +792,7 @@ test('registration contracts exist in API and UI', async () => {
   assert.match(service, /recoverPendingRegistration/);
 });
 
-test('login exposes PodFalar outside the forms and password setup inside registration', async () => {
+test('login exposes PodFalar outside the forms and password fields inside registration', async () => {
   const [login, loginScript] = await Promise.all([
     readFile('public/login.html', 'utf8'),
     readFile('public/js/login.js', 'utf8'),
@@ -795,12 +804,13 @@ test('login exposes PodFalar outside the forms and password setup inside registr
   assert.match(link, /rel="noopener noreferrer"/);
   const register = login.match(/<form class="register-section"[\s\S]*?<\/form>/)?.[0] || '';
   const initial = login.match(/<form id="login-form"[\s\S]*?<\/form>/)?.[0] || '';
-  assert.match(register, /id="registration-password-link"[^>]*>Criar senha do cadastro<\/button>/);
+  assert.match(register, /id="register-password"/);
+  assert.match(register, /id="register-password-confirm"/);
   assert.doesNotMatch(initial, /PodFalar|registration-password-link/);
-  assert.match(loginScript, /getElementById\(['"]registration-password-link['"]\)/);
+  assert.doesNotMatch(loginScript, /getElementById\(['"]registration-password-link['"]\)/);
   assert.doesNotMatch(loginScript, /Primeiro acesso: criar senha/);
-  assert.match(login, /Criar senha do cadastro/);
-  assert.match(loginScript, /Criar senha do cadastro/);
+  assert.doesNotMatch(login, /Criar senha do cadastro|Confirme seu e-mail/);
+  assert.doesNotMatch(loginScript, /Criar senha do cadastro|Confirme seu e-mail/);
 });
 
 test('registration UI accepts only the exact 202 received contract', async () => {

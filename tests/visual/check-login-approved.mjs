@@ -31,7 +31,6 @@ try {
   const forgot = page.getByRole('button', { name: 'Esqueci minha senha', exact: true });
   const submit = page.getByRole('button', { name: 'Entrar no portal', exact: true });
   const channel = page.getByRole('link', { name: 'PodFalar (abre em nova aba)', exact: true });
-  const setup = page.getByRole('button', { name: 'Criar senha do cadastro', exact: true });
   const visible = async locator => assert.equal(await locator.isVisible(), true);
   const focused = async locator => assert.equal(await locator.evaluate(node => document.activeElement === node), true);
   const checkMobileCentering = async (width, state) => {
@@ -85,7 +84,7 @@ try {
     assert.equal(await page.getByRole('heading', { level: 1, name: 'Conecta Ownerinc' }).count(), 1);
     assert.equal(await page.getByRole('heading', { level: 2, name: 'Boas conexões começam aqui.' }).count(), 1);
     assert.equal(await title.isVisible(), false);
-    assert.equal(await setup.isVisible(), false);
+    assert.equal(await page.locator('#registration-password-section').count(), 0);
     assert.equal(await page.getByText('Acesse com o e-mail cadastrado no portal.', { exact: true }).count(), 0);
     assert.equal(await page.getByRole('region', { name: 'Acesso ao portal', exact: true }).count(), 1);
     const metrics = await page.evaluate(() => {
@@ -147,20 +146,15 @@ try {
     assert.equal(await title.isVisible(), false);
     await register.click();
     assert.equal(await title.textContent(), 'Cadastre-se');
-    await visible(setup);
     await focused(title);
+    await visible(page.locator('#register-password'));
+    await visible(page.locator('#register-password-confirm'));
     await audit(width, 'register');
-    await setup.click();
-    assert.equal(await title.textContent(), 'Criar senha do cadastro');
-    await focused(title);
-    await audit(width, 'password');
-    await page.locator('#registration-password-back-link').click();
-    await focused(setup);
-    assert.equal(await title.textContent(), 'Cadastre-se');
+    if ([402, 1440].includes(width)) await page.screenshot({ path: resolve(output, `register-${width}.png`), fullPage: true });
     await page.locator('#register-back-link').click();
     await focused(register);
     assert.equal(await title.isVisible(), false);
-    console.log(`PASS ${width}: approved brand, layout, four states, focus returns, axe`);
+    console.log(`PASS ${width}: approved brand, layout, three states, focus returns, axe`);
   }
   for (const height of [480, 568, 667]) {
     await page.setViewportSize({ width: 360, height });
@@ -174,6 +168,16 @@ try {
     const emailBox = await page.locator('#email').boundingBox();
     assert.ok(emailBox.y >= 0 && emailBox.y + emailBox.height <= height, 'email remains reachable after scrolling back');
     results.push({ width: 360, height, state: 'short-login', layout, passed: true });
+    await register.click();
+    const registerLayout = await checkMobileCentering(360, `short-register-${height}`);
+    for (const id of ['register-password', 'register-password-confirm', 'register-btn', 'register-back-link']) {
+      const control = page.locator(`#${id}`);
+      await control.scrollIntoViewIfNeeded();
+      const box = await control.boundingBox();
+      assert.ok(box.y >= 0 && box.y + box.height <= height, `${id} remains reachable on a short viewport`);
+    }
+    results.push({ width: 360, height, state: 'short-register', layout: registerLayout, passed: true });
+    await page.locator('#register-back-link').click();
     console.log(`PASS 360x${height}: safe centering, natural scroll, footer and input reachable`);
   }
   await page.setViewportSize({ width: 402, height: 874 });
@@ -199,14 +203,22 @@ try {
   await register.click();
   await page.locator('#register-name').fill('Pessoa de teste');
   await page.locator('#register-email').fill('person@example.test');
+  await page.locator('#register-password').fill('  senha com espaços  ');
+  await page.locator('#register-password-confirm').fill('senha diferente');
+  await page.locator('#register-btn').click();
+  assert.equal(calls.length, 0, 'mismatched passwords do not reach the API');
+  assert.equal(await page.locator('#register-password').inputValue(), '');
+  assert.equal(await page.locator('#register-password-confirm').inputValue(), '');
+  await focused(page.locator('#register-password'));
+  await page.locator('#register-password').fill('  senha com espaços  ');
+  await page.locator('#register-password-confirm').fill('  senha com espaços  ');
   await page.locator('#register-btn').click();
   await page.locator('#register-success').waitFor({ state: 'visible' });
   assert.match(await page.locator('#register-success').textContent(), /Se o cadastro puder ser processado/);
-  await setup.click();
-  await page.locator('#registration-password-email').fill('person@example.test');
-  await page.locator('#registration-password-btn').click();
-  await page.locator('#registration-password-success').waitFor({ state: 'visible' });
-  await page.locator('#registration-password-back-link').click();
+  assert.match(await page.locator('#register-success').textContent(), /aguarde a aprovação/);
+  assert.doesNotMatch(await page.locator('#register-success').textContent(), /confirmar o e-mail|Criar senha do cadastro/);
+  assert.equal(await page.locator('#register-password').inputValue(), '');
+  assert.equal(await page.locator('#register-password-confirm').inputValue(), '');
   await page.locator('#register-back-link').click();
   await forgot.click();
   await page.locator('#reset-email').fill('person@example.test');
@@ -215,8 +227,7 @@ try {
   assert.match(await page.locator('#reset-success').textContent(), /Se a conta estiver ativa/);
   await page.locator('#back-link').click();
   assert.deepEqual(calls, [
-    { path: '/api/auth/register', body: { name: 'Pessoa de teste', email: 'person@example.test' } },
-    { path: '/api/auth/registration-password', body: { email: 'person@example.test' } },
+    { path: '/api/auth/register', body: { name: 'Pessoa de teste', email: 'person@example.test', password: '  senha com espaços  ' } },
     { path: '/api/auth/password-reset', body: { email: 'person@example.test' } },
   ]);
   const [popup] = await Promise.all([context.waitForEvent('page'), channel.click()]);

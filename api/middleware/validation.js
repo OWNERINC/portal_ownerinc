@@ -116,7 +116,9 @@ function validateUser(body, { creating = false } = {}) {
 
 function validateRegistration(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
-  if (Object.keys(body).some((key) => !['name', 'email'].includes(key))) return false;
+  if (Object.keys(body).some((key) => !['name', 'email', 'password'].includes(key))) return false;
+  if (typeof body.password !== 'string' || body.password.length < 12
+      || body.password.length > 128 || !body.password.trim()) return false;
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   const email = typeof body.email === 'string' ? body.email.trim() : '';
   return isEmail(email)

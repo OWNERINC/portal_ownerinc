@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../db');
-const { authMiddleware, can, firebaseAuth } = require('../middleware/auth');
+const { authMiddleware, can } = require('../middleware/auth');
 const { forbidden, integer, invalid, oneOf, parseListQuery, text, uuid, validBody } = require('../route-utils');
 const { approvePendingRegistration, rejectPendingRegistration, withRegistrationOperation } = require('../services/pending-registration');
 
@@ -18,15 +18,12 @@ function canManage(req, res) {
   return true;
 }
 
-async function registrationState(registration) {
+function registrationState(registration) {
   if (registration.status !== 'pending') return {
     state: registration.status,
     state_label: registration.status === 'approved' ? 'Aprovado' : 'Rejeitado',
   };
-  const firebaseUser = await firebaseAuth.getUser(registration.firebase_uid).catch(() => null);
-  return firebaseUser?.emailVerified === true
-    ? { state: 'confirmed', state_label: 'E-mail confirmado; pendente de aprovação', email_verified: true }
-    : { state: 'received', state_label: 'Cadastro recebido; confirmação de e-mail pendente', email_verified: false };
+  return { state: 'pending_approval', state_label: 'Pendente de aprovação' };
 }
 
 router.get('/', authMiddleware, async (req, res, next) => {
@@ -45,7 +42,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
       pool.query('SELECT COUNT(*)::integer AS total FROM pending_registrations WHERE status = $1', [status]),
      ]);
      res.setHeader('X-Total-Count', count.rows[0].total);
-     const states = await Promise.all(result.rows.map(registrationState));
+     const states = result.rows.map(registrationState);
      res.json(result.rows.map((row, index) => {
        const { firebase_uid: _firebaseUid, ...publicRow } = row;
        return { ...publicRow, ...states[index] };
@@ -86,7 +83,6 @@ router.post('/:id/approve', authMiddleware, async (req, res, next) => {
     if (error.code === 'REGISTRATION_RETENTION_PENDING') return res.status(409).json({ error: 'Solicitação em retenção.', requestId: req.id });
     if (error.code === 'INVALID_JOB_TITLE') return invalid(req, res);
     if (error.code === 'INVALID_CONTRACT') return invalid(req, res);
-    if (error.code === 'EMAIL_NOT_VERIFIED') return res.status(422).json({ error: 'O e-mail ainda não foi confirmado.', requestId: req.id });
     if (error.code === 'REGISTRATION_IDENTITY_MISSING') return res.status(409).json({ error: 'A identidade do cadastro não está disponível.', requestId: req.id });
     if (error.code === 'REGISTRATION_BUSY') return res.status(503).json({ error: 'Cadastro temporariamente indisponível.', requestId: req.id });
     if (error.code === 'USER_ALREADY_EXISTS' || error.code === '23505') return res.status(409).json({ error: 'A conta já existe.', requestId: req.id });

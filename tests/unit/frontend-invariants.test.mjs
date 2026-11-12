@@ -5,6 +5,17 @@ import vm from 'node:vm';
 
 const pages = ['dashboard', 'knowledge', 'reminders', 'academy', 'benefits', 'profile', 'admin', 'solides'];
 
+test('registration UI uses approval only, keeps passwords out of browser storage, and warns the reviewer', async () => {
+  const [login, admin, script] = await Promise.all([
+    readFile('public/login.html', 'utf8'), readFile('public/admin.html', 'utf8'), readFile('public/js/login.js', 'utf8'),
+  ]);
+  assert.match(login, /autocomplete="new-password"/);
+  assert.doesNotMatch(login, /registration-password-section|Confirme seu e-mail/);
+  assert.doesNotMatch(script, /sessionStorage|localStorage|console\.(?:log|error)/);
+  assert.match(admin, /confira a identidade do funcionário e o email informado/i);
+  assert.doesNotMatch(admin, /e-mail precisa estar confirmado/);
+});
+
 function deferred() {
   let resolve;
   let reject;
