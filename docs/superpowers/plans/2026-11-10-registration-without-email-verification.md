@@ -31,6 +31,17 @@ automatizadas e cadastro acessível em 360 × 480/568/667.
 Relatório: `docs/reviews/2026-11-11-registration-without-email-verification.md`.
 Task 6, integração Git e deploy continuam pendentes; nenhuma escrita externa.
 
+### Integração local em 12/11/2026
+
+Após escolher a opção de integração somente local, o usuário autorizou commits
+e merges locais, sem push/deploy. A `main` foi conciliada com `origin/main`
+`e2a855b`, preservando Ética e Pages. O cadastro está integrado; o aceite vigente
+continua obrigatório depois da aprovação administrativa. Gates integrados:
+984 PASS, 0 FAIL, 2 SKIP Linux; zero vulnerabilidades de produção, bundle Pages
+e shell atuais, 13 cenários de navegador de Ética aprovados.
+Evidências: `docs/reviews/2026-11-12-registration-integration.md`.
+Publicação, CI dessa mudança e Task 6 continuam pendentes.
+
 ## Global Constraints
 
 - Especificação aprovada: `docs/superpowers/specs/2026-11-10-registration-without-email-verification-design.md`, commit local `31a610a`.
@@ -292,4 +303,4 @@ git commit -m "docs: record approval-only registration and local evidence"
 
 ## Handoff e condição de parada
 
-Implementação local das Tasks 1–5 concluída em 11/11/2026, no working tree da sessão principal. Task 6, integração Git e deploy permanecem pendentes de autorização específica. Não afirmar que a confirmação foi retirada do sistema em produção antes da mudança publicada e homologada.
+Implementação local das Tasks 1–5 concluída em 11/11/2026 e integrada à `main` local em 12/11/2026, preservando Ética e Pages. Task 6, push/CI e deploy permanecem pendentes de autorização específica. Não afirmar que a confirmação foi retirada do sistema em produção antes da mudança publicada e homologada.

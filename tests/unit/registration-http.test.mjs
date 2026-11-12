@@ -39,7 +39,14 @@ test('HTTP journey: chosen password, no verification, blocked before approval, a
   assert.equal(h.state.identity.disabled, false);
   assert.equal(h.state.user.role, 'viewer');
   assert.deepEqual(h.state.user.permissions, {});
-  assert.equal((await h.http('/api/users/me', null, 'employee-fixture')).status, 200);
+  const profile = await h.http('/api/users/me', null, 'employee-fixture');
+  assert.equal(profile.status, 200);
+  assert.equal(profile.body.ethics_accepted, false);
+  const privateArea = await h.http('/api/probe-private', null, 'employee-fixture');
+  assert.equal(privateArea.status, 403);
+  assert.equal(privateArea.body.reason, 'ethics-required');
+  h.state.user.ethics_accepted = true;
+  assert.equal((await h.http('/api/probe-private', null, 'employee-fixture')).status, 200);
   assert.deepEqual(h.calls.firebase.filter(call => call.method === 'updateUser').map(call => call.data), [{ disabled: false }]);
   assert.equal((await h.http(approvalPath, approve, 'admin-fixture')).status, 409);
 });

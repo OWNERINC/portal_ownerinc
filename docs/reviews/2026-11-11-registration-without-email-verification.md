@@ -1,5 +1,9 @@
 # Cadastro com senha e aprovação — evidências locais
 
+Registro histórico da implementação em 11/11. A integração posterior com a
+`main` remota e a preservação de Ética/Pages estão no
+[relatório de 12/11](2026-11-12-registration-integration.md).
+
 Data: 11/11/2026. Base: `67d553d`. Execução na sessão principal, sem
 delegação, a partir da especificação e do plano aprovados em 10/11 e da
 confirmação do usuário em 11/11. Alterações permanecem no working tree;

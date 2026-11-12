@@ -25,8 +25,8 @@ export async function createRegistrationApiHarness(t) {
   };
   const state = { registration: null, identity: null, user: null, cleanup: false, failSql: null, failCommit: false, failCreate: null, failMail: false, failEnable: false, titleActive: true, changed: false, noUpdate: false };
   const calls = { sql: [], firebase: [], mail: [], releases: [] };
-  const admin = { uid: 'admin-fixture', role: 'admin', permissions: { manageUsers: true } };
-  const reader = { uid: 'reader-fixture', role: 'viewer', permissions: {} };
+  const admin = { uid: 'admin-fixture', role: 'admin', permissions: { manageUsers: true }, ethics_accepted: true };
+  const reader = { uid: 'reader-fixture', role: 'viewer', permissions: {}, ethics_accepted: true };
   const rows = values => ({ rows: values, rowCount: values.length });
   let snapshot;
   async function query(raw, params = []) {
@@ -73,7 +73,7 @@ export async function createRegistrationApiHarness(t) {
       return rows([state.registration]);
     }
     if (sql.startsWith('INSERT INTO users')) {
-      state.user = { uid: params[0], email: params[1], name: params[2], role: 'viewer', permissions: {}, firebase_enable_pending: true };
+      state.user = { uid: params[0], email: params[1], name: params[2], role: 'viewer', permissions: {}, firebase_enable_pending: true, ethics_accepted: false };
       return rows([state.user]);
     }
     if (sql.startsWith('UPDATE pending_registrations') && sql.includes("status = 'approved'")) {
@@ -161,6 +161,7 @@ export async function createRegistrationApiHarness(t) {
   app.use('/api/auth', require('./routes/auth'));
   app.use('/api/registrations', require('./routes/registrations'));
   app.get('/api/users/me', authModule.exports.authMiddleware, (request, response) => response.json(request.user));
+  app.get('/api/probe-private', authModule.exports.authMiddleware, (request, response) => response.json({ allowed: true }));
   app.post('/probe/error', () => { throw new Error(registrationData.password); });
   app.use(security.errorHandler);
   const server = await new Promise(resolve => { const listening = app.listen(0, '127.0.0.1', () => resolve(listening)); });

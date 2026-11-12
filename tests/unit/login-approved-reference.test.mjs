@@ -255,3 +255,28 @@ test('registration rejects unexpected success contracts without claiming approva
     assert.equal(h.node('register-password').value, '');
   }
 });
+
+test('approved unverified signup can sign in but must still accept Ethics before entering protected areas', async () => {
+  for (const ethicsAccepted of [false, true]) {
+    const credentials = [];
+    const redirects = [];
+    const h = await createLoginHarness({
+      responseBody: { uid: 'employee-fixture', ethics_accepted: ethicsAccepted },
+      signInImpl: async (auth, email, password) => {
+        credentials.push({ email, password });
+        auth.currentUser = { uid: 'employee-fixture', emailVerified: false, async getIdToken() { return 'synthetic-token'; } };
+      },
+    });
+    h.window.location.replace = destination => redirects.push(destination);
+    h.node('email').value = 'person@example.test';
+    h.node('password').value = '  senha com espaços  ';
+    await h.submit('login-form');
+    assert.deepEqual(credentials, [{ email: 'person@example.test', password: '  senha com espaços  ' }]);
+    assert.equal(h.requests[0].path, '/api/users/me');
+    assert.equal(h.requests[0].options.headers.Authorization, 'Bearer synthetic-token');
+    assert.equal(redirects.length, 1);
+    const destination = new URL(redirects[0], h.window.location.origin);
+    assert.equal(destination.pathname, ethicsAccepted ? '/dashboard.html' : '/ethics.html');
+    if (!ethicsAccepted) assert.equal(destination.searchParams.get('next'), './dashboard.html');
+  }
+});
