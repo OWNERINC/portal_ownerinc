@@ -178,9 +178,48 @@ try {
   assert.deepEqual(await schemaSnapshot(), restoredBaselineSchema, '040-only recovery restores the exact baseline schema');
   assert.deepEqual(await ledger(), baseline.ledger, '040-only recovery restores the baseline ledger');
   assert.deepEqual(await fixtureSnapshot(), baseline.data, '040-only recovery restores fixture data');
+
+  // A pre-042 Pages dump already contains all six tables. The unchanged
+  // receiver classifier selects ordinary pg_restore, never the empty-Pages
+  // cleanup. Rehearse that path across the additive slug/version expansion.
+  for (const filename of ['040_pages.sql', '041_pages_media.sql']) {
+    await client.query('BEGIN');
+    try {
+      await client.query(await readFile(new URL(filename, migrations), 'utf8'));
+      await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [filename.slice(0, -4)]);
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+  }
+  const pre042Page = randomUUID(), pre042Revision = randomUUID();
+  await client.query('INSERT INTO pages(id,author_uid) VALUES($1,$2)', [pre042Page, uid]);
+  await client.query('INSERT INTO page_revisions(id,page_id,schema_version,title,document,created_by) VALUES($1,$2,2,$3,$4,$5)', [pre042Revision, pre042Page, 'Snapshot pré-042', { schema_version: 2, synthetic: true }, uid]);
+  await client.query('UPDATE pages SET draft_revision_id=$1 WHERE id=$2', [pre042Revision, pre042Page]);
+  const pre042Ledger = await ledger();
+  const pre042Rows = (await client.query('SELECT id,page_id,schema_version,title,document::text,created_by,created_at FROM page_revisions WHERE id=$1', [pre042Revision])).rows;
+  const beforeReferenceFidelity = await dump('before-reference-fidelity');
+  assert.equal(await classifyDump(beforeReferenceFidelity), 'present', 'pre-042 native TOC identifies an ordinary Pages backup');
+  await legacyPreparation(); await restore(beforeReferenceFidelity);
+  const restoredPre042Schema = await schemaSnapshot();
+  await migrate(); await verifyMigrations();
+  assert.ok((await ledger()).some(row => row.version === '042_pages_reference_fidelity'));
+  const executionsBeforePre042Restore = cleanupExecutions;
+  await legacyPreparation(); await restore(beforeReferenceFidelity);
+  assert.equal(cleanupExecutions, executionsBeforePre042Restore, 'pre-042 restore uses ordinary restore without Pages cleanup');
+  assert.deepEqual(await schemaSnapshot(), restoredPre042Schema, 'pre-042 restore recovers exact schema, including removal of slug/index');
+  assert.deepEqual(await ledger(), pre042Ledger, 'pre-042 restore preserves ledger and timestamps');
+  assert.deepEqual((await client.query('SELECT id,page_id,schema_version,title,document::text,created_by,created_at FROM page_revisions WHERE id=$1', [pre042Revision])).rows, pre042Rows, 'pre-042 restore preserves JSON bytes, UUIDs and revision timestamps');
+  await assert.rejects(verifyMigrations(), /Unexpected migration ledger/, 'pre-042 restore stays unready until migrations are reapplied');
+  await migrate(); await verifyMigrations();
+  assert.deepEqual((await client.query('SELECT id,page_id,schema_version,title,document::text,created_by,created_at FROM page_revisions WHERE id=$1', [pre042Revision])).rows, pre042Rows, '042 re-upgrade preserves the restored snapshot');
+  // Remove only this rehearsal's synthetic rows before exercising empty-Pages
+  // recovery. Never adapt or relax the receiver's nonempty-table refusal.
+  await client.query('UPDATE pages SET draft_revision_id=NULL WHERE id=$1', [pre042Page]);
+  await client.query('DELETE FROM page_revisions WHERE id=$1', [pre042Revision]);
+  await client.query('DELETE FROM pages WHERE id=$1', [pre042Page]);
   await migrate(); await verifyMigrations();
   assert.ok((await ledger()).some(row => row.version === '040_pages'));
   assert.ok((await ledger()).some(row => row.version === '041_pages_media'));
+  assert.ok((await ledger()).some(row => row.version === '042_pages_reference_fidelity'));
   await legacyPreparation();
   await assert.rejects(restore(beforePages), error => {
     assert.match(error.toolOutput || '', /depend|cannot drop/i);
@@ -256,7 +295,7 @@ try {
   assert.equal((await client.query('SELECT version FROM pages WHERE id=$1', [pageId])).rows[0].version, 0);
   assert.equal((await client.query('SELECT title FROM page_revisions WHERE id=$1', [revisionId])).rows[0].title, 'Revisão sintética preservada');
   await verifyMigrations();
-  console.log('Recovery rehearsal PASS: exact receiver SQL/TOC, native PG16 refusal guards, 040/041 recovery and later Pages backup preservation. Installed receiver/API/cron acceptance remains an operator gate.');
+  console.log('Recovery rehearsal PASS: exact receiver SQL/TOC, native PG16 refusal guards, 040/041/042 recovery, pre-042 restore/re-upgrade and later Pages backup preservation. Installed receiver/API/cron acceptance remains an operator gate.');
 } finally {
   client?.release(); await pool.end();
   if (directory) await rm(directory, { recursive: true, force: true });

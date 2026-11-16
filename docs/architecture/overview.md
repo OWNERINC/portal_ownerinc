@@ -355,6 +355,14 @@ Academy são revertidos por transação. Nesta entrega, fresh/bootstrap, upgrade
   `router.js`. As URLs `.html` continuam sendo documentos estáticos completos.
   Navegações entre as 12 áreas registradas preservam o documento, sidebar,
   topbar, `.main-content` e o próprio `main#main-content`.
+- Pages também aceita exclusivamente `/conteudos/<alias>` ASCII minúsculo de
+  1–120 caracteres, com hífens simples. `pages-route.js` resolve esse caminho para
+  o template/módulo fixos de `/pages.html`, mantendo a URL real no histórico e
+  `page.location`. CSS usa a URL do template. Pages possui base self; ao entrar por
+  SPA, o router acrescenta a mesma base e a conserva até encerrar o documento,
+  evitando assets relativos sob `/conteudos/` durante Back nativo. Fragmentos
+  deslocados pela base são tratados como navegação local, com foco/histórico.
+  Login/Ética preservam o alias como `next` seguro, sem tornar conteúdo público.
 - A preparação obtém o HTML, importa o módulo ES em cache e aguarda as folhas de
   estilo e bibliotecas necessárias. A API valida `/users/me` antes de montar;
   Admin e ferramentas também verificam as permissões retornadas. Sólides

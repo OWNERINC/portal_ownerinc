@@ -9,7 +9,8 @@ disponível como rota futura, fora da navegação inicial.
 - `public/`: aplicação web estática e integração com Firebase Auth.
 - A navegação entre áreas mantém o shell no mesmo documento, com montagem e
   descarte explícitos por página; links diretos e histórico continuam usando as
-  URLs `.html`. Contrato em [Arquitetura](docs/architecture/overview.md#navegação-persistente-do-frontend).
+  URLs `.html`; Pages também aceita `/conteudos/<alias>` com o mesmo shell e API
+  autenticada. Contrato em [Arquitetura](docs/architecture/overview.md#navegação-persistente-do-frontend).
 - `public/autocard.html`: página canônica do AutoCard dentro do shell do Portal;
   `/autocard/` permanece como redirect compatível para bookmarks antigos.
 - `public/cards-pos.html` e `public/cards-pos/`: página e módulo isolado dos
@@ -24,7 +25,13 @@ disponível como rota futura, fora da navegação inicial.
   e publicação por cargo permanecem separados; edição/publicação exigem capacidades
    administrativas. Desenvolver o módulo não concede acesso ou publica conteúdo real.
    O Editor V2 usa workspace dedicado, estrutura de seções e propriedades contextuais;
-   no celular, as propriedades ficam em painel inferior. Salvar continua explícito.
+    no celular, as propriedades ficam em painel inferior. Salvar continua explícito.
+   A correção de referência acrescenta o formato v3, Guia interno, padrões de página,
+   galeria/FAQ/YouTube por consentimento, histórico global, categoria e alias interno.
+   Novas revisões v3 exigem `PAGES_V3_WRITES_ENABLED=true` (padrão desligado).
+   Concluir edição apenas fecha o painel. Evidência local, limitações e gates de
+   rollout estão na [matriz de referência](docs/reviews/2026-11-11-pages-reference-fidelity.md);
+   esse registro não representa deploy nem aceite final das seis pranchas.
 - O runtime atual não inclui CMS, Owner News histórico, editor editorial legado, enquetes ou
   Payload CMS. Migrations, tabelas, uploads e documentos editoriais antigos
   permanecem preservados como histórico sem consumidores executáveis. O novo

@@ -142,6 +142,7 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
   const doc = makeDocument('/dashboard.html');
   const window = new Events();
   const location = { href: initialURL, replace(url) { this.redirect = url; } };
+  Object.defineProperty(doc, 'baseURI', { get() { return new URL(doc.querySelector('base')?.getAttribute('href') || location.href, location.href).href; } });
   for (const key of ['pathname', 'search', 'hash', 'origin']) Object.defineProperty(location, key, { get() { return new URL(this.href)[key]; } });
   const entries = [{ url: location.href, state: null }]; let cursor = 0;
   const history = {
@@ -219,10 +220,11 @@ export async function createRouterHarness({ initialURL = 'https://portal.test/da
     else queueMicrotask(finish);
   };
   const lifecycle = (await readFile('public/js/page-lifecycle.js', 'utf8')).replace(/^export /gm, '');
+  const route = (await readFile('public/js/pages-route.js', 'utf8')).replace(/^export /gm, '');
   const source = (await readFile('public/js/router.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '')
     .replace(/import\(routes\[([^\]]+)\]\)/g, 'loadModule(routes[$1])');
   if (realUI) vm.runInContext((await readFile('public/js/ui.js', 'utf8')).replace(/^export /gm, ''), context);
-  vm.runInContext(`${lifecycle}\n${source}\nglobalThis.router = { startRouter, navigate, requestLogout, navigationURL, routeAllowed, routes };`, context);
+  vm.runInContext(`${lifecycle}\n${route}\n${source}\nglobalThis.router = { startRouter, navigate, requestLogout, navigationURL, routeAllowed, routes };`, context);
   if (autoStart) { await context.router.startRouter(); await drain(); }
   return {
     context, doc, window, location, history, entries, mounts, disposed, events, resources, requests, modules,

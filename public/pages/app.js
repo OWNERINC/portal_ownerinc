@@ -3,6 +3,7 @@ import { createPagesAPI } from './api.js';
 import { catalog, readPage } from './catalog.js';
 import { el, showError } from './dom.js';
 import { focusSection } from './renderer.js';
+import { pagesSlug } from '../js/pages-route.js';
 
 export function mountPages(page) {
   const root = document.getElementById('pages-root'); if (!root) return;
@@ -10,7 +11,7 @@ export function mountPages(page) {
   const locationKey = () => { const url = new URL(page.location.href); return url.pathname + url.search; };
   function navigate(params) {
     if (page.busy || !page.canLeave()) return;
-    const url = new URL('./pages.html', page.location.href); url.search = new URLSearchParams(params);
+    const url = new URL('/pages.html', page.location.href); url.search = new URLSearchParams(params);
     page.history.pushState({ ...window.history.state }, '', url); void render();
   }
   async function render() {
@@ -22,7 +23,8 @@ export function mountPages(page) {
     root.replaceChildren(el('p', { role: 'status', text: 'Carregando Pages…' }));
     try {
       const params = new URL(page.location.href).searchParams;
-      if (params.has('id')) await readPage({ root, page: current, api, params });
+      const slug = pagesSlug(page.location.pathname);
+      if (slug || params.has('id')) await readPage({ root, page: current, api, params, slug });
       else await catalog({ root, page: current, api, params, navigate });
       if (page.active && current.active && generation === sequence) focusSection(root);
     } catch (error) { if (page.active && current.active && generation === sequence && error.name !== 'AbortError') showError(root, error, render); }

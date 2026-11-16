@@ -1,4 +1,19 @@
 .pages-page { max-width: none; width: 100%; color: var(--text); }
+/* New SVG palette tokens only; never redefine the legacy brand/warm presets.
+   Source: EDITOR V2 · Desktop · Estilo e cores.svg palette circles. */
+.pages-page[data-schema-version="3"], .pages-page [data-schema-version="3"] {
+  --pages-conecta-foreground: #2A275E;
+  --pages-conecta-accent: #E84F1C;
+  --pages-conecta-background: #F7F6F2;
+  --pages-editorial-foreground: #3C352E;
+  --pages-editorial-accent: #9E583E;
+  --pages-editorial-background: #F0ECE5;
+  --pages-neutro-foreground: #262626;
+  --pages-neutro-accent: #6B7280;
+  --pages-neutro-background: #F5F5F5;
+  --pages-swatch-soft: #E8E6EB;
+  --pages-swatch-white: #FFFFFF;
+}
 @font-face { font-family: PagesSourceSerif; src: url('/assets/fonts/SourceSerif4-Variable.ttf') format('truetype'); font-weight: 200 900; font-display: swap; }
 @font-face { font-family: PagesOswald; src: url('/assets/fonts/Oswald-Variable.ttf') format('truetype'); font-weight: 200 700; font-display: swap; }
 .pages-page [data-font=manrope] { font-family: var(--font-sans); }
@@ -29,6 +44,27 @@
 .pages-button-primary { background: var(--primary); color: var(--on-primary); }
 .pages-button-secondary { color: var(--primary); background: var(--surface); }
 .pages-button-text { border-color: transparent; color: var(--primary); text-decoration: underline; }
+/* reference-1 · Assets / Botões editáveis. Scoped to the real shared component;
+   legacy wrappers keep their fonts/palettes, and v3 colors come from the canonical resolver. */
+.pages-page .pages-action-button {
+  box-sizing: border-box; position: relative; display: inline-flex; flex: none;
+  align-items: center; justify-content: center; gap: 10px; height: 44px; min-height: 44px;
+  padding: 0 20px; margin: 4px 0; border: 1px solid #E1E2DD; border-radius: 8px;
+  background: #FFFFFF; color: #2A275E; font-family: inherit; font-size: .8125em;
+  font-weight: 700; line-height: 1.4; text-decoration: none; cursor: pointer; vertical-align: middle;
+}
+.pages-page .pages-action-button:is([data-preset=primary],[data-preset=video]) { background: #2A275E; border-color: #2A275E; color: #FFFFFF; }
+.pages-page .pages-action-button[data-preset=text] { background: transparent; border-color: transparent; text-decoration: underline; }
+.pages-page .pages-action-button[data-preset=confirmed] { background: #E9F1EB; border-color: #E9F1EB; color: #345F50; }
+.pages-page .pages-action-button svg { flex: none; width: 18px; height: 18px; }
+.pages-page .pages-action-button:focus-visible { outline: 2px solid #2A275E; outline-offset: 2px; }
+.pages-page .pages-action-button[aria-disabled=true] { cursor: not-allowed; opacity: .55; }
+.pages-page .pages-action-button[aria-busy=true] { cursor: progress; opacity: 1; }
+.pages-page .pages-action-button[data-legacy=true] { font-size: inherit; padding: 8px 16px; border-radius: 6px; border-color: var(--primary); }
+.pages-page .pages-action-button[data-legacy=true][data-preset=primary] { background: var(--primary); color: var(--on-primary); }
+.pages-page .pages-action-button[data-legacy=true][data-preset=secondary] { background: var(--surface); color: var(--primary); }
+.pages-page .pages-action-button[data-legacy=true][data-preset=text] { background: transparent; border-color: transparent; color: var(--primary); }
+.pages-page .pages-button-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .pages-callout { padding: 16px; border-inline-start: 3px solid currentColor; }
 .pages-callout-info { background: #e8f1e9; color: #214b39; }
 .pages-callout-attention { background: #f8eedb; color: #5a3b19; }
@@ -95,6 +131,62 @@
 .pages-document ul, .pages-document ol { padding-left: 24px; }
 .pages-summary { color: var(--text-secondary); }
 .pages-tags { font-size: .875rem; color: var(--text-secondary); }
+/* V3 content only. Legacy selectors and their effective colors remain intact. */
+.pages-document[data-schema-version="3"] { container: pages-v3-surface / inline-size; }
+.pages-edit-surface:has([data-schema-version="3"]) { container: pages-v3-editor / inline-size; }
+.pages-document[data-schema-version="3"] > header h1 { font-size: 32px; }
+.pages-document[data-schema-version="3"] > header .pages-summary { color: inherit; font-size: 16px; }
+.pages-document[data-schema-version="3"] > .pages-tags { color: inherit; font-size: 14px; }
+.pages-document[data-schema-version="3"] .pages-action-button { max-width: 100%; height: auto; padding-block: 8px; }
+.pages-document[data-schema-version="3"] .pages-button-label { min-width: 0; }
+.pages-page .pages-document[data-schema-version="3"] .pages-rendered-block[data-scale=standard] h2 { font-size: 20px; }
+.pages-page .pages-document[data-schema-version="3"] .pages-rendered-block[data-scale=standard] h3 { font-size: 17.6px; }
+.pages-page .pages-document[data-schema-version="3"] .pages-rendered-block[data-scale=small] :is(h2,h3) { font-size: 16.1px; }
+.pages-page .pages-document[data-schema-version="3"] .pages-rendered-block[data-scale=large] :is(h2,h3) { font-size: 26.88px; }
+.pages-document[data-schema-version="3"] .pages-row-aside_right,
+.pages-row-aside_right[data-schema-version="3"] { grid-template-columns: minmax(0,1fr) 260px; gap: 20px; }
+.pages-document[data-schema-version="3"] [data-pages-empty-section] { height: 0; min-height: 0; margin: 0; padding: 0; border: 0; }
+.pages-document[data-schema-version="3"] [data-pages-empty-section] > .pages-row { display: none; }
+/* The guide recipe's cover and compact content are shared by editor/preview/
+   reader. Metrics come from the canonical painter (also used by the AA gate). */
+.pages-page [data-guide-block] { font-size: var(--pages-body-size); line-height: 1.6; }
+.pages-page [data-guide-block] :is(h2,h3) { line-height: 1.25; font-weight: 650; margin: 0 0 14px; }
+.pages-page [data-guide-block] h2 { font-size: var(--pages-h2-size) !important; }
+.pages-page [data-guide-block] h3 { font-size: var(--pages-h3-size) !important; }
+.pages-page [data-guide-block=cover] h2 { font-weight: 800; letter-spacing: -.02em; margin-bottom: 10px; line-height: 1.17; }
+.pages-page [data-guide-block] p:last-child { margin-bottom: 0; }
+.pages-guide-category { display: flex; align-items: center; gap: 6px; width: fit-content; padding: 4px 10px; border-radius: 10px; background: #FCEDE5; color: #B53913; font: 600 10px/1.5 var(--font-sans); text-transform: uppercase; margin-bottom: 14px; }
+.pages-page .pages-guide-category .pages-block-icon { width: 14px; height: 14px; margin: 0; }
+.pages-page [data-guide-block=cover] .pages-guide-category { height: 24px; margin-bottom: 10px; }
+.pages-page [data-guide-block=rich_text] > .pages-block-icon { width: 20px; height: 20px; margin-bottom: 10px; }
+.pages-page [data-guide-block=rich_text]:has(> .pages-block-icon) h2 { margin-bottom: 10px; }
+.pages-page [data-guide-block=faq] .pages-v3-faq summary h3 { font-size: var(--pages-body-size) !important; font-weight: 400; }
+.pages-page [data-guide-block=faq] .pages-guide-faq-title { font-size: 18px !important; }
+.pages-page .pages-document .pages-guide-metadata { border: 0; padding: 0; margin: 0 0 16px; }
+.pages-page .pages-guide-metadata h1 { font-size: 14px !important; }
+.pages-page .pages-guide-metadata .pages-summary { font-size: 12px !important; }
+.pages-page .pages-document:has([data-guide-block=cover]) .pages-rendered-block { margin-bottom: 16px; }
+.pages-page .pages-document:has([data-guide-block=cover]) [data-guide-block=rich_text]:has(> .pages-block-icon),
+.pages-page .pages-document:has([data-guide-block=cover]) [data-guide-block=audio] { padding: 20px; border-radius: 6px; }
+.pages-page [data-empty-audio=true] :is(audio,button,details,.pages-media-status) { display: none; }
+.pages-page .pages-audio-placeholder { color: inherit; font-size: inherit; line-height: 1.4; }
+.pages-document[data-schema-version="3"] .pages-v3-gallery { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,180px),1fr)); gap: 20px; }
+.pages-document[data-schema-version="3"] .pages-v3-gallery > figure { min-width: 0; margin: 0; }
+.pages-document[data-schema-version="3"] .pages-v3-faq > details { border-bottom: 1px solid var(--border); }
+.pages-document[data-schema-version="3"] .pages-v3-faq summary { cursor: pointer; padding: 12px 0; }
+.pages-page .pages-document[data-schema-version="3"] .pages-rendered-block .pages-v3-faq summary h3 { display: inline; margin: 0; font-size: 1em; }
+.pages-document[data-schema-version="3"] .pages-faq-answer { padding: 0 0 12px; }
+.pages-document[data-schema-version="3"] .pages-embed-player:empty { display: none; }
+.pages-document[data-schema-version="3"] .pages-embed-player iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; }
+.pages-page [data-schema-version="3"] .pages-block-icon { display: block; margin-bottom: 8px; }
+.pages-page [data-schema-version="3"] .pages-block-tags { display: flex; flex-wrap: wrap; gap: 8px; font-size: 14px; }
+.pages-page [data-schema-version="3"] .pages-block-tags > span { padding: 2px 6px; border: 1px solid currentColor; border-radius: 4px; }
+@container pages-v3-surface (max-width: 600px) {
+  .pages-document[data-schema-version="3"] :is(.pages-row-aside_right,.pages-row-two_equal) { grid-template-columns: minmax(0,1fr); }
+}
+@container pages-v3-editor (max-width: 600px) {
+  .pages-editor-row > .pages-row { grid-template-columns: minmax(0,1fr); }
+}
 .pages-feedback:empty { display: none; }
 .pages-feedback { color: var(--danger); }
 .pages-media-status { display: block; padding: 16px 0; }

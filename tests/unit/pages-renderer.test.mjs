@@ -1,32 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { FixtureNode, deferred, drain } from '../helpers/frontend-feedback-harness.mjs';
+import { drain, TestEvent } from '../helpers/frontend-feedback-harness.mjs';
+import { rendererHarness as harness } from '../helpers/pages-renderer-harness.mjs';
 const require = createRequire(import.meta.url);
 const { createTemplate } = require('../../api/pages/templates');
 
-async function harness() {
-  const doc = new FixtureNode('document'); doc.ownerDocument = doc;
-  doc.createElement = tag => {
-    const node = new FixtureNode(tag, doc); node.pauses = 0; node.loads = 0; node.plays = 0;
-    node.pause = () => node.pauses++; node.load = () => node.loads++; node.play = () => { node.plays++; }; return node;
-  };
-  doc.createTextNode = text => { const n = doc.createElement('#text'); n.textContent = text; return n; };
-  const revoked = [], created = [];
-  const context = vm.createContext({ document: doc, console, AbortController, Blob, crypto: { randomUUID },
-    URL: class extends URL { static createObjectURL(blob) { const url = `blob:test-${created.length}`; created.push({ blob, url }); return url; } static revokeObjectURL(url) { revoked.push(url); } },
-    window: { location: { hash: '' } } });
-  for (const [file,names] of [['model','safeLink,clone,newId,allBlocks'], ['composition','compose,findBlock'], ['state','createEditorState'], ['dom','el,button'], ['renderer','mediaFigure,renderDocument,captionsVTT']]) {
-    const source = (await readFile(`public/pages/${file}.js`, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
-    vm.runInContext(`(() => { ${source}\nObject.assign(globalThis,{${names}}); })()`, context);
-  }
-  const requests = [];
-  const options = { api: { asset(...args) { const item = { args, ...deferred() }; requests.push(item); return item.promise; } }, pageId: 'page', staged: true };
-  return { context, doc, revoked, created, requests, options };
-}
 for (const kind of ['audio','video','gif']) test(`${kind} requires explicit load, never plays automatically, cancels/revokes late blobs and cleans sources on dispose`, async () => {
   const h = await harness();
   const block = { id: 'id', type: kind, media_id: 'media', title: 'Sintético', alt: 'Teste', transcript: 'Transcrição', captions: [{ start_ms: 0, end_ms: 1000, text: 'Legenda' }] };
@@ -43,6 +23,34 @@ for (const kind of ['audio','video','gif']) test(`${kind} requires explicit load
   if (kind !== 'gif') assert.ok(media.pauses > before);
   else assert.equal(media.hidden, true);
   assert.equal(figure.node.querySelectorAll('track').length, 0);
+});
+
+test('shared renderer consumes legacy destinations and typed v3 actions, with canonical checked button colors and local video focus/load', async () => {
+  const h = await harness();
+  for (const schema of [2,3]) {
+    const doc = createTemplate('owner-news'), section = doc.sections[0], videoId = randomUUID();
+    doc.schema_version = schema;
+    if (schema === 3) doc.presentation.defaults = { foreground: '#26204A', background: '#FFFFFF', font: 'manrope', scale: 'standard', align: 'start' };
+    const blocks = section.rows[0].columns[0].blocks;
+    blocks.push({ id: videoId, type: 'video', media_id: randomUUID(), title: 'Vídeo local', captions: [] });
+    blocks.push({ id: randomUUID(), type: 'button', label: 'Ver guia completo', preset: 'primary', [schema === 3 ? 'action' : 'destination']: { type: 'section', value: section.id } });
+    if (schema === 3) blocks.push({ id: randomUUID(), type: 'button', label: 'Assistir ao vídeo', preset: 'secondary', action: { type: 'video', value: videoId } });
+    const host = h.doc.createElement('div'); h.doc.body.append(host);
+    const dispose = h.context.renderDocument({ host, document: doc, ...h.options });
+    const guide = host.querySelector('.pages-action-button'); assert.ok(guide); assert.match(guide.getAttribute('href'), /^https:\/\/portal.test\/conteudos\/teste#section-/);
+    let historyWrites = 0; h.context.window.history.pushState = () => { historyWrites++; };
+    const sectionClick = new TestEvent('click', { bubbles: true, button: 0 }); guide.dispatchEvent(sectionClick);
+    assert.equal(historyWrites, 0, 'preview renderer must not write global history');
+    assert.equal(sectionClick.defaultPrevented, true); assert.equal(h.doc.activeElement.id, `section-${section.id}`);
+    if (schema === 2) { assert.equal(guide.dataset.legacy, 'true'); assert.equal(guide.querySelectorAll('svg').length, 0); }
+    if (schema === 3) {
+      assert.equal(guide.style.color, '#FFFFFF'); assert.equal(guide.style.backgroundColor, '#26204A');
+      const videoButton = host.querySelectorAll('.pages-action-button')[1]; videoButton.click();
+      assert.equal(h.requests.length, 1); assert.equal(h.doc.activeElement.tagName, 'VIDEO');
+      h.requests[0].resolve('blob:video'); await drain(); assert.equal(host.querySelector('video').plays, 0);
+    }
+    assert.equal(host.querySelectorAll('iframe').length, 0); dispose();
+  }
 });
 test('media load and subsequent caption refresh resolve the current composed state, not the original block closure', async () => {
   const h = await harness(), doc = createTemplate('owner-news'), id = randomUUID();

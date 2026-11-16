@@ -79,8 +79,14 @@ test('scroll completion remains available on scroll back, and a fresh term reset
 test('return destinations preserve internal document query/hash and reject external or loop destinations', () => {
   const origin = 'https://portal.example.test';
   assert.equal(safeDestination('/academy.html?course=123#lesson', origin), '/academy.html?course=123#lesson');
+  assert.equal(safeDestination('./profile.html', origin), '/profile.html');
+  assert.equal(safeDestination('/knowledge.html?q=dois termos', origin), '/knowledge.html?q=dois%20termos');
+  assert.equal(safeDestination('/conteudos/codigo-de-vestimenta?q=1#section-123', origin), '/conteudos/codigo-de-vestimenta?q=1#section-123');
   for (const value of [null, '', 'javascript:alert(1)', 'https://external.test/profile.html', '//external.test/admin.html',
-    '/login.html?next=/ethics.html', '/ethics.html', '/index.html', '/api/users/me', '/uploads/file.webp']) {
-    assert.equal(safeDestination(value, origin), './dashboard.html');
+    '/login.html?next=/ethics.html', '/ethics.html', '/index.html', '/api/users/me', '/uploads/file.webp',
+    '/announcements.html', '/conteudos/a/b', '/conteudos/%2fadmin', '/conteudos/A', '/conteudos/a/',
+    '/conteudos/../dashboard.html', '/conteudos/%2e%2e/dashboard.html', '/conteudos/a\\b',
+    'https://user:password@portal.example.test/dashboard.html', '/conteudos/a\n']) {
+    assert.equal(safeDestination(value, origin), '/dashboard.html', String(value));
   }
 });

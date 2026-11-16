@@ -1,0 +1,179 @@
+[
+  {
+    "id": "editable-buttons",
+    "source": "EDITOR V2 · Assets · Botões editáveis.svg",
+    "png": "reference-1.png",
+    "width": 1600,
+    "height": 480,
+    "sha256": "d32283d42c7e33529cad782a9173a5b438ee6cafa84cf44188884a08ef87bc1e",
+    "state": { "device": "assets", "panel": "button-specimens", "specimens": ["primary", "secondary", "video", "upload", "confirmed"], "comparison": { "frameTolerance": 2, "controlTolerance": 4, "pixelPolicy": "exact-or-review", "extraStates": ["hover", "focus", "loading-real-ACK", "disabled-no-action"] } },
+    "regions": [
+      { "id": "primary", "x": 40, "y": 173, "width": 181, "height": 44, "measurement": "rect transform=translate(40 173) width=181 height=44" },
+      { "id": "secondary", "x": 348.8, "y": 173, "width": 162, "height": 44, "measurement": "rect transform=translate(348.8 173) width=162 height=44" },
+      { "id": "video", "x": 657.6, "y": 173, "width": 172, "height": 44, "measurement": "rect transform=translate(657.6 173) width=172 height=44" },
+      { "id": "upload", "x": 966.4, "y": 173, "width": 158, "height": 44, "measurement": "rect transform=translate(966.4 173) width=158 height=44" },
+      { "id": "confirmed", "x": 1275.2, "y": 173, "width": 103, "height": 44, "measurement": "rect transform=translate(1275.2 173) width=103 height=44" }
+    ],
+    "anchors": [
+      { "id": "primary-top-left", "x": 40, "y": 173, "measurement": "rect transform=translate(40 173) origin" },
+      { "id": "specimens-divider", "x": 40, "y": 240.5, "measurement": "rect transform=translate(40 241) y=-0.5" }
+    ]
+  },
+  {
+    "id": "desktop-contextual",
+    "source": "EDITOR V2 · Desktop · Edição contextual.svg",
+    "png": "reference-2.png",
+    "width": 1600,
+    "height": 1160,
+    "sha256": "90778cf9d554ab7a264f81a02c142704828088fd4f0a4bbe881f506f5ea0c3e6",
+    "state": {
+      "device": "desktop", "panel": "block", "tab": "content", "zoom": 100,
+      "scroll": { "x": 0, "y": 0 }, "draft": "saved-synthetic",
+      "selection": { "section": "e2d00000-0000-4000-8000-000000000002", "block": "e2d00000-0000-4000-8000-000000000066", "item": null },
+      "activeMarks": ["strong"], "faqExpanded": [],
+      "comparison": { "frameTolerance": 2, "controlTolerance": 4, "pixelPolicy": "exact-or-review", "knownDifferences": ["Local wordmark glyph differs from source; Task14 limitation", "Honest model typography label 15px versus source 16px"] }
+    },
+    "regions": [
+      { "id": "header", "x": 0, "y": 0, "width": 1600, "height": 72, "measurement": "rect width=1600 height=72" },
+      { "id": "toolbar", "x": 0, "y": 72, "width": 1600, "height": 56, "measurement": "rect transform=translate(0 72) width=1600 height=56" },
+      { "id": "structure", "x": 0, "y": 128, "width": 220, "height": 1032, "measurement": "rect transform=translate(0 128) width=220 height=1032" },
+      { "id": "canvas", "x": 248, "y": 188, "width": 1044, "height": 944, "measurement": "rect transform=translate(248 188) width=1044 height=944" },
+      { "id": "selected-block", "x": 271.5, "y": 380.5, "width": 997, "height": 175, "measurement": "path transform=translate(272 381) filled outline local bounds=(-0.5,-0.5)-(996.5,174.5)" },
+      { "id": "context-toolbar", "x": 288, "y": 397, "width": 329, "height": 44, "measurement": "rect transform=translate(288 397) width=329 height=44" },
+      { "id": "audio-placeholder", "x": 1008, "y": 777, "width": 260, "height": 191, "measurement": "rect transform=translate(1008 777) width=260 height=191" },
+      { "id": "inspector", "x": 1320, "y": 128, "width": 280, "height": 1032, "measurement": "rect transform=translate(1320 128) width=280 height=1032" },
+      { "id": "inspector-font", "x": 1340, "y": 292, "width": 240, "height": 37, "control": true, "measurement": "rect source PNG control bounds at (1340,292), 240x37" },
+      { "id": "inspector-size", "x": 1340, "y": 378, "width": 240, "height": 37, "control": true, "measurement": "rect source PNG control bounds at (1340,378), 240x37" },
+      { "id": "inspector-align", "x": 1340, "y": 464, "width": 240, "height": 37, "control": true, "measurement": "rect source PNG control bounds at (1340,464), 240x37" },
+      { "id": "inspector-width", "x": 1340, "y": 550, "width": 240, "height": 37, "control": true, "measurement": "rect source PNG control bounds at (1340,550), 240x37" },
+      { "id": "inspector-fill", "x": 1340, "y": 636, "width": 240, "height": 37, "control": true, "measurement": "rect source PNG control bounds at (1340,636), 240x37" },
+      { "id": "inspector-tags", "x": 1340, "y": 762, "width": 240, "height": 37, "control": true, "measurement": "rect source PNG control bounds at (1340,762), 240x37" },
+      { "id": "inspector-icon", "x": 1340, "y": 848, "width": 240, "height": 37, "control": true, "measurement": "rect source PNG control bounds at (1340,848), 240x37" },
+      { "id": "daily-card", "x": 272, "y": 571, "width": 488, "height": 126, "measurement": "rect source PNG card bounds at (272,571), 488x126" },
+      { "id": "meetings-card", "x": 780, "y": 571, "width": 488, "height": 126, "measurement": "rect source PNG card bounds at (780,571), 488x126" },
+      { "id": "faq", "x": 272, "y": 777, "width": 716, "height": 123, "measurement": "rect source PNG FAQ heading through second rule, (272,777)-(988,900)" }
+    ],
+    "anchors": [
+      { "id": "canvas-top-left", "x": 248, "y": 188, "measurement": "rect transform=translate(248 188) origin" },
+      { "id": "selection-origin", "x": 272, "y": 381, "measurement": "path transform=translate(272 381) logical origin; outline extends 0.5px" },
+      { "id": "font-control", "x": 1340, "y": 292, "measurement": "rect transform=translate(1340 292) origin" },
+      { "id": "inspector-top-left", "x": 1320, "y": 128, "measurement": "rect transform=translate(1320 128) origin" }
+    ]
+  },
+  {
+    "id": "desktop-style",
+    "source": "EDITOR V2 · Desktop · Estilo e cores.svg",
+    "png": "reference-3.png",
+    "width": 1600,
+    "height": 1160,
+    "sha256": "fe190a4a5f9b20a667ee414e77da5d66465c142ca940640fde58440f526894a9",
+    "state": {
+      "device": "desktop", "panel": "page-style", "tab": "theme", "zoom": 100,
+      "scroll": { "x": 0, "y": 0 }, "draft": "saved-synthetic",
+      "selection": { "section": "e2d00000-0000-4000-8000-000000000002", "block": "e2d00000-0000-4000-8000-000000000066", "item": null },
+      "palette": "conecta", "font": "manrope", "customColor": "#E84F1C",
+      "comparison": { "frameTolerance": 2, "controlTolerance": 4, "pixelPolicy": "exact-or-review", "includeDesktopRegions": true }
+    },
+    "regions": [
+      { "id": "style-popover", "x": 360, "y": 118, "width": 400, "height": 663, "measurement": "rect transform=translate(360 118) width=400 height=663" },
+      { "id": "style-tabs", "x": 380, "y": 205, "width": 360, "height": 40, "measurement": "rect transform=translate(380 205) width=360 height=40" },
+      { "id": "font-example", "x": 380, "y": 335, "width": 360, "height": 88, "measurement": "rect transform=translate(380 335) width=360 height=88" },
+      { "id": "selected-palette", "x": 380, "y": 463, "width": 360, "height": 40, "measurement": "rect transform=translate(380 463) width=360 height=40" },
+      { "id": "custom-color", "x": 380, "y": 648, "width": 360, "height": 37, "measurement": "rect transform=translate(380 648) width=360 height=37" },
+      { "id": "apply-style", "x": 380, "y": 725, "width": 129, "height": 36, "measurement": "rect transform=translate(380 725) width=129 height=36" }
+    ],
+    "anchors": [
+      { "id": "style-trigger", "x": 350, "y": 82, "measurement": "rect transform=translate(350 82) origin" },
+      { "id": "style-top-left", "x": 360, "y": 118, "measurement": "rect transform=translate(360 118) origin" }
+    ]
+  },
+  {
+    "id": "desktop-insert",
+    "source": "EDITOR V2 · Desktop · Inserir bloco.svg",
+    "png": "reference-4.png",
+    "width": 1600,
+    "height": 1160,
+    "sha256": "fb9bdef594f009e0fd7fe2c7d347c0ae57a8a58529da8ce1022f3d24d4425c0b",
+    "state": {
+      "device": "desktop", "panel": "insert-block", "query": "", "zoom": 100,
+      "scroll": { "x": 0, "y": 0 }, "draft": "saved-synthetic",
+      "selection": { "section": "e2d00000-0000-4000-8000-000000000002", "block": "e2d00000-0000-4000-8000-000000000066", "item": null },
+      "comparison": { "frameTolerance": 2, "controlTolerance": 4, "pixelPolicy": "exact-or-review", "includeDesktopRegions": true }
+    },
+    "regions": [
+      { "id": "insert-popover", "x": 24, "y": 118, "width": 380, "height": 621, "measurement": "rect transform=translate(24 118) width=380 height=621" },
+      { "id": "insert-search", "x": 42, "y": 206, "width": 344, "height": 37, "measurement": "rect transform=translate(42 206) width=344 height=37" },
+      { "id": "insert-trigger", "x": 24, "y": 82, "width": 125, "height": 36, "measurement": "rect transform=translate(24 82) width=125 height=36" },
+      { "id": "insert-icon-0", "x": 48, "y": 274, "width": 16, "height": 16, "control": true, "measurement": "rect source PNG text icon bounds, (48,274), 16x16" },
+      { "id": "insert-icon-1", "x": 48, "y": 338, "width": 16, "height": 16, "control": true, "measurement": "rect source PNG image icon bounds, (48,338), 16x16" },
+      { "id": "insert-icon-2", "x": 48, "y": 402, "width": 16, "height": 16, "control": true, "measurement": "rect source PNG video icon bounds, (48,402), 16x16" },
+      { "id": "insert-icon-3", "x": 48, "y": 466, "width": 16, "height": 16, "control": true, "measurement": "rect source PNG audio icon bounds, (48,466), 16x16" },
+      { "id": "insert-icon-4", "x": 48, "y": 530, "width": 16, "height": 16, "control": true, "measurement": "rect source PNG gallery icon bounds, (48,530), 16x16" },
+      { "id": "insert-icon-5", "x": 48, "y": 594, "width": 16, "height": 16, "control": true, "measurement": "rect source PNG columns icon bounds, (48,594), 16x16" },
+      { "id": "insert-icon-6", "x": 48, "y": 658, "width": 16, "height": 16, "control": true, "measurement": "rect source PNG action icon bounds, (48,658), 16x16" }
+    ],
+    "anchors": [
+      { "id": "insert-trigger-bottom", "x": 24, "y": 118, "measurement": "rect transform=translate(24 82) height=36 bottom-left" },
+      { "id": "search-top-left", "x": 42, "y": 206, "measurement": "rect transform=translate(42 206) origin" }
+    ]
+  },
+  {
+    "id": "desktop-review",
+    "source": "EDITOR V2 · Desktop · Revisar publicação.svg",
+    "png": "reference-5.png",
+    "width": 1600,
+    "height": 1160,
+    "sha256": "b4e1448bd3a486a0f03d08ffb69a5f26c39830875bbd9363b036fb6597ccd4b7",
+    "state": {
+      "device": "desktop", "panel": "review-publication", "zoom": 100,
+      "scroll": { "x": 0, "y": 0 }, "draft": "saved-synthetic",
+      "selection": { "section": "e2d00000-0000-4000-8000-000000000002", "block": "e2d00000-0000-4000-8000-000000000066", "item": null },
+      "checklist": [false, false, false], "category": "Pessoas e cultura", "visibilityLabel": "Somente colaboradores",
+      "illustrativeAlias": "/conteudos/codigo-de-vestimenta",
+      "comparison": { "frameTolerance": 2, "controlTolerance": 4, "pixelPolicy": "exact-or-review", "includeDesktopRegions": true, "knownDifferences": ["Real saved revision replaces prototype claim", "Missing audio/FAQ content keeps Publish disabled"] }
+    },
+    "regions": [
+      { "id": "backdrop", "x": 0, "y": 0, "width": 1600, "height": 1160, "measurement": "rect width=1600 height=1160 fill=#201e4d fill-opacity=0.4" },
+      { "id": "review-dialog", "x": 510, "y": 190, "width": 580, "height": 670, "measurement": "rect transform=translate(510 190) width=580 height=670" },
+      { "id": "title-field", "x": 542, "y": 354, "width": 516, "height": 37, "measurement": "rect transform=translate(542 354) width=516 height=37" },
+      { "id": "category-field", "x": 542, "y": 448, "width": 516, "height": 37, "measurement": "rect transform=translate(542 448) width=516 height=37" },
+      { "id": "visibility-field", "x": 542, "y": 542, "width": 516, "height": 37, "measurement": "rect transform=translate(542 542) width=516 height=37" },
+      { "id": "back-to-editor", "x": 786, "y": 792, "width": 116, "height": 36, "measurement": "rect transform=translate(786 792) width=116 height=36" },
+      { "id": "publish-page", "x": 914, "y": 792, "width": 144, "height": 36, "measurement": "rect transform=translate(914 792) width=144 height=36" }
+    ],
+    "anchors": [
+      { "id": "review-top-left", "x": 510, "y": 190, "measurement": "rect transform=translate(510 190) origin" },
+      { "id": "publish-bottom-right", "x": 1058, "y": 828, "measurement": "rect transform=translate(914 792) width=144 height=36 bottom-right" }
+    ]
+  },
+  {
+    "id": "mobile-content",
+    "source": "EDITOR V2 · Mobile · Painel inferior.svg",
+    "png": "reference-6.png",
+    "width": 390,
+    "height": 820,
+    "sha256": "0a7d6764e0f78e2e89b821d0ad27b8c67065c63e6563cc6e7ca4da64e8d99735",
+    "state": {
+      "device": "mobile", "panel": "bottom-sheet", "tab": "content", "zoom": 100,
+      "scroll": { "x": 0, "y": 0 }, "draft": "saved-synthetic",
+      "selection": { "section": "e2d00000-0000-4000-8000-000000000002", "block": "e2d00000-0000-4000-8000-000000000066", "item": null },
+      "copyOverride": { "block": "e2d00000-0000-4000-8000-000000000066", "paragraph": 1, "text": "Troque os textos e adapte cada seção à sua equipe." },
+      "headingColorOverride": "#2A275E",
+      "comparison": { "frameTolerance": 2, "controlTolerance": 4, "pixelPolicy": "exact-or-review", "knownDifferences": ["Task16 canonical purple body versus source gray", "Fixture cover uses no nosso dia a dia; source uses no dia a dia"] }
+    },
+    "regions": [
+      { "id": "header", "x": 0, "y": 0, "width": 390, "height": 64, "measurement": "rect width=390 height=64" },
+      { "id": "toolbar", "x": 0, "y": 64, "width": 390, "height": 52, "measurement": "rect transform=translate(0 64) width=390 height=52" },
+      { "id": "preview", "x": 0, "y": 116, "width": 390, "height": 315, "measurement": "rect transform=translate(0 116) width=390 height=315" },
+      { "id": "selected-block", "x": 19, "y": 304, "width": 352, "height": 108, "measurement": "path transform=translate(20 305) filled outline local bounds=(-1,-1)-(351,107)" },
+      { "id": "bottom-sheet", "x": 0, "y": 431, "width": 390, "height": 389, "measurement": "path transform=translate(0 431) M0 389v-373 rounded top at y=0 width=390" },
+      { "id": "typography", "x": 20, "y": 597, "width": 350, "height": 37, "measurement": "rect transform=translate(20 597) width=350 height=37" },
+      { "id": "background", "x": 20, "y": 675, "width": 350, "height": 37, "measurement": "rect transform=translate(20 675) width=350 height=37" },
+      { "id": "finish-editing", "x": 20, "y": 724, "width": 145, "height": 36, "measurement": "rect transform=translate(20 724) width=145 height=36" }
+    ],
+    "anchors": [
+      { "id": "sheet-origin", "x": 0, "y": 431, "measurement": "path transform=translate(0 431) origin" },
+      { "id": "finish-top-left", "x": 20, "y": 724, "measurement": "rect transform=translate(20 724) origin" }
+    ]
+  }
+]

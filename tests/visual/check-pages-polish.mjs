@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createPagesDatabaseHarness, cargoA } from '../database/check-pages.mjs';
-import { pagesBrowserContext, pagesBrowserReady, pagesBrowserReflow, pagesEditorOrganize, pagesEditorMore } from '../helpers/pages-browser.mjs';
+import { pagesBrowserContext, pagesBrowserReady, pagesBrowserReflow, pagesEditorOrganize, pagesEditorMore, pagesEditorPreview } from '../helpers/pages-browser.mjs';
 
 for (const name of ['PGLITE_MODULE_PATH','PLAYWRIGHT_MODULE_PATH','AXE_MODULE_PATH']) if (!process.env[name]) throw new Error(`Set external ${name}`);
 const { chromium } = await import(pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE_PATH)).href);
@@ -73,15 +73,23 @@ try {
     await selection.click();
     if (width < 1100) await page.getByRole('button', { name: 'Estilo', exact: true }).click();
     const toolbar = page.getByRole('toolbar', { name: 'Ações do bloco selecionado' });
+    const legacyPresentation = toolbar.getByRole('group', { name: 'Apresentação do bloco', exact: true });
     await toolbar.waitFor({ state: 'visible' });
     for (const label of ['Coluna de destino','Alinhamento','Escala','Paleta','Fonte']) {
-      if (width < 1100) await page.getByRole('button', { name: label === 'Coluna de destino' ? 'Posição' : 'Estilo', exact: true }).click();
-      const control = toolbar.getByRole('combobox', { name: label, exact: true });
+      // Legacy presets live under Opções avançadas in the Posição sheet.
+      if (width < 1100) await page.getByRole('button', { name: 'Posição', exact: true }).click();
+      const advanced = page.locator('.pages-inspector-advanced');
+      if (!await advanced.evaluate(node => node.open)) await advanced.locator(':scope > summary').click();
+      if (label !== 'Coluna de destino') {
+        const presets = page.locator('.pages-legacy-presentation');
+        if (!await presets.evaluate(node => node.open)) await presets.locator(':scope > summary').click();
+      }
+      const control = (label === 'Coluna de destino' ? toolbar : legacyPresentation).getByRole('combobox', { name: label, exact: true });
       const style = await styleOf(control);
       assert.match(style.font, /Manrope/i, `${label}: branded font`);
-      assert.ok(style.height >= 43.5 && style.radius >= 6, `${label}: consistent control geometry`);
+      assert.ok(style.height >= 43.5 && style.radius >= 6, `${label} at ${width}px: consistent control geometry (${JSON.stringify(style)})`);
     }
-    const font = toolbar.getByRole('combobox', { name: 'Fonte', exact: true });
+    const font = legacyPresentation.getByRole('combobox', { name: 'Fonte', exact: true });
     await font.selectOption('manrope');
     const snapshot = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === `/api/pages/${id}/draft`);
     await pagesEditorMore(page);
@@ -89,14 +97,14 @@ try {
     assert.equal((await snapshot).status(), 200);
     assert.equal((await api('get', `/${id}/workspace`)).draft.document.sections[0].rows[0].columns[0].blocks[0].style.font, 'manrope');
     await pagesBrowserReflow(page, AxeBuilder, `polished-editor-selected-${width}`);
-    await toolbar.getByRole('combobox', { name: 'Paleta', exact: true }).selectOption('brand');
+    await legacyPresentation.getByRole('combobox', { name: 'Paleta', exact: true }).selectOption('brand');
     await pagesBrowserReflow(page, AxeBuilder, `polished-editor-brand-palette-${width}`);
-    await page.getByRole('toolbar', { name: 'Ações do bloco selecionado' }).getByRole('combobox', { name: 'Paleta', exact: true }).selectOption('warm');
+    await legacyPresentation.getByRole('combobox', { name: 'Paleta', exact: true }).selectOption('warm');
     await page.screenshot({ path: join(output, `editor-selected-${width}.png`), fullPage: true });
-    await page.getByRole('button', { name: /Prévia mobile/ }).click();
+    await pagesEditorPreview(page,'mobile');
     await page.locator('.pages-document').waitFor({ state: 'visible' });
     await pagesBrowserReflow(page, AxeBuilder, `polished-editor-preview-${width}`);
-    await page.getByRole('button', { name: /^Editar$/ }).click();
+    await pagesEditorPreview(page, 'edit');
     await page.locator('.ProseMirror').first().waitFor({ state: 'visible' });
     results.push({ scenario: 'branded controls, action gaps, styled block isolation, selected toolbar, save and preview reflow/axe', width, pass: true });
     await visit.context.close();

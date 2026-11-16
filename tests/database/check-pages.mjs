@@ -30,7 +30,7 @@ export function pageDocument(title = 'Comunicado sintético', jobTitleIds = [car
   };
 }
 
-export async function createPagesDatabaseHarness({ afterFoundation } = {}) {
+export async function createPagesDatabaseHarness({ afterFoundation, afterMedia, v3WritesEnabled = false } = {}) {
   if (!process.env.PGLITE_MODULE_PATH) throw new Error('Set PGLITE_MODULE_PATH to external @electric-sql/pglite; no existing database is accepted');
   const { PGlite } = await import(pathToFileURL(resolve(process.env.PGLITE_MODULE_PATH)).href);
   const db = new PGlite();
@@ -90,6 +90,11 @@ export async function createPagesDatabaseHarness({ afterFoundation } = {}) {
     const expansion = await readFile(new URL('../../api/db/migrations/041_pages_media.sql', import.meta.url), 'utf8');
     await db.exec(expansion);
     await db.exec(expansion);
+    // Upgrade populated v1/v2 databases without rewriting their snapshots.
+    if (afterMedia) await afterMedia(db);
+    const referenceFidelity = await readFile(new URL('../../api/db/migrations/042_pages_reference_fidelity.sql', import.meta.url), 'utf8');
+    await db.exec(referenceFidelity);
+    await db.exec(referenceFidelity);
     for (const [uid] of actors) if (uid !== 'noethics') await acceptTerm(db, uid);
     await db.exec('GRANT SELECT, UPDATE ON users, job_titles TO portal_api; GRANT SELECT ON pending_registrations TO portal_api; GRANT SELECT, INSERT ON audit_log TO portal_api');
     const authFile = fileURLToPath(new URL('../../api/middleware/auth.js', import.meta.url));
@@ -114,7 +119,7 @@ export async function createPagesDatabaseHarness({ afterFoundation } = {}) {
     app.use(express.json({ limit: '1mb' }));
     app.get('/api/users/me', authMiddleware, (req, res) => res.json(req.user));
     app.get('/api/ethics', authMiddleware, (req, res) => res.json({ term, accepted: req.user.ethics_accepted === true }));
-    app.use('/api/pages', createPagesRouter({ pool, authenticate: authMiddleware, uploadDirectory: directory }));
+    app.use('/api/pages', createPagesRouter({ pool, authenticate: authMiddleware, uploadDirectory: directory, v3WritesEnabled }));
     app.use(security.errorHandler);
     server = createServer(app);
     await new Promise((done, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', done); });
@@ -131,7 +136,7 @@ export async function createPagesDatabaseHarness({ afterFoundation } = {}) {
       // This test owns this exact mkdtemp directory, never an existing upload dir.
       await rm(directory, { recursive: true, force: true });
     }
-    return { db, app, pool, request, api, directory, origin, statements, tokenChecks, close };
+    return { db, app, pool, request, api, directory, origin, statements, tokenChecks, authenticate: authMiddleware, close };
   } catch (error) {
     server?.closeAllConnections();
     if (server?.listening) await new Promise(done => server.close(done));

@@ -169,7 +169,7 @@ function redirectToLogin(reason) {
   const params = new URLSearchParams({ reason });
   const destination = currentDestination();
   if (destination) params.set('next', destination);
-  window.location.replace(`./login.html?${params.toString()}`);
+  window.location.replace(`/login.html?${params.toString()}`);
 }
 
 function requireEthicsAcceptance() {
@@ -178,7 +178,7 @@ function requireEthicsAcceptance() {
   document.querySelector('main')?.replaceChildren();
   const params = new URLSearchParams();
   if (destination) params.set('next', destination);
-  window.location.replace(`./ethics.html?${params}`);
+  window.location.replace(`/ethics.html?${params}`);
   // Stop page mounts and late responses without treating this as a logout.
   throw new DOMException('O aceite do Código de Ética é necessário.', 'AbortError');
 }
@@ -378,7 +378,7 @@ export async function requireAuth(requireAdmin = false) {
     return null;
   }
   if (requireAdmin && user.role !== 'admin') {
-    window.location.replace('./dashboard.html');
+    window.location.replace('/dashboard.html');
     return null;
   }
   return user;
@@ -389,7 +389,7 @@ export async function logout() {
   clearVerifiedRole();
   document.querySelector('main')?.replaceChildren();
   await signOut(auth);
-  if (!auth.currentUser || (auth.currentUser.uid === uid && sessionDenied)) window.location.href = './login.html';
+  if (!auth.currentUser || (auth.currentUser.uid === uid && sessionDenied)) window.location.href = '/login.html';
 }
 
 // One subscription for the persistent module, including Firebase's cross-tab

@@ -94,6 +94,38 @@ test('signed-out direct links keep the destination query and fragment through lo
   assert.equal(h.mounts.length, 0);
 });
 
+test('friendly Pages boot and SPA navigation use a fixed template/module while retaining actual history', async () => {
+  const destination = '/conteudos/codigo-de-vestimenta?from=direct#section-test';
+  const direct = await createRouterHarness({ initialURL: `https://portal.test${destination}` });
+  assert.equal(direct.mounts[0].name, './pages.js');
+  assert.equal(direct.scope.location.pathname, '/conteudos/codigo-de-vestimenta');
+  assert.equal(direct.router.routeAllowed('/conteudos/a/b', direct.context.user), false);
+  assert.equal(direct.router.routeAllowed('/conteudos/codigo-de-vestimenta', null), false);
+  const h = await createRouterHarness();
+  h.page('/pages.html', { styles: ['./css/pages.css'] });
+  assert.equal(await h.router.navigate(destination), true);
+  assert.equal(new URL(h.requests.at(-1).url).pathname, '/pages.html');
+  assert.equal(h.scope.location.pathname, '/conteudos/codigo-de-vestimenta');
+  assert.equal(h.scope.location.hash, '#section-test');
+  assert.equal(h.resources.at(-1).href, 'https://portal.test/css/pages.css');
+  const anchor = new Node('a', h.doc, { href: './dashboard.html' });
+  assert.equal(h.router.navigationURL(new TestEvent('click', { target: anchor })).pathname, '/dashboard.html');
+  const fragment = h.click('#section-next'); await drain();
+  assert.equal(fragment.defaultPrevented, true, 'base-displaced fragments stay within the actual page');
+  assert.equal(h.location.pathname, '/conteudos/codigo-de-vestimenta');
+  assert.equal(h.scope.location.hash, '#section-next');
+  await h.router.navigate('/page-editor.html?id=test');
+  h.history.back(); await drain();
+  assert.equal(h.scope.location.pathname, '/conteudos/codigo-de-vestimenta');
+  h.history.forward(); await drain();
+  assert.equal(h.scope.location.pathname, '/page-editor.html');
+  assert.equal(h.doc.baseURI, 'https://portal.test/', 'self base remains stable across later native traversals');
+  assert.equal(h.router.navigationURL(new TestEvent('click', { target: new Node('a', h.doc, { href: '/conteudos/a/b' }) })), null);
+  assert.equal(await h.router.navigate('https://outside.test/conteudos/valid'), false);
+  const anonymous = await createRouterHarness({ initialURL: `https://portal.test${destination}`, user: null });
+  assert.equal(anonymous.location.redirect, `/login.html?reason=session&next=${encodeURIComponent(destination)}`);
+});
+
 test('late loaders reject promptly, timers stop, and stale private assets are revoked on dispose', async () => {
   const h = await createRouterHarness();
   const pending = deferred(), asset = deferred();
@@ -111,6 +143,57 @@ test('late loaders reject promptly, timers stop, and stale private assets are re
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(revoked, ['blob:late']);
   assert.equal(fired, false);
+});
+
+test('after leaving a Pages alias, repaired fragments do not consult dirty leave guards or discard UI', async () => {
+  const h = await createRouterHarness();
+  await h.router.navigate('/conteudos/guia');
+  await h.router.navigate('/page-editor.html?id=retained');
+  const page = h.scope, mounts = h.mounts.length, requests = h.requests.length;
+  const calls = { page: 0, ui: 0, discard: 0, close: 0 };
+  page.beforeLeave(() => { calls.page++; return false; });
+  h.context.canLeavePageUI = () => { calls.ui++; return false; };
+  h.context.commitPageLeaveUI = () => { calls.discard++; return false; };
+  h.context.closePageDialogs = () => { calls.close++; };
+  const event = h.click('#main-content'); await drain();
+  assert.equal(event.defaultPrevented, true, 'only repair the base-displaced native fragment');
+  assert.equal(h.scope.location.pathname, '/page-editor.html');
+  assert.equal(h.scope.location.search, '?id=retained');
+  assert.equal(h.scope.location.hash, '#main-content');
+  assert.deepEqual(calls, { page: 0, ui: 0, discard: 0, close: 0 });
+  assert.equal(h.doc.activeElement, h.doc.getElementById('main-content'));
+  assert.equal(h.scope, page); assert.equal(page.active, true);
+  assert.equal(h.mounts.length, mounts); assert.equal(h.requests.length, requests);
+  const entries = h.entries.length;
+  h.click('#main-content'); await drain();
+  assert.equal(h.entries.length, entries, 'repeating the fragment must not duplicate history');
+  h.click('/page-editor.html?id=another#main-content'); await drain();
+  assert.equal(calls.page, 1, 'real same-page query changes still consult dirty guards');
+  assert.equal(h.scope.location.search, '?id=retained');
+  assert.equal(await h.router.navigate('/dashboard.html'), false, 'cross-page navigation remains guarded');
+  assert.equal(calls.page, 2);
+});
+
+test('after leaving a Pages alias, a repaired skip link focuses immediately while a mutation stays pending', async () => {
+  const h = await createRouterHarness();
+  await h.router.navigate('/conteudos/guia');
+  await h.router.navigate('/page-editor.html?id=busy');
+  const page = h.scope, saving = deferred();
+  const request = page.bindAPI({ fetchAPI: () => saving.promise }).fetchAPI('/api/pages/busy/draft', { method: 'PUT' });
+  const anchor = new Node('a', h.doc, { href: '#main-content' }); anchor.focus();
+  try {
+    assert.equal(page.busy, true);
+    h.click('#main-content'); await drain();
+    assert.equal(page.location.hash, '#main-content');
+    assert.equal(h.doc.activeElement, h.doc.getElementById('main-content'), 'focus must not await page.ready()/the pending save');
+    assert.equal(page.busy, true, 'the originating mutation remains pending');
+    assert.equal(h.scope, page); assert.equal(page.active, true);
+    h.click('/page-editor.html?id=other'); await drain();
+    assert.equal(page.location.search, '?id=busy', 'query changes remain blocked by the pending mutation');
+    assert.equal(await h.router.navigate('/dashboard.html'), false);
+    await h.router.requestLogout(); assert.equal(h.context.loggedOut, undefined);
+  } finally { saving.resolve({ saved: true }); await request; }
+  assert.equal(page.busy, false);
 });
 
 test('pending mutations block clicks, logout and Back, and duplicate writes never reach the API', async () => {

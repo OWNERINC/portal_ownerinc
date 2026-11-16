@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createPagesDatabaseHarness, cargoA } from '../database/check-pages.mjs';
 import { createPagesMediaFixtures } from '../helpers/pages-media-fixtures.mjs';
-import { pagesBrowserContext, pagesBrowserReady, pagesBrowserReflow, pagesEditorPageProperties, pagesEditorInsert, pagesEditorOrganize } from '../helpers/pages-browser.mjs';
+import { pagesBrowserContext, pagesBrowserReady, pagesBrowserReflow, pagesEditorPageProperties, pagesEditorInsert, pagesEditorOrganize, pagesEditorPreview } from '../helpers/pages-browser.mjs';
 
 for (const variable of ['PLAYWRIGHT_MODULE_PATH', 'AXE_MODULE_PATH', 'PGLITE_MODULE_PATH']) {
   if (!process.env[variable]) throw new Error(`Set external ${variable}; no production access is used`);
@@ -35,7 +35,17 @@ async function saveUI(page, id) {
   await page.getByRole('button', { name: /Salvar rascunho/i }).click();
   const saved = await response;
   assert.equal(saved.status(), 200, await saved.text());
+  await pagesEditorPageProperties(page);
   await page.getByText(/^Salvo$/).waitFor({ state: 'visible' });
+}
+
+async function advancedControls(page, legacy = false) {
+  const advanced = page.locator('.pages-inspector-advanced');
+  if (!await advanced.evaluate(node => node.open)) await advanced.locator(':scope > summary').click();
+  if (legacy) {
+    const presets = page.locator('.pages-legacy-presentation');
+    if (!await presets.evaluate(node => node.open)) await presets.locator(':scope > summary').click();
+  }
 }
 
 try {
@@ -81,14 +91,24 @@ try {
   const firstRow = editor.page.locator('.pages-editor-row').first();
   const leftColumn = await firstRow.locator('[data-column-id]').nth(0).getAttribute('data-column-id');
   const rightColumn = await firstRow.locator('[data-column-id]').nth(1).getAttribute('data-column-id');
+  await advancedControls(editor.page);
   await editor.page.getByRole('combobox', { name: 'Coluna de destino', exact: true }).selectOption(rightColumn);
   await editor.page.getByRole('button', { name: 'Mover para destino', exact: true }).click();
   await editor.page.locator(`[data-column-id="${rightColumn}"] [data-block-id="${firstBlockId}"]`).waitFor({ state: 'visible' });
   assert.equal(await firstRich.evaluate(node => node === globalThis.__originalPilotEditor), true, 'column movement retains the actual ProseMirror DOM instance');
   await firstRich.click();
   await firstRich.press('Control+z');
-  assert.doesNotMatch(await firstRich.innerText(), /MARCADOR-UNDO-PILOTO/, 'text undo history survives layout and movement');
+  await editor.page.locator(`[data-column-id="${leftColumn}"] [data-block-id="${firstBlockId}"]`).waitFor({ state: 'visible' });
+  assert.match(await firstRich.innerText(), /MARCADOR-UNDO-PILOTO/, 'global undo reverses the move before older text');
+  await firstRich.press('Control+z');
+  assert.equal(await editor.page.getByRole('combobox', { name: /Colunas da linha/ }).first().inputValue(), 'single');
+  await firstRich.press('Control+z');
+  assert.doesNotMatch(await firstRich.innerText(), /MARCADOR-UNDO-PILOTO/, 'one timeline preserves text history across layout and movement');
+  await firstRich.press('Control+Shift+z');
+  await firstRich.press('Control+Shift+z');
+  assert.equal(await firstRich.evaluate(node => node === globalThis.__originalPilotEditor), true, 'global undo/redo retains the actual PM root');
   const proseBeforeDrag = await firstRich.innerText();
+  await advancedControls(editor.page);
   await editor.page.getByRole('combobox', { name: 'Coluna de destino', exact: true }).selectOption(leftColumn);
   await editor.page.getByRole('button', { name: 'Mover para destino', exact: true }).click();
   const handle = editor.page.locator(`[data-block-id="${firstBlockId}"] .pages-drag-handle`);
@@ -109,7 +129,9 @@ try {
   assert.equal(await firstRich.evaluate(node => node === globalThis.__originalPilotEditor), true, 'pointer movement retains the editor instance');
   assert.equal(await firstRich.innerText(), proseBeforeDrag, 'block drag must not drop serialized wrapper/buttons into ProseMirror text');
   await editor.page.getByRole('combobox', { name: /Colunas da linha/ }).first().selectOption('single');
+  await editor.page.getByRole('dialog', { name: 'Unir colunas?', exact: true }).getByRole('button', { name: 'Unir colunas', exact: true }).click();
   await editor.page.locator(`[data-column-id="${leftColumn}"] [data-block-id="${firstBlockId}"]`).waitFor({ state: 'visible' });
+  await advancedControls(editor.page, true);
   await editor.page.getByRole('combobox', { name: 'Fonte', exact: true }).selectOption('source-serif-4');
   await pagesEditorInsert(editor.page, 'Adicionar destaque');
   const callout = editor.page.locator('.pages-editor-block[data-block-type="callout"] .ProseMirror');
@@ -121,7 +143,8 @@ try {
 
   // Every accepted format enters through the actual editor and authenticated API.
   for (const [kind, name, mime] of [['gif', 'synthetic.gif', 'image/gif'], ['audio', 'synthetic.mp3', 'audio/mpeg'], ['video', 'synthetic.mp4', 'video/mp4']]) {
-    const input = editor.page.locator(`input[type="file"][accept*="${mime}"]`);
+    const input = editor.page.getByLabel('Selecionar imagem estática ou mídia GIF, MP3, MP4', { exact: true });
+    assert.ok((await input.getAttribute('accept')).includes(mime), `${kind}: explicit supported MIME`);
     assert.equal(await input.count(), 1, `${kind}: explicit upload control`);
     const response = editor.page.waitForResponse(value => value.request().method() === 'POST' && new URL(value.url()).pathname === `/api/pages/${id}/media`);
     await input.setInputFiles({ name, mimeType: mime, buffer: fixtures.files[name].buffer });
@@ -138,6 +161,7 @@ try {
   }
   // Composition clones the document, but a retained media figure must resolve
   // the current block when it later builds a caption track.
+  await advancedControls(editor.page, true);
   await editor.page.getByRole('combobox', { name: 'Escala', exact: true }).selectOption('large');
   const retainedVideo = editor.page.locator('.pages-editor-block[data-block-type="video"]');
   const captionsField = editor.page.getByRole('textbox', { name: 'Legendas sincronizadas JSON', exact: true });
@@ -170,16 +194,17 @@ try {
   await pagesBrowserReady(editor.page);
   await pagesEditorPageProperties(editor.page);
   await editor.page.getByRole('textbox', { name: /^Título$/ }).first().waitFor({ state: 'visible' });
-  await editor.page.getByRole('button', { name: /Prévia mobile/i }).click();
+  await pagesEditorPreview(editor.page,'mobile');
   await editor.page.locator('.pages-document').waitFor({ state: 'visible' });
   await pagesBrowserReflow(editor.page, AxeBuilder, 'pilot-mobile-preview');
   await editor.page.screenshot({ path: join(output, 'pilot-preview-mobile.png'), fullPage: true });
   await editor.page.getByRole('button', { name: /^Publicar$/ }).click();
   const dialog = editor.page.getByRole('dialog');
   await dialog.waitFor({ state: 'visible' });
-  assert.match(await dialog.innerText(), /Cargo sintético A/);
+  await dialog.getByRole('button', { name: /Visibilidade/ }).click();
+  assert.equal(await dialog.getByRole('checkbox', { name: 'Cargo sintético A', exact: true }).isChecked(), true);
   const published = editor.page.waitForResponse(value => value.request().method() === 'POST' && new URL(value.url()).pathname === `/api/pages/${id}/publish`);
-  await dialog.getByRole('button', { name: /Confirmar publicação/i }).click();
+  await dialog.getByRole('button', { name: 'Publicar página', exact: true }).click();
   assert.equal((await published).status(), 200);
   results.push({ scenario: 'shared mobile preview and explicit revision/cargo publication confirmation', pass: true });
   await editor.context.close();

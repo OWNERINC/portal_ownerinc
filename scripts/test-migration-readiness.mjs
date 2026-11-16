@@ -48,6 +48,7 @@ const nonEditorialMigrations = [
   '039_ethics_acceptances',
   '040_pages',
   '041_pages_media',
+  '042_pages_reference_fidelity',
 ];
 const omittedEditorialVersions = [
   '015_cms_editor',

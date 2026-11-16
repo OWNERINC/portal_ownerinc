@@ -82,6 +82,31 @@ function assertPurged(h, previous, overlay) {
   assert.equal(h.doc.body.classList.contains('modal-open'), false);
 }
 
+test('Task7 review: a base-repaired fragment preserves an open dialog without leave/discard/close; query navigation stays guarded', async () => {
+  const h = await createRouterHarness({ realUI: true });
+  await h.router.navigate('/conteudos/guia');
+  await h.router.navigate('/profile.html');
+  const overlay = privateDialog(h), page = h.scope;
+  let allowed = false, preflights = 0, discards = 0;
+  h.context.setDialogCloseGuard(overlay.dialog, () => true, {
+    canLeave() { preflights++; return allowed; },
+    discard() { discards++; return true; },
+  });
+  h.click('#main-content'); await drain();
+  assert.equal(page.location.hash, '#main-content');
+  assert.equal(preflights, 0); assert.equal(discards, 0);
+  assert.equal(overlay.dialog.classList.contains('hidden'), false);
+  assert.equal(h.doc.body.classList.contains('modal-open'), true);
+  h.click('/profile.html?tab=changed#main-content'); await drain();
+  assert.equal(preflights, 1); assert.equal(discards, 0);
+  assert.equal(page.location.search, '');
+  allowed = true;
+  h.click('/profile.html?tab=changed#main-content'); await drain();
+  assert.equal(preflights, 2); assert.equal(discards, 1, 'a real query change still commits dialog discard');
+  assert.equal(page.location.search, '?tab=changed');
+  assert.equal(overlay.dialog.classList.contains('hidden'), true, 'a real query change still closes the dialog');
+});
+
 test('review 1/2: authoritative revocation purges Admin even when destination HTML fails first or stays pending', async () => {
   for (const order of ['html-first', 'auth-first', 'destination-denied']) {
     const h = await createRouterHarness({ realUI: true });

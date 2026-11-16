@@ -82,3 +82,11 @@ test('native recovery executes the unique receiver SQL rather than an independen
   }
   assert.match(script, /catch \(error\) \{ await client\.query\('ROLLBACK'\); throw error; \}/);
 });
+
+test('native recovery covers pre-042 and post-042 restore without changing the production receiver', async () => {
+  const script = await readFile('scripts/test-pages-recovery.mjs', 'utf8');
+  for (const label of ['042_pages_reference_fidelity', 'before-reference-fidelity', 'pre-042 restore', '040/041/042 recovery']) {
+    assert.ok(script.includes(label), `native recovery coverage: ${label}`);
+  }
+  assert.match(script, /await assert\.rejects\(verifyMigrations\(\), \/Unexpected migration ledger\//);
+});

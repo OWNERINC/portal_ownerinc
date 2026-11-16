@@ -5,6 +5,15 @@ import { readFile } from 'node:fs/promises';
 const read = path => readFile(new URL(`../../${path}`, import.meta.url), 'utf8');
 const pinnedImage = 'nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752';
 
+test('friendly aliases serve only the Pages shell and invalid prefixes never fall through to index', async () => {
+  const config = await read('nginx/nginx.conf');
+  assert.match(config, /location ~ "\^\/conteudos\/\[a-z0-9\]\+\(-\[a-z0-9\]\+\)\*\$" \{\s*try_files \/pages\.html =404;\s*\}/);
+  assert.match(config, /location \/conteudos\/ \{\s*return 404;\s*\}/);
+  assert.doesNotMatch(config, /location \^~ \/conteudos\//);
+  assert.match(config, /location \/api\/ \{[\s\S]*?proxy_pass \$api_upstream;/);
+  assert.match(config, /location \^~ \/uploads\/ \{[\s\S]*?proxy_pass \$api_upstream;/);
+});
+
 test('Pages upload location quotes its entire unchanged quantified regex for the Nginx parser', async () => {
   const config = await read('nginx/nginx.conf');
   const locations = [...config.matchAll(/^\s*location ~ "([^"]*\{36\}[^"]*)" \{/gm)];

@@ -2,7 +2,18 @@
 
 ## Estado e decisão já recebida
 
-**Proposta para revisão; nenhuma implementação desta correção foi iniciada.**
+**Contrato aprovado em 11/11/2026; nenhuma implementação desta correção foi iniciada.**
+
+O usuário escolheu **Aprovar contrato e seguir para o plano (recomendado)** no
+formulário de revisão, sem observações adicionais. Os comportamentos abaixo,
+originalmente apresentados como propostas, integram o contrato aprovado.
+Plano: `docs/superpowers/plans/2026-11-11-pages-editor-reference-fidelity.md`.
+
+Na revisão da primeira tarefa, o usuário também aprovou **Corrigir o plano para
+seguir o SVG (recomendado)**: acrescentar composição lateral restrita com áudio
+de 260 px, os ícones efetivamente desenhados e fixtures visual/funcional separadas.
+Essa precisão não autoriza canvas livre, alteração estética ou ocultação de blocos
+na comparação. Não houve mudança no código de produto antes dessa decisão.
 
 Em 11/11/2026, o usuário contestou a fidelidade do frontend e das funções
 publicadas. Após comparação com os originais, confirmou **Reproduzir visual e
@@ -121,6 +132,8 @@ e publicação refletem operações reais.
   propriedades reais do bloco; tags locais são distintas das tags da página.
 - Largura usa composição de linha inteira/meia linha, com consequências claras
   para os vizinhos. Não cria canvas livre ou valores percentuais arbitrários.
+  A composição FAQ/áudio tem também o preset lateral restrito da referência:
+  conteúdo flexível à esquerda, cartão de 260 px à direita e empilhamento mobile.
 - Proposta para os ícones contextuais ambíguos: marca-texto modifica realce de
   fundo do texto selecionado; paleta modifica sua cor de texto.
 - Cores personalizadas aceitam apenas hexadecimal sólido normalizado. Nunca
@@ -195,6 +208,8 @@ estritos. IDs, referências de mídia e aparência anterior são condições obr
 1. Criar fixture sintética isolada equivalente ao guia da referência: textos,
    seções, seleção, estilo, estado salvo e posição de rolagem comparáveis. Nunca
    substituir documento de usuário para fabricar uma captura parecida.
+   Uma fixture funcional separada cobre os blocos não retratados naquele canvas;
+   não ocultar conteúdo presente apenas para melhorar o resultado da comparação.
 2. Comparar quatro estados desktop 1600×1160, Conteúdo mobile 390×820 e espécimes
    de botões 1600×480. Carregar fontes, fixar escala/estado/foco e capturar cada
    estado de forma independente, sem herdar alterações de outro cenário.

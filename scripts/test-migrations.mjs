@@ -58,6 +58,7 @@ const expectedVersions = [
   '039_ethics_acceptances',
   '040_pages',
   '041_pages_media',
+  '042_pages_reference_fidelity',
 ];
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
