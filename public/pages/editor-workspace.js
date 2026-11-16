@@ -94,9 +94,12 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
     const geometry = viewportGeometry({ ...view, available: viewport.clientWidth || 1044, height: surface.offsetHeight });
     surface.style.width = `${geometry.width}px`;
     surface.style.transform = `scale(${geometry.scale})`;
-    // The toolbar is unscaled. Reserve its actual height inside the scaled paper
-    // so it cannot cover the caret/text at 50% or when selecting a compact card.
-    surface.style.setProperty('--pages-context-space', `${44 / geometry.scale + 28}px`);
+    // Keep the established paper spacing when it already clears the toolbar.
+    // The toolbar is unscaled, anchored 16 paper pixels inside the block: reserve
+    // its measured border-box plus a real 4px gap even at 50% or after wrapping.
+    const toolbarHeight = textTools?.offsetHeight || 44;
+    const contextSpace = Math.max(44 / geometry.scale + 28, (toolbarHeight + 4) / geometry.scale + 16);
+    surface.style.setProperty('--pages-context-space', `${contextSpace}px`);
     scaled.style.width = `${geometry.scaledWidth}px`;
     scaled.style.height = `${surface.offsetHeight * geometry.scale}px`;
     positionTextTools();
@@ -270,7 +273,13 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
     setViewport,
     setHistory({ canUndo, canRedo }) { undo.disabled = !canUndo; redo.disabled = !canRedo; },
     setModelBusy(value) { model.disabled = Boolean(value); },
-    placeContextTools(node, blockNode) { textBlockNode?.classList.remove('has-context-tools'); extraFormat.replaceChildren(); textTools = node; formatOrder = node ? [...node.children] : []; textBlockNode = blockNode; blockPanel.dataset.richText = String(!!node); blockNode?.classList.add('has-context-tools'); relocateTextTools(); measureViewport(); },
+    placeContextTools(node, blockNode) {
+      if (textTools) viewportObserver?.unobserve(textTools);
+      textBlockNode?.classList.remove('has-context-tools'); extraFormat.replaceChildren(); textTools = node; formatOrder = node ? [...node.children] : []; textBlockNode = blockNode; blockPanel.dataset.richText = String(!!node); blockNode?.classList.add('has-context-tools');
+      relocateTextTools();
+      if (textTools) viewportObserver?.observe(textTools);
+      measureViewport();
+    },
     focusText() {
       if (restoringFocus) return;
       openInspector('block'); root.dataset.inspectorSection = 'content';

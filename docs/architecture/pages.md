@@ -25,6 +25,11 @@ foco. FAQ, público e opções avançadas não participam desse controlador.
 O caso local `node tests/visual/pages-editor-controls.mjs menus` exige
 `PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e um diretório novo em
 `PAGES_CONTROLS_OUTPUT`; usa apenas identidade e banco sintéticos, sem produção.
+O espaço do texto no canvas preserva a base existente e cresce quando a altura
+medida da barra não escalada exige mais folga: âncora de 16 px do papel e pelo
+menos 4 px de separação física, inclusive a 50%. ResizeObserver acompanha a barra
+atual e libera a anterior. Durante arraste de composição, a barra permanece
+visível, mas cede hit-testing aos destinos; o término restaura os controles.
 
 A estrutura conserva `onReorderSection({sectionId,beforeSectionId})` e os UUIDs do
 documento. A alça ocupa 44 × 44 px reais; Posição e os botões Subir/Descer têm linha

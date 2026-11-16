@@ -99,6 +99,8 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
 #page-editor-root .pages-audience { padding: 8px; grid-template-columns: minmax(0,1fr); }
 #page-editor-root .pages-format-tools { position: relative; display: flex; align-items: center; flex-wrap: wrap; padding: 4px; margin: 0 0 8px; width: fit-content; max-width: 100%; gap: 4px; background: var(--editor-paper); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-sm); font: 400 .875rem/1.5 var(--font-sans); color: var(--primary); text-align: start; }
 #page-editor-root .pages-format-tools .pages-toolbar-group { gap: 2px; }
+/* Keep controls visible, but do not intercept cross-column layout drops. */
+#page-editor-root[data-layout-dragging=true] .pages-format-tools { pointer-events: none; }
 #page-editor-root .pages-format-tools .btn { border: 0; padding: 8px; min-width: 44px; background: transparent; }
 #page-editor-root .pages-format-tools [data-mark=strong] { font-weight: 800; }
 #page-editor-root .pages-format-tools [data-mark=em] { font-style: italic; }

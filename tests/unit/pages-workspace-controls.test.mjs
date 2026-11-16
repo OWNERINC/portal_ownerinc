@@ -71,8 +71,15 @@ async function structureHarness(t) {
   const window = new FixtureNode('window', document);
   window.matchMedia = () => Object.assign(new FixtureNode('media', document), { matches: false });
   const root = document.createElement('div'); document.body.append(root);
-  const calls = [], sortables = []; let allowed = true;
-  const context = vm.createContext({ document, window, applyBlockStyle() {}, restoreVisibleFocus() {},
+  const calls = [], sortables = [], observers = []; let allowed = true;
+  class ResizeObserver {
+    nodes = new Set();
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    observe(node) { this.nodes.add(node); }
+    unobserve(node) { this.nodes.delete(node); }
+    disconnect() { this.nodes.clear(); }
+  }
+  const context = vm.createContext({ document, window, ResizeObserver, applyBlockStyle() {}, restoreVisibleFocus() {},
     openEditorPanel({ content }) { const dialog = document.createElement('dialog'); document.body.append(dialog); dialog.append(content); return { close() { dialog.remove(); } }; },
   });
   for (const [file, names] of [['dom','el,button'], ['editor-workspace','createEditorWorkspace']]) {
@@ -87,8 +94,34 @@ async function structureHarness(t) {
     onReorderSection(value) { calls.push(JSON.parse(JSON.stringify(value))); return true; },
   });
   workspace.refresh(doc, true); workspace.rebuildStructure(doc); t.after(() => workspace.dispose());
-  return { workspace, root, document, doc, calls, sortables, allow(value) { allowed = value; } };
+  return { workspace, root, document, doc, calls, sortables, observers, allow(value) { allowed = value; } };
 }
+
+test('context clearance reserves measured unscaled toolbar height at every zoom and device', async t => {
+  const h = await structureHarness(t);
+  const tools = h.document.createElement('div'), block = h.document.createElement('div');
+  h.root.append(block);
+  const surface = h.root.querySelector('.pages-editor-surface');
+  for (const height of [52, 96]) {
+    tools.offsetHeight = height;
+    h.workspace.placeContextTools(tools, block);
+    for (const device of ['desktop', 'mobile']) for (const zoom of [50,75,100,125,150]) {
+      h.workspace.setViewport({ device, zoom });
+      const reserved = parseFloat(surface.style.getPropertyValue('--pages-context-space'));
+      assert.equal(reserved, Math.max(44 / (zoom / 100) + 28, (height + 4) / (zoom / 100) + 16), `${device}/${zoom}: measured ${height}px toolbar`);
+      assert.ok(reserved * zoom / 100 > height + 16 * zoom / 100, 'text clears toolbar anchored 16 scaled pixels inside block');
+    }
+  }
+  const observer = h.observers.find(item => item.nodes.has(tools));
+  assert.ok(observer, 'toolbar metrics are observed, not assumed stable after mount');
+  h.workspace.setViewport({ device: 'desktop', zoom: 50 });
+  tools.offsetHeight = 120; observer.callback();
+  assert.equal(parseFloat(surface.style.getPropertyValue('--pages-context-space')), 264);
+  h.workspace.placeContextTools(null, null);
+  assert.equal(observer.nodes.has(tools), false, 'retired toolbar is unobserved');
+  h.workspace.placeContextTools(tools, block); h.workspace.dispose();
+  assert.ok(h.observers.every(item => item.nodes.size === 0), 'disposal disconnects all measurement observers');
+});
 
 test('organizing state travels with the structure through dialog reparenting and rebuilds', async t => {
   const h = await structureHarness(t), structure = h.workspace.structure;

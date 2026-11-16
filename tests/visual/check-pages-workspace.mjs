@@ -36,7 +36,7 @@ try{
   const introPM=p.locator(`[data-block-id="${ids.introductionBlock}"] .ProseMirror`);await introPM.click();await introPM.press('Control+Home');await introPM.press('ArrowRight');
   const draft=await p.evaluate(()=>JSON.stringify(__referenceDraft()));
   const unscaledToolbarWidth=Math.round((await box(p.locator('.pages-v2-viewport > .pages-format-tools'))).width);
-  await p.locator('.ProseMirror').first().evaluate(n=>{globalThis.pmIdentity={node:n,view:n.pmViewDesc};});
+  await p.locator('.ProseMirror').first().evaluate(n=>{globalThis.pmIdentity={node:n,view:n.pmViewDesc};globalThis.workspaceViews=[...document.querySelectorAll('.ProseMirror')].map(node=>({node,view:node.pmViewDesc}));});
   const header=await box(p.locator('.pages-v2-header')),tools=await box(p.locator('.pages-v2-tools')),paper=await box(p.locator('.pages-editor-surface'));
   geometry.push({header,tools,paper});assert.equal(header.height,72);assert.equal(tools.height,56);assert.deepEqual(paper,{x:248,y:188,width:1044,height:944});
   assert.equal(await p.locator('.pages-v2-structure').evaluate(n=>n.clientWidth),219);
@@ -126,14 +126,19 @@ try{
     await p.getByRole('combobox',{name:'Zoom',exact:true}).selectOption(String(zoom));
     await p.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
     const daily=p.locator(`.pages-editor-block[data-block-id="${ids.dailyBlock}"]`),meeting=p.locator(`.pages-editor-block[data-block-id="${ids.meetingsBlock}"]`);
-    await meeting.scrollIntoViewIfNeeded();await daily.hover();
+    // Hover actual editable content, not the block's reserved toolbar area.
+    // The toolbar is a real pointer target, not a transparent hit extension.
+    await meeting.scrollIntoViewIfNeeded();await daily.locator('.ProseMirror h2').hover();
     await p.locator('.pages-v2-viewport').evaluate(n=>{n.scrollLeft=0;});
     const from=await box(daily.locator('.pages-drag-handle')),to=await box(meeting);
     const hit=await p.evaluate(({x,y})=>document.elementFromPoint(x,y)?.outerHTML,{x:from.x+from.width/2,y:from.y+from.height/2});
     geometry.push({dragWidth:width,dragDevice:device,dragZoom:zoom,from,to,hit});assert.match(hit,/pages-drag-handle/);
     // Sortable's fallback samples the physical pointer every 50 ms. Dwell over
     // the real destination for two samples before release; never invoke onEnd.
-    await p.mouse.move(from.x+from.width/2,from.y+from.height/2);await p.mouse.down();await p.mouse.move(to.x+30,to.y+to.height-8,{steps:24});await p.waitForTimeout(120);await p.mouse.up();
+    await p.mouse.move(from.x+from.width/2,from.y+from.height/2);await p.mouse.down();await p.mouse.move(to.x+30,to.y+to.height-8,{steps:24});
+    assert.deepEqual(await p.locator('.pages-v2-viewport > .pages-format-tools').evaluate(n=>{const s=getComputedStyle(n);return {pointerEvents:s.pointerEvents,visibility:s.visibility,opacity:s.opacity,height:n.offsetHeight};}),{pointerEvents:'none',visibility:'visible',opacity:'1',height:52},'drag yields hit-testing without hiding formatting controls');
+    await p.waitForTimeout(120);await p.mouse.up();
+    assert.equal(await p.locator('#page-editor-root').getAttribute('data-layout-dragging'),'false');
     try{await p.waitForFunction(({daily,meeting})=>{const blocks=__referenceDraft().sections.flatMap(s=>s.rows.flatMap(r=>r.columns));return blocks.some(c=>c.blocks.some(b=>b.id===daily)&&c.blocks.some(b=>b.id===meeting));},{daily:ids.dailyBlock,meeting:ids.meetingsBlock},{timeout:5000});}
     catch(error){geometry.push({events:await p.evaluate(()=>dragEvents)});await p.screenshot({path:join(output,`failed-drop-${zoom}.png`)});throw Error(`Drop failed at ${zoom}%: ${error.message}`);}
     await p.keyboard.press('Control+z');assert.equal(await p.evaluate(()=>JSON.stringify(__referenceDraft())),draft);
@@ -155,8 +160,11 @@ try{
     assert.equal(await daily.locator('.pages-block-header').evaluate(n=>getComputedStyle(n).opacity),'1','keyboard focus reveals the real target without hover');
     await p.keyboard.press('Enter');assert.equal(await daily.getAttribute('class').then(value=>value.includes('is-selected')),true);
     const cardText=await box(daily.locator('.ProseMirror h2')),cardTools=await box(p.locator('.pages-v2-viewport > .pages-format-tools'));
+    geometry.push({cardWidth:width,cardDevice:device,cardZoom:zoom,cardText,cardTools});
     assert.ok(cardText.y>=cardTools.y+cardTools.height,'compact card text also clears the unscaled toolbar');
+    if(zoom===50)await p.screenshot({path:join(output,`caret-clearance-${width}-${device}-${zoom}.png`)});
     assert.equal(await p.evaluate(()=>JSON.stringify(__referenceDraft())),draft);
+    assert.equal(await p.locator('.ProseMirror').evaluateAll(nodes=>nodes.length===workspaceViews.length&&nodes.every((node,i)=>node===workspaceViews[i].node&&node.pmViewDesc===workspaceViews[i].view)),true,'all PM nodes and views survive drop, undo, selection and zoom');
   }
   results.push('actual pointer cross-column drop + global undo + caret selection at five zooms, both devices and 1366/1600; unscaled toolbar clears text; keyboard-only targets');
   await p.getByRole('combobox',{name:'Dispositivo',exact:true}).selectOption('desktop');

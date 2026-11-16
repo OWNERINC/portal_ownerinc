@@ -385,12 +385,14 @@ test('block drag uses pointer fallback and its scoped PM guard cannot serialize 
   const ordinary = new TestEvent('drop');
   assert.equal(guard(null, ordinary), false, 'ordinary rich-text drops retain PM behavior');
   sortable.options.onStart(); assert.equal(editor.isLayoutDragging(), true);
+  assert.equal(h.root.dataset.layoutDragging, 'true', 'visible toolbar yields pointer hit-testing during block drag');
   let prevented = 0, stopped = 0;
   assert.equal(guard(null, { preventDefault() { prevented++; }, stopPropagation() { stopped++; } }), true);
   assert.equal(prevented, 1); assert.equal(stopped, 1);
   const block = h.state.document.sections[0].rows[0].columns[0].blocks[0];
   sortable.options.onEnd({ item: { dataset: { blockId: block.id } }, to: sortable.host });
   assert.equal(editor.isLayoutDragging(), false); assert.equal(guard(null, ordinary), false);
+  assert.equal(h.root.dataset.layoutDragging, 'false', 'toolbar hit-testing restored after drop');
   assert.equal(JSON.stringify(h.state.document), before, 'no-op block drop must not alter prose, schema version or dirty state');
   assert.equal(editor.destroyed, 0, 'keyed PM instance survives');
 });

@@ -53,7 +53,8 @@ export function mountPageEditor(page) {
   page.listen(window, 'beforeunload', event => {
     if (state?.dirty || state?.pending || state?.blocked || writePending || uploadRetry || pendingPlacement || publishUncertain()) { event.preventDefault(); event.returnValue = ''; }
   });
-  function destroyBlocks() { layoutDragging = false; sortables.forEach(item => item.destroy()); sortables = []; blockNodes.forEach(item => item.dispose?.()); blockNodes.clear(); richEditors.forEach(editor => editor.destroy()); richEditors.clear(); blockDisposers.forEach(fn => fn()); blockDisposers = []; }
+  function setLayoutDragging(value) { layoutDragging = value; root.dataset.layoutDragging = String(value); }
+  function destroyBlocks() { setLayoutDragging(false); sortables.forEach(item => item.destroy()); sortables = []; blockNodes.forEach(item => item.dispose?.()); blockNodes.clear(); richEditors.forEach(editor => editor.destroy()); richEditors.clear(); blockDisposers.forEach(fn => fn()); blockDisposers = []; }
   page.cleanup(() => { disposed = true; modelController?.dispose(); saveControl?.dispose(); inspectorUI?.dispose(); nativeFields.clear(); nativeCompositions.clear(); workspaceUI?.dispose(); editorPanel?.close(false); previewDispose?.(); destroyBlocks(); uploadRetry = null; document.body.classList.remove('pages-editor-active'); });
   function update() {
     if (!live() || !state || !status) return;
@@ -434,13 +435,13 @@ export function mountPageEditor(page) {
           if (editable) sortables.push(createSortable(host, { group: 'pages-blocks', draggable: '.pages-editor-block', handle: '.pages-drag-handle', filter: 'input,textarea,select,.ProseMirror', preventOnFilter: false, animation: 0, emptyInsertThreshold: 30,
             forceFallback: true, fallbackOnBody: true,
             onMove: () => canEditContent() && !historyBlocked() && !state.blocked,
-            onStart() { layoutDragging = true; },
+            onStart() { setLayoutDragging(true); },
             onEnd(event) {
               try {
                 const blockId = event.item.dataset.blockId, columnId = event.to.dataset.columnId, beforeId = event.item.nextElementSibling?.dataset.blockId;
                 if (!composition({ type: 'move', blockId, columnId, ...(beforeId ? { beforeId } : {}) }, 'Bloco movido por arraste.')) renderBlocks();
                 activeId = blockId; select(blockId); editorHost.querySelector(`[data-block-id="${blockId}"] .pages-select-block`)?.focus();
-              } finally { layoutDragging = false; }
+              } finally { setLayoutDragging(false); }
             } }));
         }
         rowNode.append(grid); group.append(rowNode);
@@ -773,7 +774,7 @@ export function mountPageEditor(page) {
       templates:availableTemplates,onUndo:()=>historyAction('undo'),onRedo:()=>historyAction('redo'),onModel:openModel,
       onInsert: openInsertion, onStyle: openStyle, onSelect: select, onSection: () => composition({ type: 'section' }),
       sortableFactory: createSortable, canReorder: () => canEditContent() && !historyBlocked() && !state.blocked,
-      onLayoutDragging: value => { layoutDragging = value; },
+      onLayoutDragging: setLayoutDragging,
       onReorderSection: command => applyComposition(reorderSection(state.document, command), 'Seção movida.') });
     modelController?.dispose();
     modelController=createModelDraftController({newId,create:payload=>api.create(payload),canAct:()=>live()&&canEditContent()&&!historyBlocked()&&!state.blocked,
