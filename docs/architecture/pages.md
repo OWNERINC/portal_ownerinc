@@ -95,6 +95,14 @@ textuais têm 44 px e fonte de 16 px no compacto; checkboxes mantêm indicadores
 18–20 px em linhas de 44 px, sem herdar padding/altura de campo textual. Dispositivo
 e Zoom usam suas classes próprias também quando movidos para Mais ações.
 
+O listener `focusin` do corpo também pertence à instância aberta e é removido no
+fechamento/cleanup; conteúdo reutilizado da estrutura não acumula scrolls ao reabrir.
+Hexadecimal e tags do inspector têm alertas e associações `aria-describedby`
+independentes, com `aria-invalid` próprio. Corrigir um não limpa o erro do outro;
+os callbacks/transações existentes e a validação do documento continuam a autoridade.
+O grid da audiência do editor usa linhas `max-content`: nomes de cargo longos
+podem crescer sem invadir o label seguinte, conservando o scroller e alvo mínimo de 44 px.
+
 `node tests/visual/check-pages-controls.mjs overlays` usa o mesmo harness local e
 variáveis do caso `menus`, em 1366×768 e 320/390/768×768. Mede primeira frame e frames
 seguintes da âncora em aberturas repetidas, reflow, foco/IME/busy/erro/cleanup, campos,

@@ -48,6 +48,22 @@ por Chrome/PGlite. Aceite final das seis pranchas pertence à Task 18.
 
 ## Revisão editável de Pages (Task 15)
 
+### Regressão final dos controles (melhorias Task 10)
+
+Execute os casos `menus`, `structure`, `save`, `review`, `overlays`, `responsive`,
+`text-video`, `inspector` e `acceptance` serialmente pelo comando
+`node tests/visual/check-pages-controls.mjs <caso>`, cada um com pasta nova em
+`PAGES_CONTROLS_OUTPUT`. Use as instalações externas existentes via
+`PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e `AXE_MODULE_PATH` (responsive,
+review e acceptance). O último caso prepara SQL sintético **antes** da abertura:
+30 parágrafos longos e 62 cargos, 1366/768/390 px, teclado/clique externo com foco,
+axe A/AA nos estados abertos e três reaberturas da estrutura reutilizada. Registra
+incompletos axe separadamente, não como passes. As suítes amplas afetadas continuam
+um gate separado de `npm run verify`. O inventário A01–A18, referências, capturas e
+limites estão em `docs/reviews/2026-11-16-pages-controls-acceptance.md`; A18 está
+adiado pelo usuário, não entregue. Nenhum teste substitui aceite humano, Safari ou
+touch/teclado virtual/IME físicos.
+
 ### Inspector e formulários de mídia (melhorias Task 8)
 
 `node tests/visual/check-pages-controls.mjs inspector` usa `PGLITE_MODULE_PATH`,

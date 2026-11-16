@@ -208,9 +208,11 @@ export function createInspector({ document: doc, block, onAppearance, onReset, o
   const fillField=field('Fundo',fill); fillField.classList.add('pages-shared-fill');
   node.append(fillField,swatches,field('Cor de fundo personalizada',hex),feedback);
   const tags=el('input',{value:(block.tags||[]).join(', '),'aria-label':'Tags do bloco',maxlength:838});
+  const tagsFeedback=el('p',{id:`pages-inspector-${++panelSequence}-tags-error`,className:'pages-style-invalid',role:'alert'});
+  tags.setAttribute('aria-describedby',tagsFeedback.id);
   bindNative?.(tags,()=>{tags.value=(block.tags||[]).join(', ');},()=>!available,()=>!disposed&&node.isConnected);
-  tags.addEventListener('change',event=>{if(!current()||!available){tags.value=(block.tags||[]).join(', ');return;}const values=parseLocalTags(tags.value);if(!values){feedback.textContent='Use até 20 tags únicas, não vazias, de 40 caracteres.';tags.value=(block.tags||[]).join(', ');return;}if(onTags(values,nativeMeta(event))===false)tags.value=(block.tags||[]).join(', ');});
-  node.append(field('Tags',tags),control('Ícone',icons,'icon'));
+  tags.addEventListener('change',event=>{if(!current()||!available){tags.value=(block.tags||[]).join(', ');return;}const values=parseLocalTags(tags.value);tags.setAttribute('aria-invalid',String(!values));if(!values){tagsFeedback.textContent='Use até 20 tags únicas, não vazias, de 40 caracteres.';tags.value=(block.tags||[]).join(', ');return;}tagsFeedback.textContent='';if(onTags(values,nativeMeta(event))===false)tags.value=(block.tags||[]).join(', ');});
+  node.append(field('Tags',tags),tagsFeedback,control('Ícone',icons,'icon'));
   if(onReset)node.append(button(block.style?'Usar padrão da página — substituir cores e tipografia legadas':'Usar padrão da página para este bloco',()=>{if(current()&&available)onReset();},{className:'btn btn-ghost pages-reset-appearance',disabled:!available}));
   if(!available)node.append(el('p',{text:'Personalização v3 indisponível no servidor. Use os presets legados em Estilo.'}));
   node.append(el('p',{className:'pages-style-contrast',role:'status',text:contrastText(doc)}));

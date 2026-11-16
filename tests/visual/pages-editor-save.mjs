@@ -61,6 +61,7 @@ export async function checkSave({ h, browser, output, results, errors }) {
       await save.click(); await entered.promise;
       await p.locator('#page-editor-root[data-save-state=saving]').waitFor();
       assert.match(await status.innerText(), /Salvando/); assert.equal(await save.isDisabled(), true);
+      await p.screenshot({ path: join(output, `${width}-busy.png`) });
       await reachable(); await p.keyboard.press('Control+s'); await save.evaluate(n => n.click());
       assert.equal(calls.length, 1, 'double activation and Mod+S cannot send twice');
       await title.fill(`Mais recente ${width}`);

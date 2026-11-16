@@ -80,13 +80,15 @@ export function openEditorPanel({ page, title, anchor, content, actions, anchorO
   const close = (restore = true) => {
     if (closed || (restore && composing)) return;
     closed = true; stopViewport?.(); anchorObserver?.disconnect(); window.removeEventListener('popstate', onHistory); window.removeEventListener('scroll', position, true);
+    content.removeEventListener('focusin', onContentFocus);
     dialog.close(); dialog.remove();
     if (restore && page.active && visibleFocusTarget(opener)) opener.focus({ preventScroll: true });
   };
   const onHistory = () => close();
   const dismiss = button('×', () => close(), { className: 'btn btn-ghost pages-icon-button', 'aria-label': `Fechar ${title}` });
   content.classList.add('pages-panel-body');
-  content.addEventListener('focusin', event => event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+  const onContentFocus = event => event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  content.addEventListener('focusin', onContentFocus);
   dialog.append(el('div', { className: 'pages-panel-heading' }, el('h2', { text: title }), dismiss), content);
   if (actions) dialog.append(actions);
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });

@@ -102,7 +102,7 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
 #page-editor-root .pages-toolbar-destination { order: 3; flex: none; }
 #page-editor-root .pages-v2-inspector .pages-metadata { padding: 0; margin: 0 0 20px; border: 0; grid-template-columns: minmax(0,1fr); gap: 20px; }
 #page-editor-root .pages-v2-inspector .pages-secondary-actions { display: grid; gap: 12px; }
-#page-editor-root .pages-audience { padding: 8px; grid-template-columns: minmax(0,1fr); }
+#page-editor-root .pages-audience { padding: 8px; grid-template-columns: minmax(0,1fr); grid-auto-rows: max-content; }
 #page-editor-root .pages-format-tools { position: relative; display: flex; align-items: center; flex-wrap: wrap; padding: 4px; margin: 0 0 8px; width: fit-content; max-width: 100%; gap: 4px; background: var(--editor-paper); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-sm); font: 400 .875rem/1.5 var(--font-sans); color: var(--primary); text-align: start; }
 #page-editor-root .pages-format-tools .pages-toolbar-group { gap: 2px; }
 /* Keep controls visible, but do not intercept cross-column layout drops. */

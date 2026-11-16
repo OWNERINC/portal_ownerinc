@@ -14,9 +14,10 @@ import { checkOverlays } from './pages-editor-overlays.mjs';
 import { checkResponsive } from './pages-editor-responsive.mjs';
 import { checkTextVideo } from './pages-editor-text-video.mjs';
 import { checkInspector } from './pages-editor-inspector.mjs';
+import { checkAcceptance } from './pages-editor-acceptance.mjs';
 
 const scenario = process.argv[2] || 'menus';
-assert.ok(['menus', 'structure', 'save', 'review', 'overlays', 'responsive', 'text-video', 'inspector'].includes(scenario));
+assert.ok(['menus', 'structure', 'save', 'review', 'overlays', 'responsive', 'text-video', 'inspector', 'acceptance'].includes(scenario));
 assert.ok(process.env.PAGES_CONTROLS_OUTPUT, 'Set a new evidence directory');
 const output = resolve(process.env.PAGES_CONTROLS_OUTPUT);
 await mkdir(output, { recursive: false });
@@ -35,6 +36,7 @@ try {
   if (scenario === 'responsive') await checkResponsive({ h, browser, output, results, errors });
   if (scenario === 'text-video') await checkTextVideo({ h, browser, output, results, errors });
   if (scenario === 'inspector') await checkInspector({ h, browser, output, results, errors });
+  if (scenario === 'acceptance') await checkAcceptance({ h, browser, output, results, errors });
   for (const width of scenario === 'menus' ? [1366, 390, 320, 768] : []) {
     const created = await h.api('post', '', { template_id: 'comunicado', client_mutation_id: randomUUID() }, 'super');
     assert.equal(created.status, 201);

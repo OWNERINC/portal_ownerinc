@@ -121,7 +121,7 @@ export async function checkPagesFeatureRoundtrip(browser, output) {
     await p.getByRole('combobox', { name: 'Estilo do botão', exact: true }).selectOption('text');
     await p.getByRole('combobox', { name: 'Tipo de destino', exact: true }).selectOption(ids.orientationsSection);
     await pagesEditorInsert(p, 'Adicionar vídeo'); const source = p.getByRole('dialog', { name: 'Adicionar vídeo', exact: true });
-    await source.getByRole('combobox', { name: 'Fonte do vídeo' }).selectOption('youtube'); await source.getByRole('textbox', { name: 'URL do YouTube' }).fill('https://youtu.be/aaaaaaaaaaa?si=discard'); await source.getByRole('button', { name: 'Confirmar fonte' }).click();
+    await source.getByRole('combobox', { name: 'Fonte do vídeo' }).selectOption('youtube'); await source.getByRole('textbox', { name: 'URL do YouTube' }).fill('https://youtu.be/aaaaaaaaaaa?si=discard'); await source.getByRole('button', { name: 'Inserir vídeo', exact: true }).click();
     await p.getByRole('textbox', { name: 'Título da mídia', exact: true }).fill('Vídeo integrado'); await p.getByRole('textbox', { name: 'Transcrição (obrigatória para publicar)', exact: true }).fill('Transcrição sintética.');
     const embedId=await p.locator('[data-block-type=video_embed].is-selected').getAttribute('data-block-id');
     await pagesEditorInsert(p,'Adicionar botão');

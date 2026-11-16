@@ -334,12 +334,23 @@ try {
     results.push({ scenario: 'account change during pending alias read purges old DOM and reauthorizes new account', pass: true });
     await context.close();
   }
-  for (const uid of ['disabled', 'unverified']) {
+  for (const uid of ['disabled']) {
     const { context, page } = await visit(uid);
     await page.goto(`${h.origin}${path}`); await page.waitForURL(url => url.pathname === '/login.html');
     assert.equal(await page.locator('.pages-document').count(), 0);
     assert.equal(new URL(page.url()).searchParams.get('next'), path);
     results.push({ scenario: 'existing account denial retained', uid, pass: true }); await context.close();
+  }
+  // The current server contract permits an unverified account with accepted
+  // Ethics and an authorized cargo (also asserted in tests/database/check-pages).
+  // Do not silently change production auth to satisfy a retired redirect check.
+  {
+    const { context, page } = await visit('unverified');
+    assert.equal((await h.api('get', `/${created.id}`, undefined, 'unverified')).status, 200);
+    await page.goto(`${h.origin}${path}`); await read(page);
+    assert.equal(new URL(page.url()).pathname, path);
+    results.push({ scenario: 'current unverified account contract still requires accepted Ethics and authorized cargo; permitted read renders', pass: true });
+    await context.close();
   }
   assert.deepEqual(errors, [], 'browser runtime errors');
   assert.deepEqual(assetFailures, [], 'all requested local script/style/image/font assets must be 200');

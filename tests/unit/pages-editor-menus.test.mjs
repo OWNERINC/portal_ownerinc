@@ -5,7 +5,13 @@ import vm from 'node:vm';
 
 async function harness() {
   const source = (await readFile('public/pages/editor-menus.js', 'utf8')).replace(/^export /gm, '');
-  class Node extends EventTarget {
+  class TrackedTarget extends EventTarget {
+    listeners = new Map();
+    addEventListener(type, callback, options) { super.addEventListener(type, callback, options); if (!this.listeners.has(type)) this.listeners.set(type, new Set()); this.listeners.get(type).add(callback); }
+    removeEventListener(type, callback, options) { super.removeEventListener(type, callback, options); this.listeners.get(type)?.delete(callback); }
+    count(type) { return this.listeners.get(type)?.size || 0; }
+  }
+  class Node extends TrackedTarget {
     open = false;
     isConnected = true;
     summary = { isConnected: true, focus: () => { focused = this; }, contains: node => node === this.summary };
@@ -13,7 +19,7 @@ async function harness() {
     contains(node) { return node === this || node === this.summary; }
   }
   let focused, cleanup;
-  const window = new EventTarget(), document = { querySelector: () => null };
+  const window = new TrackedTarget(), document = { querySelector: () => null };
   const context = vm.createContext({ window, document });
   vm.runInContext(source, context);
   const menus = context.createEditorMenus({ page: { cleanup: fn => { cleanup = fn; } } });
@@ -23,7 +29,7 @@ async function harness() {
     window.dispatchEvent(e); return e;
   };
   const a = new Node(), b = new Node();
-  return { menus, a, b, document, event, focused: () => focused, cleanup: () => cleanup() };
+  return { menus, a, b, window, document, event, focused: () => focused, cleanup: () => cleanup() };
 }
 
 test('only registered transient menus close; unregister and dispose release ownership', async () => {
@@ -50,6 +56,24 @@ test('Escape consumes one layer, restores summary, and respects IME and higher d
   const escape = event('keydown', { key: 'Escape' });
   assert.equal(escape.defaultPrevented, true); assert.equal(a.open, false); assert.equal(focused(), a);
   a.open = true; menus.closeAll(); assert.equal(focused(), a);
+});
+
+test('unregister and visit disposal remove keydown, pointerdown, click and toggle subscriptions', async () => {
+  const { menus, a, b, window, event, cleanup, focused } = await harness();
+  menus.register(a); const unregister = menus.register(b);
+  for (const node of [a,b]) for (const type of ['click','toggle']) assert.equal(node.count(type),1);
+  for (const type of ['keydown','pointerdown']) assert.equal(window.count(type),1);
+  unregister(); unregister();
+  for (const type of ['click','toggle']) assert.equal(b.count(type),0);
+  cleanup(); menus.dispose();
+  for (const type of ['keydown','pointerdown']) assert.equal(window.count(type),0);
+  for (const node of [a,b]) for (const type of ['click','toggle']) assert.equal(node.count(type),0);
+  a.open=true; b.open=true;
+  assert.equal(event('keydown',{key:'Escape'}).defaultPrevented,false);
+  event('pointerdown',{target:{}}); a.dispatchEvent(new Event('toggle'));
+  b.dispatchEvent(new Event('click'));
+  assert.equal(a.open,true); assert.equal(b.open,true); assert.equal(focused(),undefined);
+  menus.register(a); assert.equal(a.count('toggle'),0,'disposed controller cannot reacquire listeners');
 });
 
 test('outside pointerdown neither cancels the next action nor steals focus; inside is retained', async () => {

@@ -123,6 +123,7 @@ export async function checkTextVideo({ h, browser, output, results, errors }) {
       await url.fill('https://youtu.be/dQw4w9WgXcQ');
       await d.getByRole('button', { name: 'Inserir vídeo', exact: true }).click();
       const video = p.locator('[data-block-type=video_embed]'); await video.waitFor();
+      const originalVideoId = await video.getAttribute('data-block-id');
       assert.equal(await p.locator('iframe, img[src*="ytimg"]').count(), 0);
       await video.click();
       if (width < 1100) await p.locator('[data-sheet-tab=content]').click();
@@ -134,12 +135,21 @@ export async function checkTextVideo({ h, browser, output, results, errors }) {
       assert.equal(await video.count(), 1, 'changing source draft preserves block');
       await replace.getByRole('button', { name: 'Cancelar', exact: true }).click();
       assert.equal(await video.count(), 1, 'cancel preserves original source');
+      assert.equal(await video.getAttribute('data-block-id'), originalVideoId, 'cancel preserves original block UUID');
       await pagesEditorInsert(p, 'Adicionar vídeo');
       await d.getByRole('button', { name: 'Cancelar', exact: true }).click();
       const stored = await h.api('get', `/${created.body.id}/workspace`, undefined, 'super');
       assert.equal(stored.body.version, 0, 'no autosave or implicit persisted upgrade');
+      const saveResponse = p.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/pages/${created.body.id}/draft`);
+      await p.getByRole('button', { name: /Salvar rascunho/ }).click();
+      assert.equal((await saveResponse).status(), 200);
+      await p.locator('#page-editor-root[data-save-state=saved]').waitFor();
+      const saved = (await h.db.query('SELECT r.document FROM page_revisions r JOIN pages p ON p.draft_revision_id=r.id WHERE p.id=$1', [created.body.id])).rows[0].document;
+      const savedVideo = saved.sections.flatMap(s=>s.rows.flatMap(r=>r.columns.flatMap(c=>c.blocks))).find(b=>b.id===originalVideoId);
+      assert.equal(savedVideo.type, 'video_embed'); assert.equal(savedVideo.provider, 'youtube');
+      assert.equal(savedVideo.video_id, 'dQw4w9WgXcQ', 'cancel preserves original source ID, not replacement draft');
       assert.deepEqual(externalVideoRequests, [], 'editor never requests external video/player/thumbnail');
-      results.push({ width, format: actual, externalVideoRequests, retainedViews: true, noAutosave: true });
+      results.push({ width, format: actual, externalVideoRequests, retainedViews: true, noAutosave: true, cancelledSourceSQL: { blockId: originalVideoId, sourceId: savedVideo.video_id } });
     } catch (error) {
       const selection = await p.evaluate(() => ({ text: String(getSelection()),
         active: document.activeElement?.outerHTML.slice(0,500),

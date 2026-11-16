@@ -47,6 +47,14 @@ export async function checkInspector({ h, browser, output, results, errors }) {
       let stored=await save();assert.equal(stored.schema_version,2,'explicit legacy preset uses the existing v2 composition command');assert.equal(blocks(stored)[0].style.font,'oswald');
       await undo();await tab('style');
       await hex.fill('invalid');await hex.press('Tab');assert.equal(await hex.getAttribute('aria-invalid'),'true');
+      const tags=inspector.getByRole('textbox',{name:'Tags do bloco',exact:true});
+      await tags.fill('a,,b');await tags.press('Tab');
+      assert.equal(await tags.getAttribute('aria-invalid'),'true');
+      const hexFeedback=await hex.getAttribute('aria-describedby'),tagsFeedback=await tags.getAttribute('aria-describedby');
+      assert.notEqual(hexFeedback,tagsFeedback);
+      assert.match(await inspector.locator(`[id="${hexFeedback}"]`).innerText(),/hexadecimal/);
+      assert.match(await inspector.locator(`[id="${tagsFeedback}"]`).innerText(),/tags/);
+      await tags.scrollIntoViewIfNeeded();await p.screenshot({path:join(output,`${width}-independent-field-errors.png`)});
       assert.equal(await p.locator('#page-editor-root').getAttribute('data-save-state'),'dirty','invalid color adds no history entry');
       await hex.fill('#DDEEFF');await hex.press('Tab');await tab('style');
       assert.equal(await hex.inputValue(),'#DDEEFF');
