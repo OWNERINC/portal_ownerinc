@@ -201,42 +201,49 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
 #page-editor-root .pages-v2-inspector-heading h2 { margin-bottom: 16px; }
 .pages-page-style-panel :focus-visible, .pages-inline-color-panel :focus-visible, #page-editor-root .pages-style-inspector :focus-visible { outline: 2px solid #2a275e; outline-offset: 2px; }
 @media (max-width: 1099px) { .pages-page-style-panel { height: auto; min-height: 0; } }
-.pages-publication-dialog { box-sizing: border-box; width: min(580px, calc(100% - 32px)); min-height: 670px; margin: max(24px, calc((100dvh - 780px) / 2)) auto auto; background: #fff; color: #2a275e; padding: 32px; border: 0; border-radius: 12px; }
+.pages-publication-dialog { box-sizing: border-box; width: min(580px, calc(100% - 32px)); min-height: 0; max-height: calc(100dvh - 32px); margin: auto; background: #fff; color: #2a275e; padding: 24px; border: 0; border-radius: 8px; overflow: hidden; }
+.pages-publication-dialog[open] { display: flex; flex-direction: column; gap: 16px; }
+.pages-review-header { position: relative; flex: 0 0 auto; padding-right: 32px; }
+.pages-review-body { min-height: 0; overflow: auto; padding: 8px; margin: -8px; }
 .pages-publication-dialog::backdrop { background: #201e4d66; }
 .pages-publication-dialog h2 { margin: 0; padding-right: 24px; font-size: 24px; line-height: 34px; font-weight: 700; }
 .pages-publication-dialog .pages-review-intro { margin: 20px 0 20px; font-size: 14px; line-height: 21px; color: #626762; }
-.pages-publication-dialog .pages-review-close { position: absolute; right: 20px; top: 28px; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: inherit; font-size: 24px; }
-.pages-review-fields { display: grid; gap: 20px; }
-.pages-review-fields > .pages-field { gap: 20px; margin: 0; font-size: 13px; }
-.pages-review-fields > .pages-field > span { color: #626762; text-transform: uppercase; font-size: 11px; line-height: 17px; }
-.pages-publication-dialog .pages-review-fields :is(input, .pages-review-visibility) { width: 100%; height: 37px; min-height: 37px; border: 1px solid #e0e1dd; border-radius: 8px; background: #fff; color: #2a275e; padding: 0 10px; font: 400 13px/20px var(--font-sans); text-align: start; }
+.pages-publication-dialog .pages-review-close { position: absolute; right: -8px; top: -5px; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: inherit; font-size: 24px; }
+.pages-review-fields { display: grid; gap: 16px; }
+.pages-review-fields > .pages-field { gap: 8px; margin: 0; font-size: 14px; }
+.pages-review-fields > .pages-field > span { color: #626762; font-size: 14px; line-height: 20px; }
+.pages-publication-dialog .pages-review-fields :is(input:not([type=checkbox]), .pages-review-visibility) { width: 100%; height: 44px; min-height: 44px; border: 1px solid #e0e1dd; border-radius: 8px; background: #fff; color: #2a275e; padding: 0 10px; font: 400 16px/22px var(--font-sans); text-align: start; }
 .pages-publication-dialog .pages-review-fields input:disabled { background: #f7f7f5; color: #626762; }
 .pages-review-visibility { position: relative; cursor: pointer; }
 .pages-review-visibility::before { content: ''; position: absolute; width: 6px; height: 6px; border-right: 1px solid; border-bottom: 1px solid; right: 14px; top: 13px; transform: rotate(45deg); }
-.pages-review-visibility::after, .pages-publication-dialog .pages-actions > button::after { content: ''; position: absolute; inset: -4px 0; }
 .pages-publication-dialog .pages-review-url { margin: 20px 0 12px; color: #626762; font-size: 13px; line-height: 18px; }
 .pages-publication-dialog .pages-review-checks { border: 0; padding: 0; margin: 0 0 12px; display: grid; gap: 0; }
-.pages-review-checks label { position: relative; display: flex; align-items: center; gap: 12px; height: 39px; font-size: 13px; cursor: pointer; }
-.pages-review-checks label::after { content: ''; position: absolute; inset: -2.5px 0; }
-.pages-publication-dialog .pages-review-checks input { position: relative; z-index: 1; flex: 0 0 16px; width: 16px; height: 16px; min-height: 16px; padding: 0; border-radius: 2px; accent-color: #2a275e; }
+.pages-review-checks label { display: flex; align-items: center; gap: 12px; min-height: 44px; font-size: 14px; cursor: pointer; }
+.pages-publication-dialog .pages-review-checks input { flex: 0 0 18px; width: 18px; height: 18px; min-height: 18px; padding: 0; border-radius: 2px; accent-color: #2a275e; }
+.pages-review-checks legend { font-size: 14px; font-weight: 600; }
+.pages-review-checks p { font-size: 13px; color: #626762; }
+.pages-review-issues { margin: 0 0 24px; padding-left: 20px; }
+.pages-review-issues li { padding: 8px 0; overflow-wrap: anywhere; }
+.pages-review-issues button { display: block; margin-top: 8px; min-height: 44px; }
+.pages-review-issue-summary { margin-top: 16px; font-weight: 600; }
 .pages-publication-dialog .pages-review-revision { margin: 0; font-size: 11px; line-height: 17px; color: #626762; overflow-wrap: anywhere; }
 .pages-publication-dialog .pages-review-feedback { margin: 8px 0 0; font-size: 12px; line-height: 18px; color: #a33112; }
 .pages-publication-dialog .pages-review-feedback:empty { display: none; }
-.pages-publication-dialog .pages-actions { margin-top: 17px; gap: 12px; }
-.pages-publication-dialog .pages-actions > button { position: relative; min-height: 36px; height: 36px; padding: 0 12px; border-radius: 6px; font-size: 12px; }
+.pages-publication-dialog .pages-actions { flex: 0 0 auto; margin-top: 0; gap: 8px; flex-wrap: wrap; }
+.pages-publication-dialog .pages-actions > button { position: relative; min-height: 44px; height: auto; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
 .pages-publication-dialog .pages-review-publish { min-width: 144px; display: inline-flex; gap: 10px; align-items: center; justify-content: center; background: #2a275e; color: #fff; }
 .pages-publication-dialog .pages-review-publish:disabled { background: #e8e6eb; border-color: #d8d5dd; color: #77727e; cursor: not-allowed; }
-.pages-publication-dialog .pages-review-back { width: 116px; padding-inline: 8px; }
+.pages-publication-dialog .pages-review-back { padding-inline: 8px; }
 .pages-publication-dialog .pages-review-cargos { margin: 0; padding: 12px; border: 1px solid #e0e1dd; border-radius: 6px; }
 .pages-review-cargos label { display: flex; gap: 8px; align-items: center; min-height: 44px; }
-.pages-publication-dialog .pages-review-cargos input { width: 18px; height: 18px; min-height: 18px; accent-color: #2a275e; }
+.pages-publication-dialog .pages-review-cargos input { flex: 0 0 18px; width: 18px; height: 18px; min-height: 18px; padding: 0; accent-color: #2a275e; }
 .pages-publication-dialog .pages-review-cargos p { margin: 8px 0 0; font-size: 12px; }
 .pages-publication-dialog [hidden] { display: none !important; }
 @media (max-width: 599px) {
-  .pages-publication-dialog { min-height: 0; margin-top: 24px; }
+  .pages-publication-dialog { min-height: 0; }
   .pages-publication-dialog h2 { font-size: 21px; }
-  .pages-review-fields > .pages-field { gap: 10px; }
-  .pages-publication-dialog .pages-review-fields input { height: 44px; min-height: 44px; font-size: 16px; }
+  .pages-review-fields > .pages-field { gap: 8px; }
+  .pages-publication-dialog .pages-review-fields input:not([type=checkbox]) { height: 44px; min-height: 44px; font-size: 16px; }
 }
 .pages-structure-panel .pages-v2-structure { display: block; padding: 4px; border: 0; }
 /* The paper owns reflow; only its inner surface is scaled. Rails, inspector and

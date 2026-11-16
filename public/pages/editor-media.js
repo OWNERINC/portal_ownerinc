@@ -27,7 +27,7 @@ export function createBlockFields({ page, block, resolveBlock, transact, upload,
   // The coordinator resolves the supplied block ID in its cloned candidate.
   function mutate(meta, apply) { return change(meta, doc => { const value = doc.sections.flatMap(s => s.rows.flatMap(r => r.columns.flatMap(c => c.blocks))).find(b => b.id === blockId); return value ? apply(value) : false; }); }
   function input(host, key, label, max, resolve, itemId, multiline = false, bucket = syncs) {
-    const control = el(multiline ? 'textarea' : 'input', { maxlength: max, 'aria-label': label });
+    const control = el(multiline ? 'textarea' : 'input', { maxlength: max, 'aria-label': label, 'data-publication-field': key });
     const sync = () => { const value = resolve(); if (value) control.value = value[key]; };
     sync(); bucket.push(sync); bindNative(control, sync, () => !resolve(), () => retained() && !!resolve());
     control.addEventListener('focus', () => onFocus(itemId));
@@ -62,7 +62,7 @@ export function createBlockFields({ page, block, resolveBlock, transact, upload,
     const definitions = ['audio','video','video_embed'].includes(type) ? [['title','Título da mídia',200],['transcript','Transcrição (obrigatória para publicar)',20000]] : [['alt','Texto alternativo (obrigatório para publicar)',300],['caption','Legenda',1000],['credit','Crédito',300]];
     for (const [key,label,max] of definitions) input(node, key, label, max, current, null, key === 'transcript');
     if (type === 'video') {
-      const cues = el('textarea', { maxlength: 100000, 'aria-label': 'Legendas sincronizadas JSON' });
+      const cues = el('textarea', { maxlength: 100000, 'aria-label': 'Legendas sincronizadas JSON', 'data-publication-field': 'captions' });
       const sync = () => { cues.value = JSON.stringify(current()?.captions || [], null, 2); }; syncs.push(sync); sync(); bindNative(cues, sync, () => false, retained);
       cues.addEventListener('change', () => { try {
         const captions = JSON.parse(cues.value); let end = 0;

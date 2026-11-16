@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createEditorState } from '../../public/pages/state.js';
 import { createReviewSession, reviewURL } from '../../public/pages/editor-review.js';
 import { referenceDocument } from '../helpers/pages-reference-document.mjs';
+import { publicationIssueDetails } from '../../public/pages/publication-issues.js';
 
 function setup(edit = true) {
   const state = createEditorState({ id: 'page-id', version: 7, slug: null, draft_revision_id: 'r7',
@@ -71,4 +72,16 @@ test('state subscription invalidates checks without destroying an uncertain publ
   const {state,review}=setup();const payload=review.payload();review.failed(new Error('lost ACK'));
   state.uploadStart();state.uploadEnd();
   assert.equal(review.uncertain,true);assert.equal(review.pending,payload);assert.equal(review.payload(),payload);
+});
+test('structured content blockers remain distinct from personal checks and do not replace the exact revision session', () => {
+  const {state,review}=setup();
+  const details=publicationIssueDetails(state.document,[]);
+  assert.ok(details.some(issue=>issue.field==='audience'));
+  assert.ok(details.some(issue=>issue.code==='media_accessibility_required'));
+  const before=review.snapshot;
+  for(let i=0;i<3;i++)review.check(i,true);
+  assert.deepEqual(publicationIssueDetails(state.document,[]),details,'checks never bypass content validation');
+  const payload=review.payload();review.failed(new Error('ACK lost'));
+  assert.deepEqual(review.snapshot.revisionId,before.revisionId);
+  assert.equal(review.payload(),payload,'issue rendering cannot regenerate a pending publication key');
 });

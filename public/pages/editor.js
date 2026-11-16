@@ -7,6 +7,7 @@ import { renderDocument, imageFigure, mediaFigure, applyBlockStyle, richNode } f
 import { renderV3Block, v3Icon } from './render-blocks-v3.js';
 import { openPagesDialog } from './dialog.js';
 import { openReview, reviewSession } from './editor-review.js';
+import { publicationIssueTarget } from './publication-issues.js';
 import { compose, findBlock, findColumn, columns, genericBlock, defaultStyle, adjacentMove, insertAt, insertColumns, reorderSection, setBlockWidth, cloneBlock } from './composition.js';
 import { editV3, parseYouTubeURL } from './document-v3.js';
 import { createBlockFields, mediaAccept, mediaKind } from './editor-media.js';
@@ -658,6 +659,37 @@ export function mountPageEditor(page) {
     if (!live() || state!==origin || sequence!==loadSequence || !state.publishable || uploadRetry || pendingPlacement) return;
     reviewUI?.close();
     reviewUI = openReview({page,state:origin,api,cargos,opener,
+      onIssue:issue=>{
+        if(!live()||state!==origin||sequence!==loadSequence||!canEditContent()||historyBlocked())return;
+        const target=publicationIssueTarget(state.document,issue);
+        if(!target){feedback.textContent=issue.message;return;}
+        showMode('edit');
+        let control;
+        if(!target.blockId){
+          workspaceUI?.showPage();
+          if(target.field==='audience'){
+            const summary=root.querySelector('[data-audience-summary]');if(summary)summary.parentElement.open=true;
+            control=root.querySelector('.pages-audience input:not(:disabled)')||summary;
+          }else control=root.querySelector('.pages-metadata-title input');
+        }else{
+          select(target.blockId);activeItemId=target.itemId||null;
+          const entry=blockNodes.get(target.blockId);
+          let host=entry?.fields||entry?.node.querySelector('.pages-block-fields')||entry?.node;
+          if(target.itemId){
+            host=host?.querySelector(`[data-media-item-id="${target.itemId}"]`);
+            if(host?.tagName==='DETAILS')host.open=true;
+          }
+          if(['content','answer'].includes(target.field)){
+            const editor=richEditors.get(editorKey(target.blockId,target.itemId));
+            const rich=host?.querySelector('.ProseMirror');
+            if(editor){rich?.scrollIntoView({block:'center'});editor.focus();return;}
+          }
+          const selector=target.field==='media_id'?'button':target.field==='items'?'button':`[data-publication-field="${target.field}"]`;
+          control=host?.querySelector(selector);
+        }
+        if(control&&!control.disabled){control.scrollIntoView({block:'center'});control.focus();}
+        else feedback.textContent=issue.message;
+      },
       canAct:()=>live() && state===origin && sequence===loadSequence && !writePending && !uploadRetry && !pendingPlacement && !nativeCompositions.size,
       onChanged:()=>{if(live()&&state===origin){metadataSync.forEach(sync=>sync());renderBlocks();if(mode!=='edit')showMode(mode);update();}},
       onPublish:async payload=>{

@@ -109,7 +109,7 @@ try {
     /Vídeo incorporado \(bloco 6\).*título/, /Vídeo incorporado \(bloco 6\).*transcrição/]) assert.match(issues, pattern);
   const descriptionId = await action.getAttribute('aria-describedby');
   assert.equal(await p.locator(`#${descriptionId}`).textContent(), issues, 'same actionable messages exposed to assistive technology');
-  await d.getByRole('checkbox', { name: 'Conteúdo revisado pelo responsável', exact: true }).check();
+  await d.getByRole('checkbox', { name: 'Conferi o conteúdo', exact: true }).check();
   await action.dispatchEvent('click'); // Defensive handler must also reject scripted activation.
   assert.equal(await action.isDisabled(), true);
   assert.deepEqual(payloads.filter(p => p.id === invalidId), [], 'no publication POST for incomplete blocks');

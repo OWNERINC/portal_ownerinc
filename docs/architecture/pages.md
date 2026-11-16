@@ -668,7 +668,7 @@ Teclado/IME/toque físico e gesto de zoom nativo continuam pendentes; simulaçã
 
 ### Revisão editável e snapshot conferido (Task 15)
 
-`openReview({page,state,api,cargos,onChanged,onPublish,canAct?,opener?})` retorna
+`openReview({page,state,api,cargos,onChanged,onPublish,onIssue?,canAct?,opener?})` retorna
 `{close,refresh}`. O coordenador chama `refresh()` em mudanças do estado e mantém
 `canAct` vinculado à visita, operações exclusivas e uploads/colocações pendentes.
 Título, categoria livre com sugestões autorizadas e audiência usam a mesma timeline
@@ -706,8 +706,23 @@ O preflight de publicação respeita a versão do documento. Em v3, respostas de
 com texto contam como conteúdo, inclusive numa página composta somente por FAQ.
 Galerias exigem itens, arquivo e texto alternativo por item; FAQ exige itens com
 pergunta e resposta textual; vídeo incorporado exige título e transcrição. As
-pendências identificam bloco (ordem do documento), item e campo no tooltip e na
-descrição acessível da ação de publicação. Rascunhos incompletos continuam salváveis;
+pendências identificam bloco (ordem do documento), item e campo numa lista visível,
+além do tooltip e da descrição acessível da ação de publicação. A função canônica
+`publicationIssueDetails(document,cargos)` retorna `{code,message,blockId?,itemId?,field?}`;
+`publicationIssues` deriva apenas as mensagens e conserva as regras, agregação e ordem
+legadas. `publicationIssueTarget` resolve IDs no documento atual; não infere campo
+editável de um caminho de contraste. Corrigir fecha a revisão antes de `onIssue(issue)`
+selecionar/focar título, público, bloco ou item existente. Destino removido antes do
+clique mantém a revisão/mensagem; sem destino seguro, não há ação inventada. Autoria,
+operações exclusivas e composição continuam guardadas. Cabeçalho/rodapé permanecem
+acessíveis com corpo rolável e alvos reais de 44 px, inclusive a 320 px. Checks pessoais
+têm legenda visível de opcionais/não registrados e não atribuem aprovação a terceiros.
+`node tests/visual/check-pages-controls.mjs review` acrescenta cargos longos, teclado,
+correções com SQL após save explícito, alvo removido, identidade PM e axe A/AA;
+exige `AXE_MODULE_PATH` além das variáveis do runner. A geometria histórica de revisão
+é comparada/classificada no runner amplo; `--strict-reference-geometry` preserva as
+asserções exatas e não deve ser anunciado como PASS quando diverge intencionalmente.
+Rascunhos incompletos continuam salváveis;
 validação estrutural, propriedade/tipo de mídia e autorização final pertencem à API.
 As regras de preflight v1/v2 e o bypass do recibo incerto permanecem preservados.
 Saída/reload com publicação incerta exige a guarda de descarte; não há armazenamento

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { publicationIssues } from '../../public/pages/model.js';
+import { publicationIssueDetails, publicationIssueTarget } from '../../public/pages/publication-issues.js';
 import { errorText } from '../../public/pages/dom.js';
 import { upgradeDocument } from '../../public/pages/document-v3.js';
 
@@ -15,6 +16,47 @@ const faq = () => ({ id: id(2), type: 'faq', items: [{ id: id(3), question: 'Com
 const gallery = () => ({ id: id(4), type: 'gallery', items: [{ id: id(5), kind: 'image', media_id: id(6), alt: 'Descrição', caption: '', credit: '' }] });
 const embed = () => ({ id: id(7), type: 'video_embed', provider: 'youtube', video_id: 'aB3_-dE6Fg7', title: 'Vídeo', transcript: 'Transcrição' });
 const text = () => ({ id: id(8), type: 'rich_text', content: prose('Texto de apoio.') });
+test('structured issues preserve exact legacy aggregate messages and stable item destinations', () => {
+  const f = faq(); f.items[0].question = ''; f.items[0].answer = prose('');
+  const audio = { id: id(20), type: 'audio', media_id: null, transcript: '', title: '' };
+  const doc = document(text(), f, audio); doc.metadata.title = ''; doc.metadata.audience.job_title_ids = [];
+  const before = JSON.stringify(doc), details = publicationIssueDetails(doc, cargos);
+  assert.deepEqual(details.map(issue => issue.message), [
+    'Preencha o título.', 'Selecione apenas cargos atualmente ativos.',
+    'Áudio e vídeo precisam de transcrição; vídeo também precisa de legendas sincronizadas.',
+    'FAQ (bloco 2), item 1: preencha a pergunta.', 'FAQ (bloco 2), item 1: escreva o texto da resposta.',
+  ]);
+  assert.deepEqual(details.map(issue => issue.message), publicationIssues(doc, cargos));
+  assert.ok(details.some(issue => issue.blockId === audio.id && issue.field === 'media_id'));
+  assert.ok(details.some(issue => issue.blockId === f.id && issue.itemId === f.items[0].id && issue.field === 'answer'));
+  assert.equal(JSON.stringify(doc), before);
+});
+test('destinations are re-resolved by stable ID and fail closed after item/block removal or source replacement', () => {
+  const f=faq(), doc=document(f);f.items[0].question='';
+  const issue=publicationIssueDetails(doc,cargos).find(value=>value.field==='question');
+  assert.deepEqual(publicationIssueTarget(doc,issue),{blockId:f.id,itemId:f.items[0].id,field:'question'});
+  f.items=[];assert.equal(publicationIssueTarget(doc,issue),null);
+  doc.sections[0].rows[0].columns[0].blocks=[];assert.equal(publicationIssueTarget(doc,issue),null);
+  assert.equal(publicationIssueTarget(doc,{code:'contrast',message:'No safe field'}),null);
+  assert.deepEqual(publicationIssueTarget(doc,{field:'audience'}),{field:'audience'});
+});
+test('legacy aggregate image and AV checks keep one message each and first failing destination', () => {
+  for(const version of [1,2,3]){
+    const image={id:id(30),type:'image',media_id:id(31),alt:''};
+    const video={id:id(32),type:'video',media_id:id(33),transcript:'Ready',captions:[]};
+    const doc=document(image,{...image,id:id(34)},video,{...video,id:id(35)});doc.schema_version=version;
+    doc.metadata.title='';doc.metadata.audience.job_title_ids=[id(36)];
+    const details=publicationIssueDetails(doc,cargos);
+    assert.deepEqual(details.map(i=>i.message),[
+      'Preencha o título.','Selecione apenas cargos atualmente ativos.',
+      version===3?'Adicione conteúdo de texto à página ou a uma resposta de FAQ.':'Adicione conteúdo de texto ao comunicado.',
+      'Todas as imagens precisam estar prontas e ter texto alternativo.',
+      'Áudio e vídeo precisam de transcrição; vídeo também precisa de legendas sincronizadas.',
+    ]);
+    assert.deepEqual(details.map(i=>i.message),publicationIssues(doc,cargos));
+    assert.deepEqual(details.filter(i=>i.blockId).map(i=>[i.blockId,i.field]),[[image.id,'alt'],[video.id,'captions']]);
+  }
+});
 function document(...blocks) {
   const doc = upgradeDocument(createTemplate('comunicado'));
   doc.metadata.title = 'Preflight sintético'; doc.metadata.audience.job_title_ids = [id(1)];
@@ -43,6 +85,7 @@ for (const [label, make, change, reason, message] of [
   assert.doesNotThrow(() => validateDocument(doc));
   assert.throws(() => validateDocument(doc, { publishing: true }), { reason });
   const issues = publicationIssues(doc, cargos);
+  assert.deepEqual(publicationIssueDetails(doc, cargos).map(issue => issue.message), issues);
   assert.ok(issues.some(issue => message.test(issue)), JSON.stringify(issues));
   assert.ok(issues.some(issue => issue.includes('bloco 2')), 'identify the document-order block');
 });

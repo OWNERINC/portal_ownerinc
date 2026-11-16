@@ -53,6 +53,7 @@ async function harness(t, { dialogs, support, document: initialDocument, mobile 
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/pages/appearance.js', 'normalizeHex, resolveAppearance, appearanceIssues, typographyMetrics', source => source.replace(/^export \{[^\n]+\};/gm, ''));
+  await load('public/pages/publication-issues.js', 'publicationIssueDetails, publicationIssueTarget');
   await load('public/pages/model.js', 'clone, newId, allBlocks, blockList, textBlock, publicationIssues, safeLink');
   await load('public/pages/drag-guard.js', 'compositionDropGuard');
   await load('public/pages/composition.js', 'compose, findBlock, findColumn, columns, genericBlock, defaultStyle, adjacentMove, insertAt, insertColumns, reorderSection, setBlockWidth, cloneBlock');
