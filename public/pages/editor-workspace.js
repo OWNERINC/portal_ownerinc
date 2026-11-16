@@ -86,7 +86,7 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
   const scaled = el('div', { className: 'pages-v2-scaled-surface' }, surface);
   const viewport = el('div', { className: 'pages-v2-viewport' }, scaled);
   const count = el('span');
-  const mobileNotice = el('p', { className: 'pages-v2-mobile-notice', text: 'Prévia · conteúdo ilustrativo', hidden: true });
+  const mobileNotice = el('p', { className: 'pages-v2-mobile-notice', text: 'Edição' });
   const center = el('div', { className: 'pages-v2-center' }, el('div', { className: 'pages-v2-canvas-label' }, count, el('span', { text: 'Rascunho · salvar é explícito' })), mobileNotice, viewport);
   let view = { device: 'desktop', zoom: 100 };
   function measureViewport() {
@@ -296,7 +296,6 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
       count.textContent = `Página · ${doc.sections.length} ${doc.sections.length === 1 ? 'seção' : 'seções'}`;
       model.firstElementChild.textContent = `Modelo: ${doc.template.id === 'guia-interno' ? 'Guia interno' : doc.template.id === 'owner-news' ? 'Owner News' : 'Comunicado'}`;
       const hasCover = doc.schema_version === 3 && doc.template.id === 'guia-interno';
-      mobileNotice.hidden = !hasCover;
       canvasMetadata.hidden = hasCover;
       const subtitle = header.querySelector('.pages-v2-header-subtitle');
       if (subtitle) subtitle.textContent = `Conteúdos / ${doc.metadata.category || 'Página'}`;
@@ -364,7 +363,7 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
       if (!pagePanel.hidden) return;
       inspectorTitle.textContent = compact?.matches && block ? 'Editar bloco' : section?.label || (block ? 'Editar bloco' : 'Selecione um bloco');
     },
-    showMode(editing) { root.dataset.editorMode = editing ? 'edit' : 'preview'; add.hidden=!editing||!isEditable; if(textTools)textTools.hidden=!editing; if (!editing) closeInspector(false); measureViewport(); },
+    showMode(editing) { root.dataset.editorMode = editing ? 'edit' : 'preview'; mobileNotice.textContent = editing ? 'Edição' : 'Prévia'; add.hidden=!editing||!isEditable; if(textTools)textTools.hidden=!editing; if (!editing) closeInspector(false); measureViewport(); },
     dispose() {
       unregisterOverflow?.();
       if (disposed) return; disposed = true; overlay?.close(false); observer?.disconnect(); viewportObserver?.disconnect(); sectionSortable?.destroy(); onLayoutDragging(false);

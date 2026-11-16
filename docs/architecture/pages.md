@@ -80,6 +80,32 @@ checkboxes e rodapé, sem substituir o documento aberto nem recriar EditorViews.
 do botão 36 px + pseudoalvo; o modo funcional registra a divergência intencional e
 exige alvo real de 44 px sem extensão sobre vizinhos. Não é aceite das pranchas.
 
+A toolbar principal usa altura mínima, não fixa: linhas adicionais no tablet
+reservam espaço antes do canvas. Undo/redo têm 44 × 44 px reais, sem pseudoalvos
+sobrepostos; os demais alvos existentes conservam sua separação. O aviso compacto
+deriva exclusivamente de `showMode(editing)` (“Edição”/“Prévia”), inclusive após
+editar o conteúdo de um modelo. Não classifica documentos do autor como ilustrativos.
+Cabeçalhos do Guia mantêm as métricas do painter canônico também no celular
+(capa 36 px; título editorial 20 px com strong preservado), sem mudar cores,
+marcas, esquema ou payload. A paleta persistida não é corrigida implicitamente.
+A capa compacta reserva 4 px para a ascensão da fonte real dentro de seu fundo;
+isso evita o resultado axe incompleto por texto fora do limite do bloco, sem
+recortar glifos ou excluir o título da auditoria.
+
+`node tests/visual/check-pages-controls.mjs responsive` exige também `AXE_MODULE_PATH`.
+Cobre 320/390/599/600/768/1099/1100/1366/1600 px, alturas 640/768, canvas
+50/100/150%, modo/preview real, identidade PM e snapshots v1/v2/v3. Mede controles
+e pseudoalvos, colisões, hit-testing, contenção local, linhas do título e folga da
+toolbar contextual, além de overflow global. Axe inclui todos os títulos rich-text;
+o título laranja precisa ter um resultado PASS completo, não apenas zero violações.
+Resultados incompletos são registrados e falham, não excluídos nem chamados de PASS.
+Chrome 200% usa `settingsPrivate.setDefaultZoom(2)` em perfil descartável próprio,
+validado por DPR 2, viewport CSS pela metade e visualViewport.scale 1; não usa pinch
+ou transformação CSS como substituto. O check de renderer conserva as asserções
+históricas com `--strict-reference-typography`; o funcional distingue metadados do
+Guia 14/12 px de títulos genéricos 32/16 px e redimensiona o viewport autoritativo
+em vez de disputar a largura da superfície com seu ResizeObserver.
+
 O desenvolvimento parte de `2cecbe8`, incluindo o aceite obrigatório do Código de
 Ética. Nenhuma rota Pages fica isenta desse gate. A autenticação continua sendo
 Firebase Bearer, validada pelo middleware existente com o perfil atual no banco.

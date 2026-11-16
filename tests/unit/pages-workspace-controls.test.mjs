@@ -123,6 +123,22 @@ test('context clearance reserves measured unscaled toolbar height at every zoom 
   assert.ok(h.observers.every(item => item.nodes.size === 0), 'disposal disconnects all measurement observers');
 });
 
+test('mode notice follows edit/preview, never template provenance or a refresh of local content', async t => {
+  const h = await structureHarness(t), notice = h.root.querySelector('.pages-v2-mobile-notice');
+  for (const template of ['guia-interno','comunicado','owner-news']) {
+    h.doc.template.id = template;
+    h.doc.metadata.title = 'Título editado pelo autor';
+    const bytes = JSON.stringify(h.doc);
+    h.workspace.showMode(false); h.workspace.refresh(h.doc, true);
+    assert.equal(notice.textContent, 'Prévia');
+    assert.equal(notice.hidden, false);
+    h.workspace.showMode(true); h.workspace.refresh(h.doc, true);
+    assert.equal(notice.textContent, 'Edição');
+    assert.equal(h.root.querySelector('.pages-v2-mobile-notice'), notice);
+    assert.equal(JSON.stringify(h.doc), bytes, 'mode feedback cannot rewrite user content');
+  }
+});
+
 test('organizing state travels with the structure through dialog reparenting and rebuilds', async t => {
   const h = await structureHarness(t), structure = h.workspace.structure;
   const organize = structure.querySelectorAll('button').find(n => n.getAttribute('aria-label') === 'Organizar estrutura');

@@ -11,9 +11,10 @@ import { checkStructure } from './pages-editor-structure.mjs';
 import { checkSave } from './pages-editor-save.mjs';
 import { checkReview } from './pages-editor-review-controls.mjs';
 import { checkOverlays } from './pages-editor-overlays.mjs';
+import { checkResponsive } from './pages-editor-responsive.mjs';
 
 const scenario = process.argv[2] || 'menus';
-assert.ok(['menus', 'structure', 'save', 'review', 'overlays'].includes(scenario));
+assert.ok(['menus', 'structure', 'save', 'review', 'overlays', 'responsive'].includes(scenario));
 assert.ok(process.env.PAGES_CONTROLS_OUTPUT, 'Set a new evidence directory');
 const output = resolve(process.env.PAGES_CONTROLS_OUTPUT);
 await mkdir(output, { recursive: false });
@@ -29,6 +30,7 @@ try {
   if (scenario === 'save') await checkSave({ h, browser, output, results, errors });
   if (scenario === 'review') await checkReview({ h, browser, output, results, errors });
   if (scenario === 'overlays') await checkOverlays({ h, browser, output, results, errors });
+  if (scenario === 'responsive') await checkResponsive({ h, browser, output, results, errors });
   for (const width of scenario === 'menus' ? [1366, 390, 320, 768] : []) {
     const created = await h.api('post', '', { template_id: 'comunicado', client_mutation_id: randomUUID() }, 'super');
     assert.equal(created.status, 201);

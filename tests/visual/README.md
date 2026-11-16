@@ -60,6 +60,28 @@ O check de estilo existente mantém `--strict-reference-geometry` para o alvo
 histórico; o modo funcional exige o novo alvo real de 44 px e classifica a diferença,
 sem sobrescrever referências ou declarar igualdade de capturas antigas.
 
+### Responsividade, contraste e modo (melhorias Task 6)
+
+`node tests/visual/check-pages-controls.mjs responsive` usa as mesmas variáveis e
+`AXE_MODULE_PATH` para axe real. A saída precisa ser nova. Não altera as seis
+referências: registra 18 combinações de largura/altura, canvas 50/100/150%, prévia,
+texto editado, v1/v2/v3, PM retido e nenhum save implícito. Confere geometria local,
+alvos/hit-testing/colisões, linhas do título, toolbar/canvas e contraste do título
+laranja com resultado axe completo. Resultados incompletos são preservados e falham.
+Cria um perfil Chrome descartável dentro da saída para zoom **nativo** 200%, via
+`chrome://settings`/`settingsPrivate.setDefaultZoom(2)`. Verifica DPR/viewport/scale
+em tempo de execução e falha se não conseguir provar esse zoom. Também registra
+a tentativa de atalho headless e a evidência de reflow equivalente, sem confundi-las
+com o zoom nativo. Nenhum perfil pessoal ou serviço existente é usado.
+
+O renderer funcional distingue a tipografia canônica dos metadados do Guia
+(14/12 px) da antiga asserção genérica (32/16 px), ainda preservada com
+`node tests/visual/check-pages-renderer-v3.mjs --strict-reference-typography`.
+Nesse modo estrito também se conserva o antigo probe que escreve diretamente a
+largura da superfície; o funcional varia seu viewport autoritativo e exige a largura
+real resultante, pois ResizeObserver é o dono da superfície. A mudança é de teste,
+não de renderer ou de conteúdo persistido. O estrito não representa um PASS visual.
+
 `node tests/visual/check-pages-review.mjs` usa as instalações externas indicadas por
 `PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e `AXE_MODULE_PATH`, além de
 `PAGES_REFERENCE_DIR` com os PNGs originais. Não instala dependências nem inicia
