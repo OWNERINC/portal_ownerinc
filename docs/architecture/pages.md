@@ -608,6 +608,12 @@ são decorativos; os controles mantêm seus nomes acessíveis e ações reais. A
 final das seis pranchas (Task 18), PostgreSQL/Firebase/
 Nginx nativos e IME/aparelho físico permanecem gates separados, não comprovados.
 
+O runner workspace mantém a largura histórica da toolbar em modo
+`node tests/visual/check-pages-workspace.mjs --strict-reference-geometry`.
+Sem a flag, verifica largura não escalada contra a medição inicial e registra
+divergências aprovadas em `results.json`/stderr; não declara fidelidade à prancha.
+As demais âncoras de referência e asserções funcionais continuam ativas nos dois modos.
+
 ### Conteúdo compacto e ciclo mobile (Task 16)
 
 Até 1099 px, o inspetor é um diálogo **não modal**: o mesmo texto/EditorView continua

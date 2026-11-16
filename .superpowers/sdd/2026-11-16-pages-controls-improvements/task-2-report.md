@@ -136,3 +136,82 @@ redesigned here.
 The completion response supplies the resulting hash. Parent should review the
 intentional historical workspace assertion divergence before integration; this
 report does not claim the broad visual suite is green.
+
+## Review follow-up — obsolete target assertion
+
+Addressed the Important finding without changing product CSS/JS or restoring
+pseudo-targets. Only the workspace browser test, its mode documentation and this
+report changed. Preview (Task 1) and add-section (Task 2) now assert real width
+and height of at least 44 px plus actual pointer hits at the center and four inset
+corners. Publish is unchanged: its existing extension assertion remains because
+that control has not yet been converted to a real-height target in this scope.
+
+The first follow-up run (`pages-task2-review-workspace-20261116a`) confirmed the
+old assertion also stopped on Preview. Applying real-target checks indiscriminately
+to Publish then correctly failed in `...workspace-20261116b`: it is still compact.
+Kept Publish's original assertion rather than weakening it or changing its UI.
+The resulting target checks pass for all three original controls.
+
+### Downstream results: intentional geometry versus functional failure
+
+- `...workspace-20261116c` reached the original fixed toolbar assertion:
+  **412 != 329 px**. Task 1's approved real 44 px formatting targets intentionally
+  widened this toolbar. Added `--strict-reference-geometry` to retain the exact
+  329 px source assertion. Default functional mode instead asserts that the
+  toolbar equals its initial unscaled width at every browser width/device/zoom.
+  Each observed source difference is recorded separately in `results.json` under
+  `referenceGeometry` and announced on stderr; it is never reported as fidelity
+  success. No other reference assertions changed: panel rectangles, content
+  anchors, FAQ density, typography, compact publication width, etc. remain active.
+- Final strict invocation exits **1**, explicitly at **412 != 329**. This is an
+  intentional source geometry divergence, not a functional pass and not a new
+  golden. Original PNG/reference inputs were not modified.
+- Final functional invocation exits **1** on the unchanged assertion
+  **“unscaled toolbar never covers the text/caret”**, at 1600/desktop/50% zoom.
+  Recorded text top **343.3046875**; toolbar top **292.796875**, height **52**,
+  bottom **344.796875**: roughly **1.49 px overlap**. This is a genuine uncovered
+  functional failure, NOT an intentional geometry exemption. Added diagnostic
+  rectangles and a failure screenshot, not a relaxed assertion. It is outside
+  this review's test-only correction and was not introduced by test changes.
+  Parent should scope the toolbar clearance fix separately; no claim that the
+  remaining downstream loops/scenarios executed or passed is made.
+- Before that failure, original source panels/content anchor checks, computed
+  typography, scale undo, all 20 width/device/zoom geometry combinations with
+  exact draft/PM retention, resize and the first pointer drop/undo/caret selection
+  executed successfully. Functional checks after the overlap remain present and
+  fail-fast, not removed, bypassed or converted to soft successes.
+
+### Follow-up commands and evidence
+
+Use the same external PGlite/Playwright/Axe and resolved FFmpeg/ffprobe environment
+from the reproduction section above. Every artifact uses a new directory under
+`C:/Users/Criação/AppData/Local/Temp/opencode/`.
+
+```powershell
+$env:WORKSPACE_VISUAL_OUTPUT='C:/Users/Criação/AppData/Local/Temp/opencode/pages-task2-review-workspace-20261116e'
+node tests/visual/check-pages-workspace.mjs
+# Exit 1: genuine caret-overlap assertion, not reference width.
+$env:WORKSPACE_VISUAL_OUTPUT='C:/Users/Criação/AppData/Local/Temp/opencode/pages-task2-review-workspace-strict-20261116a'
+node tests/visual/check-pages-workspace.mjs --strict-reference-geometry
+# Exit 1: retained strict source width 329 vs actual 412.
+node --test tests/unit/pages-workspace-controls.test.mjs tests/unit/pages-editor-focus.test.mjs tests/unit/pages-editor-lifecycle.test.mjs
+# 58 passed, 0 failed, 0 skipped.
+$env:PAGES_CONTROLS_OUTPUT='C:/Users/Criação/AppData/Local/Temp/opencode/pages-task2-review-structure-20261116a'
+node tests/visual/check-pages-controls.mjs structure
+# Exit 0: 320/390/768/1366, zero page errors; SQL order/save/undo and PM retention.
+npm run verify
+# verify: ok; 1202 tests, 1199 passed, 0 failed, 3 existing skips.
+git diff --check
+# Exit 0.
+```
+
+Full verify output:
+`pages-task2-review-structure-20261116a/verify.log`.
+Functional workspace evidence: `pages-task2-review-workspace-20261116e/results.json`,
+`failed-caret-1600-desktop-50.png` (visually reviewed), plus the original desktop
+editing/style/insert captures in that new directory. Strict evidence:
+`pages-task2-review-workspace-strict-20261116a/results.json`. No screenshots were
+hidden, overwritten in historical locations, or substituted for original references.
+
+Review-fix commit hash is supplied in the completion response. No subagents,
+production access, backend changes or product toolbar fix were made in this follow-up.
