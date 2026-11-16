@@ -2,6 +2,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { PagesError, validateDocument } = require('./validation');
 const { createTemplate } = require('./templates');
 const { editor, publisher, mayEdit, mayReview, capabilities } = require('./access');
+const { ensureSlug } = require('./aliases');
 
 const error = (status, reason) => { throw new PagesError(status, reason); };
 function canonical(value, depth = 0) {
@@ -15,15 +16,19 @@ async function pageRow(db, id, lock = false) {
   const { rows } = await db.query(`SELECT * FROM pages WHERE id = $1${lock ? ' FOR UPDATE' : ''}`, [id]);
   if (!rows[0]) error(404, 'not_visible'); return rows[0];
 }
-async function workspace(db, user, id) {
+async function workspace(db, user, id, { v3WritesEnabled = false } = {}) {
   const { rows } = await db.query(`SELECT p.*, row_to_json(d) AS draft, row_to_json(r) AS published
     FROM pages p JOIN page_revisions d ON d.id = p.draft_revision_id AND d.page_id = p.id
     LEFT JOIN page_revisions r ON r.id = p.published_revision_id AND r.page_id = p.id WHERE p.id = $1`, [id]);
   const p = rows[0]; if (!p) error(404, 'not_visible'); if (!mayReview(user, p)) error(403, 'permission_denied');
   const revision = r => r ? { id: r.id, document: r.document, created_at: r.created_at } : null;
-  return { id: p.id, author_uid: p.author_uid, version: p.version, draft_revision_id: p.draft_revision_id,
+  // Authoring inventory only: never storage keys/paths or another page's media.
+  // Review-only users keep their existing revision-scoped media access.
+  const media = mayEdit(user, p) ? (await db.query('SELECT id,kind FROM page_media WHERE page_id = $1 ORDER BY id', [id])).rows : [];
+  return { id: p.id, slug: p.slug ?? null, author_uid: p.author_uid, version: p.version, draft_revision_id: p.draft_revision_id,
     published_revision_id: p.published_revision_id, archived_at: p.archived_at,
-    draft: revision(p.draft), published: revision(p.published), capabilities: capabilities(user, p) };
+    draft: revision(p.draft), published: revision(p.published), capabilities: capabilities(user, p), media,
+    document_support: { read_versions: [1,2,3], write_versions: v3WritesEnabled === true ? [1,2,3] : [1,2] } };
 }
 async function references(db, pageId, validated, publishing = false) {
   const cargos = await db.query('SELECT id, active FROM job_titles WHERE id = ANY($1::uuid[]) ORDER BY id FOR SHARE', [validated.jobTitleIds]);
@@ -45,7 +50,7 @@ async function insertRevision(db, user, pageId, validated) {
 
 // One checked-out client owns locking, CAS, revision, projections, audit and replay.
 // A committed retry is authorized again, but never re-applies expected_version.
-async function mutate(pool, req, operation, targetId, body, media = null) {
+async function mutate(pool, req, operation, targetId, body, media = null, { v3WritesEnabled = false } = {}) {
   if ((['create','draft','media'].includes(operation) && !editor(req.user)) || (['publish','archive','restore'].includes(operation) && !publisher(req.user))) error(403, 'permission_denied');
   const db = await pool.connect(); let commitStarted = false, discard;
   try {
@@ -68,14 +73,23 @@ async function mutate(pool, req, operation, targetId, body, media = null) {
     if (page && operation !== 'media' && page.version !== body.expected_version) error(409, 'version_conflict');
     let ack;
     if (operation === 'create') {
+      // Gate the actual generated schema, not a template label or catalog hint.
+      const validated = validateDocument(createTemplate(body.template_id));
+      if (validated.document.schema_version === 3 && v3WritesEnabled !== true) error(409, 'document_version_disabled');
       await db.query('INSERT INTO pages(id,author_uid) VALUES($1,$2)', [pageId, req.user.uid]);
-      const revisionId = await insertRevision(db, req.user, pageId, validateDocument(createTemplate(body.template_id)));
+      const revisionId = await insertRevision(db, req.user, pageId, validated);
       page = (await db.query('UPDATE pages SET draft_revision_id = $2 WHERE id = $1 RETURNING *', [pageId, revisionId])).rows[0];
+      page.slug = await ensureSlug(db, page, validated.document.metadata.title);
     } else if (operation === 'draft') {
       const validated = validateDocument(body.document);
+      const head = (await db.query('SELECT schema_version FROM page_revisions WHERE page_id = $1 AND id = $2', [pageId, page.draft_revision_id])).rows[0];
+      if (head.schema_version === 3 && validated.document.schema_version < 3) error(409, 'schema_downgrade_conflict');
+      // Authorized committed retries returned above; only NEW revisions use the gate.
+      if (validated.document.schema_version === 3 && v3WritesEnabled !== true) error(409, 'document_version_disabled');
       await references(db, pageId, validated);
       const revisionId = await insertRevision(db, req.user, pageId, validated);
       page = (await db.query('UPDATE pages SET draft_revision_id = $2, version = version + 1, updated_at = now() WHERE id = $1 RETURNING *', [pageId, revisionId])).rows[0];
+      page.slug = await ensureSlug(db, page, validated.document.metadata.title);
     } else if (operation === 'publish') {
       if (page.draft_revision_id !== body.revision_id.toLowerCase()) error(409, 'version_conflict');
       const revision = (await db.query('SELECT document FROM page_revisions WHERE page_id = $1 AND id = $2', [pageId, body.revision_id])).rows[0];
@@ -93,7 +107,7 @@ async function mutate(pool, req, operation, targetId, body, media = null) {
         VALUES($1,$2,$3,$4,$9,$5,$6,$7,$8,$10,$11,$12)`, [media.id, pageId, req.user.uid, media.storage_key, media.byte_size, media.width, media.height, media.sha256, media.mime_type || 'image/webp', media.kind || 'image', media.duration_seconds == null ? null : Math.round(media.duration_seconds * 1000), media.frame_count ?? null]);
       ack = { id: media.id, page_id: pageId, media_id: media.id, kind: media.kind || 'image', mime_type: media.mime_type || 'image/webp', width: media.width, height: media.height, byte_size: media.byte_size, duration_ms: media.duration_seconds == null ? null : Math.round(media.duration_seconds * 1000) };
     }
-    ack ||= { id: pageId, version: page.version, draft_revision_id: page.draft_revision_id, published_revision_id: page.published_revision_id };
+    ack ||= { id: pageId, slug: page.slug ?? null, version: page.version, draft_revision_id: page.draft_revision_id, published_revision_id: page.published_revision_id };
     const status = operation === 'create' || operation === 'media' ? 201 : 200;
     await db.query(`INSERT INTO audit_log(actor_uid,action,target_type,target_id,request_id,details) VALUES($1,$2,'pages',$3,$4,$5::jsonb)`,
       [req.user.uid, `pages.${operation}`, pageId, req.id || null, JSON.stringify({ version: page.version, ...(media ? { media_id: ack.media_id } : {}) })]);
@@ -105,6 +119,7 @@ async function mutate(pool, req, operation, targetId, body, media = null) {
   } catch (err) {
     await db.query('ROLLBACK').catch(() => {});
     if (commitStarted) discard = err;
+    if (!commitStarted && err.code === '23505' && err.constraint === 'pages_slug_unique_idx') err = new PagesError(409, 'slug_conflict');
     err.commitAmbiguous = commitStarted; throw err;
   } finally { db.release(discard); }
 }
@@ -115,8 +130,13 @@ const eligible = `p.archived_at IS NULL AND p.published_revision_id IS NOT NULL 
   SELECT 1 FROM users u JOIN job_titles jt ON jt.id = u.job_title_id AND jt.active = TRUE
   JOIN page_revision_job_titles a ON a.job_title_id = jt.id AND a.revision_id = p.published_revision_id WHERE u.uid = $1)`;
 async function reader(db, user, id) {
-  const { rows } = await db.query(`SELECT p.id,r.id AS revision_id,r.document,p.published_at FROM pages p
+  const { rows } = await db.query(`SELECT p.id,p.slug,r.id AS revision_id,r.document,p.published_at FROM pages p
     JOIN page_revisions r ON r.id = p.published_revision_id AND r.page_id = p.id WHERE p.id = $2 AND ${eligible}`, [user.uid, id]);
+  if (!rows[0]) error(404, 'not_visible'); return rows[0];
+}
+async function readerBySlug(db, user, slug) {
+  const { rows } = await db.query(`SELECT p.id,p.slug,r.id AS revision_id,r.document,p.published_at FROM pages p
+    JOIN page_revisions r ON r.id = p.published_revision_id AND r.page_id = p.id WHERE p.slug = $2 AND ${eligible}`, [user.uid, slug]);
   if (!rows[0]) error(404, 'not_visible'); return rows[0];
 }
 async function preview(db, user, id, revisionId) {
@@ -141,6 +161,20 @@ async function list(db, user, query, management = false) {
   SELECT (SELECT count(*)::integer FROM visible) AS total, COALESCE((SELECT json_agg(selected) FROM selected),'[]'::json) AS items`, values);
   return result.rows[0];
 }
+async function categories(db, user, query) {
+  if (!editor(user) && !publisher(user)) error(403, 'permission_denied');
+  const { rows } = await db.query(`WITH visible AS (
+    SELECT DISTINCT r.document->'metadata'->>'category' AS category
+    FROM pages p JOIN page_revisions r ON r.id = p.draft_revision_id AND r.page_id = p.id
+    WHERE p.archived_at IS NULL AND ($5::boolean OR p.author_uid = $1)
+      AND btrim(r.document->'metadata'->>'category') <> ''
+      AND ($2 = '' OR r.document->'metadata'->>'category' ILIKE '%' || $2 || '%')
+  ), selected AS (SELECT category FROM visible ORDER BY category LIMIT $3 OFFSET $4)
+  SELECT (SELECT count(*)::integer FROM visible) AS total,
+    COALESCE((SELECT json_agg(selected.category ORDER BY selected.category) FROM selected),'[]'::json) AS items`,
+  [user.uid, query.q || '', query.limit, query.offset, publisher(user)]);
+  return rows[0];
+}
 async function mediaRecord(db, user, pageId, mediaId, { revisionId, staged = false } = {}) {
   let result;
   if (staged) {
@@ -159,4 +193,4 @@ async function mediaRecord(db, user, pageId, mediaId, { revisionId, staged = fal
   }
   return result.rows[0];
 }
-module.exports = { canonical, hash, pageRow, workspace, mutate, reader, preview, list, mediaRecord };
+module.exports = { canonical, hash, pageRow, workspace, mutate, reader, readerBySlug, preview, list, categories, mediaRecord };

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { pagesSlug } from '../../public/js/pages-route.js';
 import { createFeedbackHarness, TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
 
 async function createLoginHarness({ responseStatus = 200, responseBody = {}, signInError, fetchImpl, signInImpl } = {}) {
@@ -12,6 +13,7 @@ async function createLoginHarness({ responseStatus = 200, responseBody = {}, sig
     form.reset = () => { for (const input of form.querySelectorAll('input')) input.value = ''; };
   }
   Object.assign(h.context, {
+    pagesSlug,
     location: h.window.location,
     auth: { currentUser: null, async authStateReady() {} },
     async signInWithEmailAndPassword(...args) {
@@ -25,7 +27,7 @@ async function createLoginHarness({ responseStatus = 200, responseBody = {}, sig
       return { status: responseStatus, ok: responseStatus >= 200 && responseStatus < 300, async json() { return responseBody; } };
     },
   });
-  vm.runInContext((await readFile('public/js/portal-destination.js', 'utf8')).replace(/^export /gm, ''), h.context);
+  vm.runInContext((await readFile('public/js/portal-destination.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, ''), h.context);
   const source = (await readFile('public/js/login.js', 'utf8')).replace(/^import[\s\S]*?from ['"][^'"]+['"];\r?\n/gm, '');
   await vm.runInContext(`(async () => { ${source} })()`, h.context, { filename: 'public/js/login.js' });
   return {
@@ -277,6 +279,6 @@ test('approved unverified signup can sign in but must still accept Ethics before
     assert.equal(redirects.length, 1);
     const destination = new URL(redirects[0], h.window.location.origin);
     assert.equal(destination.pathname, ethicsAccepted ? '/dashboard.html' : '/ethics.html');
-    if (!ethicsAccepted) assert.equal(destination.searchParams.get('next'), './dashboard.html');
+    if (!ethicsAccepted) assert.equal(destination.searchParams.get('next'), '/dashboard.html');
   }
 });

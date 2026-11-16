@@ -30,7 +30,7 @@ export function pageDocument(title = 'Comunicado sintético', jobTitleIds = [car
   };
 }
 
-export async function createPagesDatabaseHarness({ afterFoundation } = {}) {
+export async function createPagesDatabaseHarness({ afterFoundation, afterMedia, v3WritesEnabled = false } = {}) {
   if (!process.env.PGLITE_MODULE_PATH) throw new Error('Set PGLITE_MODULE_PATH to external @electric-sql/pglite; no existing database is accepted');
   const { PGlite } = await import(pathToFileURL(resolve(process.env.PGLITE_MODULE_PATH)).href);
   const db = new PGlite();
@@ -90,6 +90,11 @@ export async function createPagesDatabaseHarness({ afterFoundation } = {}) {
     const expansion = await readFile(new URL('../../api/db/migrations/041_pages_media.sql', import.meta.url), 'utf8');
     await db.exec(expansion);
     await db.exec(expansion);
+    // Upgrade populated v1/v2 databases without rewriting their snapshots.
+    if (afterMedia) await afterMedia(db);
+    const referenceFidelity = await readFile(new URL('../../api/db/migrations/042_pages_reference_fidelity.sql', import.meta.url), 'utf8');
+    await db.exec(referenceFidelity);
+    await db.exec(referenceFidelity);
     for (const [uid] of actors) if (uid !== 'noethics') await acceptTerm(db, uid);
     await db.exec('GRANT SELECT, UPDATE ON users, job_titles TO portal_api; GRANT SELECT ON pending_registrations TO portal_api; GRANT SELECT, INSERT ON audit_log TO portal_api');
     const authFile = fileURLToPath(new URL('../../api/middleware/auth.js', import.meta.url));
@@ -114,7 +119,7 @@ export async function createPagesDatabaseHarness({ afterFoundation } = {}) {
     app.use(express.json({ limit: '1mb' }));
     app.get('/api/users/me', authMiddleware, (req, res) => res.json(req.user));
     app.get('/api/ethics', authMiddleware, (req, res) => res.json({ term, accepted: req.user.ethics_accepted === true }));
-    app.use('/api/pages', createPagesRouter({ pool, authenticate: authMiddleware, uploadDirectory: directory }));
+    app.use('/api/pages', createPagesRouter({ pool, authenticate: authMiddleware, uploadDirectory: directory, v3WritesEnabled }));
     app.use(security.errorHandler);
     server = createServer(app);
     await new Promise((done, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', done); });
@@ -131,7 +136,7 @@ export async function createPagesDatabaseHarness({ afterFoundation } = {}) {
       // This test owns this exact mkdtemp directory, never an existing upload dir.
       await rm(directory, { recursive: true, force: true });
     }
-    return { db, app, pool, request, api, directory, origin, statements, tokenChecks, close };
+    return { db, app, pool, request, api, directory, origin, statements, tokenChecks, authenticate: authMiddleware, close };
   } catch (error) {
     server?.closeAllConnections();
     if (server?.listening) await new Promise(done => server.close(done));
@@ -149,10 +154,15 @@ export async function checkPagesDatabase() {
   const workspace = async id => expectStatus(await h.api('get', `/${id}/workspace`), 200);
   try {
     expectStatus(await h.request.get('/api/pages'), 401);
-    expectStatus(await h.api('get', '', undefined, 'noethics'), 403);
-    expectStatus(await h.api('get', '', undefined, 'disabled'), 403);
-    expectStatus(await h.api('get', '', undefined, 'unverified'), 403);
-    for (const actor of ['reader', 'forged', 'publisher']) expectStatus(await h.api('post', '', { template_id: 'comunicado', ...mutation() }, actor), 403);
+    assert.equal(expectStatus(await h.api('get', '', undefined, 'noethics'), 403).reason, 'ethics-required');
+    assert.equal(expectStatus(await h.api('get', '', undefined, 'disabled'), 403).reason, 'account-disabled');
+    // Approved, enabled accounts may enter without email verification; Ethics
+    // and Pages capabilities still apply to this same synthetic viewer.
+    assert.deepEqual(expectStatus(await h.api('get', '', undefined, 'unverified'), 200), []);
+    await h.db.query('DELETE FROM ethics_acceptances WHERE user_uid=$1', ['unverified']);
+    assert.equal(expectStatus(await h.api('get', '', undefined, 'unverified'), 403).reason, 'ethics-required');
+    await acceptTerm(h.db, 'unverified');
+    for (const actor of ['reader', 'forged', 'publisher', 'unverified']) expectStatus(await h.api('post', '', { template_id: 'comunicado', ...mutation() }, actor), 403);
     const createInput = { template_id: 'comunicado', ...mutation() };
     const auditBeforeCreate = (await h.db.query('SELECT count(*)::int AS count FROM audit_log')).rows[0].count;
     const createResponses = await Promise.all([h.api('post', '', createInput), h.api('post', '', createInput)]);
@@ -165,7 +175,8 @@ export async function checkPagesDatabase() {
     assert.equal((await h.db.query('SELECT count(*)::int AS count FROM pages')).rows[0].count, 1);
     assert.equal((await h.db.query('SELECT count(*)::int AS count FROM audit_log')).rows[0].count, auditBeforeCreate + 1, 'replayed create must not duplicate audit');
     expectStatus(await h.api('get', `/${id}`, undefined, 'reader'), 404);
-    for (const actor of ['other', 'reader', 'forged']) expectStatus(await h.api('get', `/${id}/workspace`, undefined, actor), 403);
+    expectStatus(await h.api('get', `/${id}`, undefined, 'unverified'), 404);
+    for (const actor of ['other', 'reader', 'forged', 'unverified']) expectStatus(await h.api('get', `/${id}/workspace`, undefined, actor), 403);
     expectStatus(await h.api('get', `/${id}/workspace`, undefined, 'publisher'), 200);
     let current = await workspace(id);
     expectStatus(await h.api('post', `/${id}/publish`, { ...mutation(), expected_version: current.version, revision_id: current.draft_revision_id }, 'publisher'), 400);
@@ -185,6 +196,7 @@ export async function checkPagesDatabase() {
     assert.equal((await h.db.query('SELECT count(*)::int AS count FROM audit_log')).rows[0].count, auditBeforePublish + 1, 'replayed publish must not duplicate audit');
     const published = expectStatus(await h.api('get', `/${id}`, undefined, 'reader'), 200);
     assert.equal(published.document.metadata.title, document.metadata.title);
+    assert.deepEqual(expectStatus(await h.api('get', `/${id}`, undefined, 'unverified'), 200), published);
     expectStatus(await h.api('get', `/${id}`, undefined, 'outsider'), 404);
     expectStatus(await h.api('get', `/${id}`, undefined, 'publisher'), 404);
     const hiddenCatalog = expectStatus(await h.api('get', '', undefined, 'outsider'), 200);
@@ -244,6 +256,7 @@ export async function checkPagesDatabase() {
     expectStatus(await h.api('get', `/${id}/media/${mediaId}?revision_id=${imageRevision}`, undefined, 'reader'), 403);
     await h.db.query('UPDATE job_titles SET active = FALSE WHERE id = $1', [cargoA]);
     expectStatus(await h.api('get', `/${id}`, undefined, 'reader'), 404);
+    expectStatus(await h.api('get', `/${id}`, undefined, 'unverified'), 404);
     expectStatus(await h.api('get', `/${id}/media/${mediaId}`, undefined, 'reader'), 404);
     await h.db.query('UPDATE job_titles SET active = TRUE WHERE id = $1', [cargoA]);
     current = await workspace(id);

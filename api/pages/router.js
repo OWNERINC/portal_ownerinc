@@ -4,13 +4,14 @@ const { createHash } = require('node:crypto');
 const { uuid, parseListQuery } = require('../route-utils');
 const { PagesError, validateMutation } = require('./validation');
 const { editor, publisher, mayEdit } = require('./access');
-const { templates } = require('./templates');
+const { listTemplates } = require('./templates');
 const store = require('./store');
 const media = require('./media');
 const { admit } = require('./media-runner');
 
-function createPagesRouter({ pool, authenticate, uploadDirectory = process.env.UPLOAD_DIR || '/app/uploads' }) {
+function createPagesRouter({ pool, authenticate, uploadDirectory = process.env.UPLOAD_DIR || '/app/uploads', v3WritesEnabled = process.env.PAGES_V3_WRITES_ENABLED === 'true' }) {
   const router = express.Router();
+  const writeOptions = { v3WritesEnabled: v3WritesEnabled === true };
   router.use((req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     const json = res.json.bind(res);
@@ -28,7 +29,7 @@ function createPagesRouter({ pool, authenticate, uploadDirectory = process.env.U
     const parsed = parseListQuery(req.query, { q: value => value.length <= 200, tag: value => value.length <= 40 });
     if (!parsed) throw new PagesError(400, 'invalid_query'); return { ...req.query, ...parsed };
   };
-  router.get('/templates', authMiddleware, wrap(async (req, res) => { manager(req.user); res.json(templates); }));
+  router.get('/templates', authMiddleware, wrap(async (req, res) => { manager(req.user); res.json(listTemplates(writeOptions)); }));
   router.get('/job-titles', authMiddleware, wrap(async (req, res) => {
     manager(req.user);
     const parsed = parseListQuery(req.query); if (!parsed) throw new PagesError(400, 'invalid_query');
@@ -40,8 +41,20 @@ function createPagesRouter({ pool, authenticate, uploadDirectory = process.env.U
     manager(req.user); const result = await store.list(pool, req.user, listQuery(req), true);
     res.set('X-Total-Count', String(result.total)).json(result.items);
   }));
+  router.get('/categories', authMiddleware, wrap(async (req, res) => {
+    manager(req.user);
+    const parsed = parseListQuery(req.query, { q: value => value.length <= 80 });
+    if (!parsed) throw new PagesError(400, 'invalid_query');
+    const result = await store.categories(pool, req.user, { ...req.query, ...parsed });
+    res.set('X-Total-Count', String(result.total)).json(result.items);
+  }));
+  router.get('/by-slug/:slug', authMiddleware, wrap(async (req, res) => {
+    const slug = req.params.slug;
+    if (slug.length > 120 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.trim() !== slug) throw new PagesError(400, 'invalid_slug');
+    res.json(await store.readerBySlug(pool, req.user, slug));
+  }));
   router.get('/:id/workspace', authMiddleware, wrap(async (req, res) => {
-    manager(req.user); res.json(await store.workspace(pool, req.user, id(req.params.id)));
+    manager(req.user); res.json(await store.workspace(pool, req.user, id(req.params.id), writeOptions));
   }));
   router.get('/:id/preview', authMiddleware, wrap(async (req, res) => {
     manager(req.user);
@@ -52,28 +65,43 @@ function createPagesRouter({ pool, authenticate, uploadDirectory = process.env.U
     const result = await store.list(pool, req.user, listQuery(req));
     res.set('X-Total-Count', String(result.total)).json(result.items);
   }));
-  router.get('/:id/media/:mediaId', authMiddleware, wrap(async (req, res) => {
+  const serveMedia = attachment => wrap(async (req, res) => {
     if (Object.keys(req.query).some(key => !['revision_id','preview'].includes(key)) || (req.query.preview !== undefined && req.query.preview !== '1')
-      || (req.query.preview && req.query.revision_id)) throw new PagesError(400, 'invalid_query');
+      || (req.query.preview !== undefined && req.query.revision_id !== undefined)) throw new PagesError(400, 'invalid_query');
     if (req.query.preview || req.query.revision_id) manager(req.user);
     const record = await store.mediaRecord(pool, req.user, id(req.params.id), id(req.params.mediaId), {
       revisionId: req.query.revision_id === undefined ? null : id(req.query.revision_id), staged: req.query.preview === '1',
     });
     res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Type': record.mime_type });
-    await new Promise((resolve, reject) => res.sendFile(media.mediaPath(uploadDirectory, record.storage_key), { acceptRanges: false }, err => err ? reject(err.code === 'ENOENT' ? new PagesError(404, 'media_unavailable') : err) : resolve()));
-  }));
+    if (attachment) {
+      const extension = { image: 'webp', gif: 'gif', audio: 'mp3', video: 'mp4' }[record.kind];
+      if (!extension) throw new PagesError(404, 'media_unavailable');
+      // No client filename or storage key ever participates in a download name.
+      res.set('Content-Disposition', `attachment; filename="material-${id(req.params.mediaId)}.${extension}"`);
+    }
+    try {
+      await new Promise((resolve, reject) => res.sendFile(media.mediaPath(uploadDirectory, record.storage_key), { acceptRanges: false }, err => err ? reject(err.code === 'ENOENT' ? new PagesError(404, 'media_unavailable') : err) : resolve()));
+    } catch (error) {
+      // A missing private file is a JSON error, not an attachment with a media
+      // MIME. Keep no-store/nosniff even when storage and its record diverge.
+      if (!res.headersSent) { res.removeHeader('Content-Disposition'); res.removeHeader('Content-Type'); }
+      throw error;
+    }
+  });
+  router.get('/:id/media/:mediaId/download', authMiddleware, serveMedia(true));
+  router.get('/:id/media/:mediaId', authMiddleware, serveMedia(false));
   router.get('/:id', authMiddleware, wrap(async (req, res) => { res.json(await store.reader(pool, req.user, id(req.params.id))); }));
   router.post('/', authMiddleware, wrap(async (req, res) => {
     if (!editor(req.user)) deny(); validateMutation(req.body, 'create');
-    const result = await store.mutate(pool, req, 'create', null, req.body); res.status(result.status).json(result.ack);
+    const result = await store.mutate(pool, req, 'create', null, req.body, null, writeOptions); res.status(result.status).json(result.ack);
   }));
   router.put('/:id/draft', authMiddleware, wrap(async (req, res) => {
     if (!editor(req.user)) deny(); const pageId = id(req.params.id); validateMutation(req.body, 'draft');
-    const result = await store.mutate(pool, req, 'draft', pageId, req.body); res.status(result.status).json(result.ack);
+    const result = await store.mutate(pool, req, 'draft', pageId, req.body, null, writeOptions); res.status(result.status).json(result.ack);
   }));
   for (const operation of ['publish','archive','restore']) router.post(`/:id/${operation}`, authMiddleware, wrap(async (req, res) => {
     if (!publisher(req.user)) deny(); const pageId = id(req.params.id); validateMutation(req.body, operation);
-    const result = await store.mutate(pool, req, operation, pageId, req.body); res.status(result.status).json(result.ack);
+    const result = await store.mutate(pool, req, operation, pageId, req.body, null, writeOptions); res.status(result.status).json(result.ack);
   }));
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: media.LIMITS.video, files: 1, fields: 2, fieldSize: 100, parts: 3 } }).fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]);
   const parseUpload = (req, res, next) => upload(req, res, err => next(err && !(err instanceof multer.MulterError) ? new PagesError(400, 'invalid_upload') : err));
@@ -100,7 +128,7 @@ function createPagesRouter({ pool, authenticate, uploadDirectory = process.env.U
     if (req.mediaController.signal.aborted) throw new PagesError(499, 'upload_cancelled');
     const image = await media.writeImage(uploadDirectory, normalized);
     try {
-      const result = await store.mutate(pool, req, 'media', id(req.params.id), body, image);
+      const result = await store.mutate(pool, req, 'media', id(req.params.id), body, image, writeOptions);
       if (result.replay) await media.compensate(image);
       res.status(result.status).json(result.ack);
     } catch (err) {

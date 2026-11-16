@@ -400,8 +400,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS solides_employee_links_external_unique
 CREATE INDEX IF NOT EXISTS solides_employee_links_status_idx
   ON solides_employee_links (status, updated_at DESC);
 
--- Pages starts at 040 shape. Both 040 (runtime grants) and 041 (typed media/v2)
--- remain pending and run in order after historical bootstrap migrations.
+-- Pages includes 042 identity/v3 shape; typed media is expanded by pending 041.
+-- 040 (runtime grants), 041 and 042 remain pending and run in order after
+-- historical bootstrap migrations. Do not mark them applied in this ledger.
 CREATE TABLE IF NOT EXISTS pages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   author_uid TEXT REFERENCES users(uid) ON DELETE SET NULL,
@@ -413,13 +414,17 @@ CREATE TABLE IF NOT EXISTS pages (
   archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  slug TEXT,
+  CONSTRAINT pages_slug_check CHECK (
+    slug IS NULL OR (length(slug) BETWEEN 1 AND 120 AND slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$')
+  ),
   CONSTRAINT pages_publication_check CHECK ((published_revision_id IS NULL) = (published_at IS NULL)),
   CONSTRAINT pages_archive_check CHECK (archived_at IS NULL OR published_revision_id IS NULL)
 );
 CREATE TABLE IF NOT EXISTS page_revisions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   page_id UUID NOT NULL REFERENCES pages(id) ON DELETE RESTRICT,
-  schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+  schema_version INTEGER NOT NULL CHECK (schema_version IN (1,2,3)),
   title TEXT NOT NULL CHECK (length(title) <= 200),
   document JSONB NOT NULL CHECK (jsonb_typeof(document) = 'object'),
   audience TEXT NOT NULL DEFAULT 'job_titles' CHECK (audience = 'job_titles'),
@@ -483,6 +488,7 @@ CREATE INDEX IF NOT EXISTS page_media_uploader_idx ON page_media(uploaded_by);
 CREATE INDEX IF NOT EXISTS page_revision_media_page_revision_idx ON page_revision_media(page_id, revision_id);
 CREATE INDEX IF NOT EXISTS page_revision_media_page_media_idx ON page_revision_media(page_id, media_id);
 CREATE INDEX IF NOT EXISTS page_requests_target_idx ON page_requests(target_id);
+CREATE UNIQUE INDEX IF NOT EXISTS pages_slug_unique_idx ON pages(slug) WHERE slug IS NOT NULL;
 
 -- The legacy catalog seed is superseded by migration 030 on fresh databases.
 -- Migration 033 must remain pending: migration 015 creates CMS tables first,

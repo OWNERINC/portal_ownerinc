@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
+import { testPagesAliasConcurrency } from './test-pages-alias-concurrency.mjs';
 import {
   assertApprovedMigrationCluster, assertEmptyMigrationDatabase, requireDisposableMigrationEnvironment,
 } from './migration-test-guards.mjs';
@@ -58,6 +59,7 @@ const expectedVersions = [
   '039_ethics_acceptances',
   '040_pages',
   '041_pages_media',
+  '042_pages_reference_fidelity',
 ];
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
@@ -122,6 +124,7 @@ try {
   // The real migration runner provisions roles and reapplies runtime grants,
   // including on the second idempotent run.
   await verifyMigrations();
+  await testPagesAliasConcurrency();
   if (legacyCourseId) {
     const legacy = await client.query(`SELECT title, url, active, delivery_mode, audience, learning_group,
       icon_key, instructor_name, updated_at IS NOT NULL AS has_updated_at FROM academy WHERE id = $1`, [legacyCourseId]);

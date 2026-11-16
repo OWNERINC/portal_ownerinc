@@ -10,13 +10,25 @@ test('committed browser editor and MIT notices exactly match pinned, reproducibl
   assert.doesNotMatch(notices, /\r/, 'generated notices use LF just like the committed Git blob');
 });
 
-test('Pages migration mirrors bootstrap structure, remains outside bootstrap ledger, and grants no cron or mutable revision access', async () => {
+test('browser appearance is generated from the canonical pure API algorithm, never a manual fork', async () => {
+  const [source, browser] = await Promise.all(['api/pages/appearance.js', 'public/pages/appearance.js'].map(file => readFile(file, 'utf8')));
+  assert.equal(browser, '/* Generated from api/pages/appearance.js by npm run build:pages. Do not edit. */\n'
+    + source.replace(/\r\n?/g, '\n').replace('module.exports = { normalizeHex, resolveAppearance, appearanceIssues, typographyMetrics };', 'export { normalizeHex, resolveAppearance, appearanceIssues, typographyMetrics };'));
+  assert.doesNotMatch(source, /\brequire\(|\bfetch\(|\bwindow\.|\bdocument\./);
+});
+
+test('Pages foundation stays intact beneath additive 042 bootstrap shape, with no cron or mutable revision grants', async () => {
   const [migration, schema, provision] = await Promise.all(['api/db/migrations/040_pages.sql','api/db/schema.sql','api/db/provision.js'].map(file => readFile(file,'utf8')));
   const start = 'CREATE TABLE IF NOT EXISTS pages (';
   const normalize = value => value.replace(/^--.*$/gm,'').replace(/\n+/g,'\n').trim();
-  assert.equal(normalize(schema.slice(schema.indexOf(start), schema.indexOf('-- The legacy catalog seed'))), normalize(migration.slice(migration.indexOf(start), migration.lastIndexOf('DO $$ BEGIN'))));
+  const foundation = schema.slice(schema.indexOf(start), schema.indexOf('-- The legacy catalog seed'))
+    .replace(/  slug TEXT,\n  CONSTRAINT pages_slug_check CHECK \(\n[^\n]+\n  \),\n/, '')
+    .replace('schema_version IN (1,2,3)', 'schema_version = 1')
+    .replace('CREATE UNIQUE INDEX IF NOT EXISTS pages_slug_unique_idx ON pages(slug) WHERE slug IS NOT NULL;\n', '');
+  assert.equal(normalize(foundation), normalize(migration.slice(migration.indexOf(start), migration.lastIndexOf('DO $$ BEGIN'))));
   assert.doesNotMatch(schema, /\('040_pages'\)/);
   assert.doesNotMatch(schema, /\('041_pages_media'\)/);
+  assert.doesNotMatch(schema, /\('042_pages_reference_fidelity'\)/);
   assert.match(provision, /GRANT SELECT, INSERT, UPDATE ON pages TO portal_api/);
   assert.match(provision, /GRANT SELECT, INSERT ON page_revisions, page_revision_job_titles, page_media, page_revision_media, page_requests TO portal_api/);
   assert.doesNotMatch(provision, /GRANT[^;]*\bpages\b[^;]*TO portal_cron/);

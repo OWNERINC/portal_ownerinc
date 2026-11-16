@@ -1,6 +1,7 @@
 import { can, getCurrentUserDoc, fetchAPI, logout } from './auth.js';
 import { auth } from './firebase-config.js';
 import { createPageLifecycle } from './page-lifecycle.js';
+import { routePath, pagesSlug } from './pages-route.js';
 import { canLeavePageUI, commitPageLeaveUI, closePageDialogs, disposePageUI, preparePageUI } from './ui.js';
 
 export const routes = Object.freeze({
@@ -33,22 +34,43 @@ let restoration = 0;
 let authorizationVersion = 0;
 const positions = new Map();
 
-export function navigationURL(event, base = location.href) {
+export function navigationURL(event, base = document.baseURI || location.href) {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return null;
   const anchor = event.target?.closest?.('a[href]');
   if (!anchor || anchor.hasAttribute('download') || (anchor.target && anchor.target !== '_self') || anchor.relList?.contains('external')) return null;
   const href = anchor.getAttribute('href');
-  if (!href || href.startsWith('#')) return null;
-  const url = new URL(href, base);
-  return url.origin === new URL(base).origin && routes[url.pathname] ? url : null;
+  if (!href) return null;
+  // A self base fixes shell assets but makes native # links point at /. Keep
+  // genuine same-document fragments native; repair only base-displaced ones.
+  const fragment = href.startsWith('#');
+  if (fragment && new URL(href, base).pathname === location.pathname) return null;
+  const url = new URL(href, fragment ? location.href : base);
+  return url.origin === location.origin && routes[routePath(url.pathname)] ? url : null;
 }
 
 export function routeAllowed(path, user) {
   if (!user) return false;
+  path = routePath(path);
   if (path === '/admin.html') return user.role === 'admin';
   if (path === '/autocard.html') return user.autocard_access === true;
   if (path === '/cards-pos.html') return user.pos_cards_access === true;
   return Boolean(routes[path]);
+}
+
+function setRouteBase(path) {
+  // The persistent sidebar still contains generated relative URLs. A direct
+  // Pages document already has a self base; SPA entry from dashboard does not.
+  if (pagesSlug(path) !== null) {
+    if (!document.querySelector('base')) {
+      const base = document.createElement('base');
+      base.setAttribute('href', '/'); base.setAttribute('data-portal-base', '');
+      document.head.prepend(base);
+    }
+  }
+  // Keep this self base for the remaining document lifetime. Native Back can
+  // change the address before popstate runs; removing it on exit would briefly
+  // resolve the persistent favicon/sidebar under /conteudos/ on the next Back.
+  // Every registered shell template is at root, so its relative URLs stay equal.
 }
 
 function canLeave() { return (!activePage || activePage.canLeave()) && canLeavePageUI(); }
@@ -227,6 +249,7 @@ function mountPage(module, user, url, saved) {
 }
 
 function commit(doc, selectedStyles, module, user, url, saved) {
+  setRouteBase(url.pathname);
   disposeCurrentPage();
   pageOverlays(doc).forEach(node => { node.dataset.pageOverlay = ''; document.body.append(document.importNode(node, true)); });
   const incoming = doc.getElementById('main-content');
@@ -242,7 +265,7 @@ function commit(doc, selectedStyles, module, user, url, saved) {
   document.title = doc.title;
   activateStyles(selectedStyles, doc);
   document.querySelectorAll('.sidebar-nav a').forEach(link => {
-    const selected = new URL(link.href).pathname === url.pathname;
+    const selected = new URL(link.href).pathname === routePath(url.pathname);
     link.classList.toggle('active', selected);
     if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
   });
@@ -251,8 +274,10 @@ function commit(doc, selectedStyles, module, user, url, saved) {
 }
 
 export async function navigate(destination, { historyPosition = null, initial = false } = {}) {
-  const url = new URL(destination, location.href);
-  if (!routes[url.pathname] || traversal) return false;
+  const url = new URL(destination, document.baseURI || location.href);
+  const path = routePath(url.pathname);
+  if (url.origin !== location.origin || !routes[path] || traversal) return false;
+  const templateURL = new URL(path, url.origin);
   restoration += 1;
   // Leave confirmation is delayed until preparation completes, so an editor
   // remains usable on network failure and changes made during loading are checked.
@@ -266,8 +291,8 @@ export async function navigate(destination, { historyPosition = null, initial = 
     // Observe preparation errors immediately, but never let them bypass an
     // authoritative access change returned by the independent session request.
     const preparation = Promise.all([
-      fetch(url.href, { signal, headers: { Accept: 'text/html' } }),
-      import(routes[url.pathname]),
+      fetch(templateURL.href, { signal, headers: { Accept: 'text/html' } }),
+      import(routes[path]),
     ]).then(value => ({ value }), error => ({ error }));
     const user = await getCurrentUserDoc();
     // Cancellation stops navigation, not a still-current authorization result.
@@ -276,10 +301,10 @@ export async function navigate(destination, { historyPosition = null, initial = 
       && activePage?.user.uid === user.uid && !routeAllowed(activeURL.pathname, user)) {
       revoked = true;
       disposeCurrentPage();
-      showError({ status: 403 }, () => navigate('./dashboard.html'), true);
+      showError({ status: 403 }, () => navigate('/dashboard.html'), true);
     }
     if (signal.aborted) return false;
-    if (!user) { disposeCurrentPage(); window.location.replace(`./login.html?reason=session&next=${encodeURIComponent(url.pathname + url.search + url.hash)}`); return false; }
+    if (!user) { disposeCurrentPage(); window.location.replace(`/login.html?reason=session&next=${encodeURIComponent(url.pathname + url.search + url.hash)}`); return false; }
     if (auth.currentUser?.uid !== user.uid) return false;
     controller.validatedUid = user.uid;
     if (!routeAllowed(url.pathname, user)) throw Object.assign(new Error('Acesso restrito.'), { status: 403 });
@@ -292,12 +317,15 @@ export async function navigate(destination, { historyPosition = null, initial = 
     if (typeof module.mount !== 'function') throw new Error('Inicialização da página indisponível.');
     const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
     if (!doc.querySelector('main#main-content') || !doc.querySelector('.topbar')) throw new Error('Página inválida.');
-    const [selectedStyles] = await Promise.all([prepareStyles(doc, url), prepareScripts(doc)]);
+    const [selectedStyles] = await Promise.all([prepareStyles(doc, templateURL), prepareScripts(doc)]);
     if (auth.currentUser?.uid !== user.uid) throw new DOMException('A sessão mudou.', 'AbortError');
     if (signal.aborted || !canLeave()) return false;
     const leaving = activePage;
     if (!await commitPageLeaveUI() || signal.aborted || activePage !== leaving) return false;
     recordPosition();
+    // Install before changing the address: existing relative shell images/links
+    // must never momentarily resolve under /conteudos/.
+    if (pagesSlug(url.pathname) !== null) setRouteBase(url.pathname);
     if (historyPosition !== null) {
       disposePageUI(); activePage?.dispose();
       document.querySelector('.main-content').inert = true;
@@ -383,6 +411,7 @@ export async function startRouter() {
   if (started) return;
   started = true;
   activeURL = new URL(location.href);
+  setRouteBase(activeURL.pathname);
   position = window.history.state?.[HISTORY_KEY] ?? 0;
   window.history.replaceState({ ...window.history.state, [HISTORY_KEY]: position }, '', location.href);
   window.history.scrollRestoration = 'manual';
@@ -403,8 +432,26 @@ export async function startRouter() {
     const url = navigationURL(event);
     if (!url) return;
     if (url.pathname === activeURL.pathname) {
-      if (url.search === activeURL.search && url.hash) return;
+      const href = event.target.closest('a[href]').getAttribute('href');
+      const nativeURL = new URL(href, document.baseURI || location.href);
+      if (url.search === activeURL.search && url.hash && nativeURL.href === url.href) return;
       event.preventDefault();
+      if (href.startsWith('#') && url.search === activeURL.search && nativeURL.href !== url.href) {
+        // Repair only the base-displaced fragment. Like a native skip link,
+        // this does not leave/discard the page or wait for pending mutations.
+        if (traversal) return;
+        restoration += 1;
+        if (url.href !== location.href) pageHistory.pushState({ ...window.history.state }, '', url);
+        dispatchLocalHistory();
+        let id;
+        try { id = decodeURIComponent(url.hash.slice(1)); } catch (_) { return; }
+        const target = document.getElementById(id);
+        if (target && !target.closest('[hidden], .hidden, [inert]')) {
+          if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
+          target.focus({ preventScroll: true }); target.scrollIntoView();
+        } else if (!id) window.scrollTo(0, 0);
+        return;
+      }
       if (!activePage) { if (!traversal) void navigate(url, { initial: url.href === location.href }); return; }
       if (traversal || !canLeave()) return;
       const leaving = activePage;
@@ -412,6 +459,7 @@ export async function startRouter() {
       transition?.abort(); closePageDialogs();
       if (url.href !== location.href) pageHistory.pushState({}, '', url);
       dispatchLocalHistory();
+      if (url.hash) restorePosition(leaving, url);
       return;
     }
     event.preventDefault();
@@ -440,17 +488,18 @@ export async function startRouter() {
   // Initial markup is a public template. Validation precedes any page mount.
   const boot = new AbortController(); transition = boot;
   authorizationVersion += 1;
-  const initialURL = new URL(activeURL);
+  const initialLocation = new URL(activeURL);
+  const initialURL = new URL(routePath(initialLocation.pathname), initialLocation.origin);
   try {
     const [user, module] = await Promise.all([getCurrentUserDoc(), import(routes[initialURL.pathname])]);
     if (boot.signal.aborted) return;
-    if (!user) { window.location.replace(`./login.html?reason=session&next=${encodeURIComponent(initialURL.pathname + initialURL.search + initialURL.hash)}`); return; }
+    if (!user) { window.location.replace(`/login.html?reason=session&next=${encodeURIComponent(initialLocation.pathname + initialLocation.search + initialLocation.hash)}`); return; }
     boot.validatedUid = user.uid;
     if (!routeAllowed(activeURL.pathname, user)) throw Object.assign(new Error('Acesso restrito.'), { status: 403 });
     if (activeURL.pathname === '/solides.html' && !(await fetchAPI('/api/solides/me/status')).linked) throw Object.assign(new Error('Acesso restrito.'), { status: 403 });
     await prepareScripts(document);
     if (boot.signal.aborted || auth.currentUser?.uid !== user.uid) return;
     mountPage(module, user, activeURL);
-  } catch (error) { if (!boot.signal.aborted) showError(error, () => navigate(initialURL, { initial: true }), true); }
+  } catch (error) { if (!boot.signal.aborted) showError(error, () => navigate(initialLocation, { initial: true }), true); }
   finally { if (transition === boot) transition = null; }
 }

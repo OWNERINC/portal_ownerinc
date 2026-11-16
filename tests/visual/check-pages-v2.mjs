@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createPagesDatabaseHarness, cargoA } from '../database/check-pages.mjs';
-import { pagesBrowserContext, pagesBrowserReady, pagesBrowserReflow, pagesEditorMore } from '../helpers/pages-browser.mjs';
+import { pagesBrowserContext, pagesBrowserReady, pagesBrowserReflow, pagesEditorMore, pagesEditorPreview } from '../helpers/pages-browser.mjs';
+import { checkPagesFeatureRoundtrip } from './check-pages-feature-roundtrip.mjs';
 
 for (const name of ['PGLITE_MODULE_PATH','PLAYWRIGHT_MODULE_PATH','AXE_MODULE_PATH']) if (!process.env[name]) throw new Error(`Set external ${name}`);
 const { chromium } = await import(pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE_PATH)).href);
@@ -70,11 +71,25 @@ try {
     await page.keyboard.press('Escape');
     const opener = width < 600 ? page.locator('.pages-v2-overflow > summary') : page.getByRole('button', { name: 'Inserir bloco', exact: true });
     assert.equal(await opener.evaluate(node => node === document.activeElement), true);
+    // Task 12: source choice is real but entirely local until confirmation. The
+    // default-false writer may still upload private MP4, never opt into YouTube.
+    await pagesEditorMore(page);
+    await page.getByRole('button', { name: 'Inserir bloco', exact: true }).click();
+    await page.getByRole('dialog', { name: 'O que você quer adicionar?' }).getByRole('button', { name: 'Adicionar vídeo', exact: true }).click();
+    const videoSource = page.getByRole('dialog', { name: 'Adicionar vídeo', exact: true });
+    assert.equal(await videoSource.locator('option[value=youtube]').isDisabled(), true);
+    await pagesBrowserReflow(page, AxeBuilder, `v2-video-source-${width}`);
+    await videoSource.getByRole('button', { name: 'Cancelar', exact: true }).click();
+    assert.equal(await page.locator('[data-block-type=video_embed]').count(), 0);
     await pagesEditorMore(page);
     await page.getByRole('button', { name: 'Estilo da página', exact: true }).click();
     const style = page.getByRole('dialog', { name: 'Estilo da página', exact: true });
     await pagesBrowserReflow(page, AxeBuilder, `v2-style-${width}`);
     await page.screenshot({ path: join(output, `style-${width}.png`) });
+    // Default-off v2 retains genuine bulk semantics via explicit legacy controls.
+    assert.equal(await style.getByRole('button', { name: '✓ Aplicar estilo', exact: true }).isDisabled(), true);
+    await style.locator('summary').filter({ hasText: 'Estilo legado dos blocos existentes' }).click();
+    await style.getByRole('button', { name: 'Abrir presets legados', exact: true }).click();
     await style.getByRole('combobox', { name: 'Fonte dos blocos existentes' }).selectOption('source-serif-4');
     await style.getByRole('button', { name: 'Quente', exact: true }).click();
     await style.getByRole('button', { name: 'Aplicar aos blocos existentes' }).click();
@@ -97,6 +112,10 @@ try {
     await page.locator('.pages-select-block').first().click();
     if (width < 1100) {
       await page.getByRole('button', { name: 'Estilo', exact: true }).click();
+      // New per-block inheritance controls truthfully require server writer v3.
+      await page.getByRole('button', { name: 'Posição', exact: true }).click();
+      await page.locator('.pages-inspector-advanced > summary').click();
+      await page.locator('.pages-legacy-presentation > summary').click();
       await page.getByRole('combobox', { name: 'Fonte', exact: true }).selectOption('manrope');
       await pagesBrowserReflow(page, AxeBuilder, `v2-bottom-sheet-${width}`);
       await page.screenshot({ path: join(output, `bottom-sheet-${width}.png`) });
@@ -124,14 +143,18 @@ try {
     await page.getByRole('button', { name: 'Publicar', exact: true }).click();
     const review = page.getByRole('dialog', { name: 'Pronto para compartilhar?' });
     await review.waitFor({ state: 'visible' });
-    assert.match(await review.innerText(), /Cargo sintético A/);
+    assert.equal(await review.getByRole('textbox',{name:'Título',exact:true}).isEditable(),true);
+    assert.equal(await review.getByRole('combobox',{name:'Categoria',exact:true}).isDisabled(),true,'default-off legacy does not silently add v3 metadata');
+    await review.getByRole('button',{name:/Visibilidade/}).click();
+    assert.equal(await review.getByRole('checkbox',{name:'Cargo sintético A',exact:true}).isChecked(),true);
+    await review.getByRole('button',{name:/Visibilidade/}).click();
     await pagesBrowserReflow(page, AxeBuilder, `v2-review-${width}`);
     await page.screenshot({ path: join(output, `review-${width}.png`) });
     await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: /Prévia mobile/ }).click();
+    await pagesEditorPreview(page,'mobile');
     await page.locator('.pages-document').waitFor({ state: 'visible' });
     await pagesBrowserReflow(page, AxeBuilder, `v2-preview-${width}`);
-    await page.getByRole('button', { name: 'Editar', exact: true }).click();
+    await pagesEditorPreview(page,'edit');
     assert.match(await rich.innerText(), /TEXTO-V2/);
     await page.getByRole('link', { name: 'Voltar à gestão de Pages', exact: true }).click();
     await page.getByRole('heading', { name: 'Gerenciar Pages', exact: true }).waitFor({ state: 'visible' });
@@ -155,7 +178,10 @@ try {
       await reviewPage.getByRole('button', { name: 'Publicar', exact: true }).click();
       const confirmation = reviewPage.getByRole('dialog', { name: 'Pronto para compartilhar?' });
       await confirmation.waitFor({ state: 'visible' });
-      assert.match(await confirmation.innerText(), /Cargo sintético A/);
+       assert.equal(await confirmation.getByRole('textbox',{name:'Título',exact:true}).isDisabled(),true);
+       await confirmation.getByRole('button',{name:/Visibilidade/}).click();
+       assert.equal(await confirmation.getByRole('checkbox',{name:'Cargo sintético A',exact:true}).isDisabled(),true);
+       assert.equal(await confirmation.getByRole('checkbox',{name:'Cargo sintético A',exact:true}).isChecked(),true);
       await reviewPage.keyboard.press('Escape');
       await readonly.context.close();
       results.push({ width, scenario: 'publisher reviews another author without editing; metadata disabled; current saved revision can enter publish review', pass: true });
@@ -170,6 +196,9 @@ try {
       await prose.evaluate(node => { globalThis.__resizeProse = node; });
       for (const nextWidth of [390,1366,768,1600]) {
         await resized.setViewportSize({ width: nextWidth, height: nextWidth < 600 ? 820 : 900 });
+        // Let native matchMedia notifications relocate controls before measuring
+        // the settled layout; PM identity can already match in the same turn.
+        await resized.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
         await resized.waitForFunction(() => document.querySelector('.ProseMirror') === globalThis.__resizeProse);
         assert.equal(await name.inputValue(), 'Edição sintética preservada no resize');
         assert.match(await prose.innerText(), /REDIMENSIONAR-V2/);
@@ -181,7 +210,8 @@ try {
     }
   }
   assert.deepEqual(errors, [], 'browser runtime errors');
-  await writeFile(join(output, 'results.json'), JSON.stringify({ results, errors, evidence: 'Real Chrome/Pages UI/API/serialized PGlite. Synthetic Firebase; not production or physical devices.' }, null, 2));
+  const featureResults = await checkPagesFeatureRoundtrip(browser, join(output, 'feature-roundtrip'));
+  await writeFile(join(output, 'results.json'), JSON.stringify({ results, featureResults, errors, evidence: 'Real Chrome/Pages UI/API/serialized PGlite. Synthetic Firebase; not production or physical devices.' }, null, 2));
   console.log(`Pages V2 PASS: ${results.length} scenarios, ${new Set(results.filter(item => item.width).map(item => item.width)).size} widths; artifacts: ${output}`);
 } catch (error) {
   for (const [index, page] of (browser?.contexts().flatMap(context => context.pages()) || []).entries()) if (!page.isClosed()) await page.screenshot({ path: join(output, `failure-${index}.png`), fullPage: true }).catch(() => {});

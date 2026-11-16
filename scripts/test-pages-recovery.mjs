@@ -4,11 +4,12 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, readFile, readdir, rm, chmod } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, chmod, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { requireDisposableMigrationEnvironment, assertApprovedMigrationCluster, assertEmptyMigrationDatabase } from './migration-test-guards.mjs';
+import { featureDocument, referenceMedia } from '../tests/helpers/pages-reference-document.mjs';
 
 requireDisposableMigrationEnvironment();
 assert.equal(process.env.NODE_ENV, 'test', 'Recovery rehearsal requires NODE_ENV=test');
@@ -25,6 +26,8 @@ const { Pool } = require('pg');
 const { provisionRoles } = require('../api/db/provision');
 const { migrate } = require('../api/db/migrate');
 const { verifyMigrations } = require('../api/db/verify-migrations');
+const { validateDocument } = require('../api/pages/validation');
+const { ensureSlug } = require('../api/pages/aliases');
 const exec = promisify(execFile);
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
 let client, directory;
@@ -178,9 +181,48 @@ try {
   assert.deepEqual(await schemaSnapshot(), restoredBaselineSchema, '040-only recovery restores the exact baseline schema');
   assert.deepEqual(await ledger(), baseline.ledger, '040-only recovery restores the baseline ledger');
   assert.deepEqual(await fixtureSnapshot(), baseline.data, '040-only recovery restores fixture data');
+
+  // A pre-042 Pages dump already contains all six tables. The unchanged
+  // receiver classifier selects ordinary pg_restore, never the empty-Pages
+  // cleanup. Rehearse that path across the additive slug/version expansion.
+  for (const filename of ['040_pages.sql', '041_pages_media.sql']) {
+    await client.query('BEGIN');
+    try {
+      await client.query(await readFile(new URL(filename, migrations), 'utf8'));
+      await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [filename.slice(0, -4)]);
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+  }
+  const pre042Page = randomUUID(), pre042Revision = randomUUID();
+  await client.query('INSERT INTO pages(id,author_uid) VALUES($1,$2)', [pre042Page, uid]);
+  await client.query('INSERT INTO page_revisions(id,page_id,schema_version,title,document,created_by) VALUES($1,$2,2,$3,$4,$5)', [pre042Revision, pre042Page, 'Snapshot pré-042', { schema_version: 2, synthetic: true }, uid]);
+  await client.query('UPDATE pages SET draft_revision_id=$1 WHERE id=$2', [pre042Revision, pre042Page]);
+  const pre042Ledger = await ledger();
+  const pre042Rows = (await client.query('SELECT id,page_id,schema_version,title,document::text,created_by,created_at FROM page_revisions WHERE id=$1', [pre042Revision])).rows;
+  const beforeReferenceFidelity = await dump('before-reference-fidelity');
+  assert.equal(await classifyDump(beforeReferenceFidelity), 'present', 'pre-042 native TOC identifies an ordinary Pages backup');
+  await legacyPreparation(); await restore(beforeReferenceFidelity);
+  const restoredPre042Schema = await schemaSnapshot();
+  await migrate(); await verifyMigrations();
+  assert.ok((await ledger()).some(row => row.version === '042_pages_reference_fidelity'));
+  const executionsBeforePre042Restore = cleanupExecutions;
+  await legacyPreparation(); await restore(beforeReferenceFidelity);
+  assert.equal(cleanupExecutions, executionsBeforePre042Restore, 'pre-042 restore uses ordinary restore without Pages cleanup');
+  assert.deepEqual(await schemaSnapshot(), restoredPre042Schema, 'pre-042 restore recovers exact schema, including removal of slug/index');
+  assert.deepEqual(await ledger(), pre042Ledger, 'pre-042 restore preserves ledger and timestamps');
+  assert.deepEqual((await client.query('SELECT id,page_id,schema_version,title,document::text,created_by,created_at FROM page_revisions WHERE id=$1', [pre042Revision])).rows, pre042Rows, 'pre-042 restore preserves JSON bytes, UUIDs and revision timestamps');
+  await assert.rejects(verifyMigrations(), /Unexpected migration ledger/, 'pre-042 restore stays unready until migrations are reapplied');
+  await migrate(); await verifyMigrations();
+  assert.deepEqual((await client.query('SELECT id,page_id,schema_version,title,document::text,created_by,created_at FROM page_revisions WHERE id=$1', [pre042Revision])).rows, pre042Rows, '042 re-upgrade preserves the restored snapshot');
+  // Remove only this rehearsal's synthetic rows before exercising empty-Pages
+  // recovery. Never adapt or relax the receiver's nonempty-table refusal.
+  await client.query('UPDATE pages SET draft_revision_id=NULL WHERE id=$1', [pre042Page]);
+  await client.query('DELETE FROM page_revisions WHERE id=$1', [pre042Revision]);
+  await client.query('DELETE FROM pages WHERE id=$1', [pre042Page]);
   await migrate(); await verifyMigrations();
   assert.ok((await ledger()).some(row => row.version === '040_pages'));
   assert.ok((await ledger()).some(row => row.version === '041_pages_media'));
+  assert.ok((await ledger()).some(row => row.version === '042_pages_reference_fidelity'));
   await legacyPreparation();
   await assert.rejects(restore(beforePages), error => {
     assert.match(error.toolOutput || '', /depend|cannot drop/i);
@@ -244,10 +286,84 @@ try {
   await client.query('INSERT INTO pages(id,author_uid) VALUES($1,$2)', [pageId, uid]);
   await client.query('INSERT INTO page_revisions(id,page_id,schema_version,title,document,created_by) VALUES($1,$2,1,$3,$4,$5)', [revisionId, pageId, 'Revisão sintética preservada', { synthetic: true }, uid]);
   await client.query('UPDATE pages SET draft_revision_id=$1 WHERE id=$2', [revisionId, pageId]);
+  // Preserve the v1 scenario above and add a valid, private v3 graph. The bytes
+  // live only in this rehearsal's directory, never in the application's uploads.
+  // This is a database restore test, not a claim of uploads.tar.gz recovery.
+  const v3PageId = randomUUID(), publishedId = randomUUID(), draftId = randomUUID(), mediaId = randomUUID();
+  const mediaBytes = await require('sharp')(referenceMedia()[0].bytes).webp().toBuffer();
+  const privateDirectory = join(directory, 'pages-private'); await mkdir(privateDirectory);
+  const storageKey = `pages-${mediaId}.webp`, mediaHash = createHash('sha256').update(mediaBytes).digest('hex');
+  await writeFile(join(privateDirectory, storageKey), mediaBytes, { flag: 'wx', mode: 0o600 });
+  const document = featureDocument();
+  document.metadata.title = 'Ensaio privado v3'; document.metadata.audience.job_title_ids = [titleId];
+  for (const section of document.sections) for (const row of section.rows) for (const column of row.columns) {
+    // The source board's audio is an unfilled authoring placeholder, not a
+    // publishable recording. Retain the complete five-section v3 structure.
+    column.blocks = column.blocks.filter(block => block.type !== 'audio');
+    for (const block of column.blocks) {
+      if (block.type === 'image') { block.media_id = mediaId; block.alt = 'Imagem sintética privada'; }
+      if (block.type === 'gallery') for (const item of block.items) { item.media_id = mediaId; item.alt = 'Mesma imagem privada'; }
+      if (block.type === 'button') block.action = { type: 'download', media_id: mediaId, kind: 'image', file_name: 'ensaio.webp' };
+      if (block.type === 'faq') for (const item of block.items) item.answer = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Resposta sintética do ensaio.' }] }] };
+    }
+  }
+  const published = validateDocument(document, { publishing: true });
+  const draftDocument = structuredClone(document);
+  draftDocument.metadata.title = 'Rascunho privado posterior'; draftDocument.metadata.category = 'Categoria posterior';
+  const draft = validateDocument(draftDocument);
+  assert.deepEqual(published.mediaIds, [mediaId], 'image/gallery/download deduplicate to one private media reference');
+  await client.query('BEGIN');
+  try {
+    const page = (await client.query('INSERT INTO pages(id,author_uid) VALUES($1,$2) RETURNING id,slug', [v3PageId, uid])).rows[0];
+    await ensureSlug(client, page, document.metadata.title);
+    await client.query(`INSERT INTO page_media(id,page_id,uploaded_by,storage_key,mime_type,byte_size,width,height,sha256)
+      VALUES($1,$2,$3,$4,'image/webp',$5,1,1,$6)`, [mediaId, v3PageId, uid, storageKey, mediaBytes.length, mediaHash]);
+    for (const [id, validated] of [[publishedId, published], [draftId, draft]]) {
+      await client.query(`INSERT INTO page_revisions(id,page_id,schema_version,title,document,created_by)
+        VALUES($1,$2,3,$3,$4::jsonb,$5)`, [id, v3PageId, validated.document.metadata.title, JSON.stringify(validated.document), uid]);
+      for (const job of validated.jobTitleIds) await client.query('INSERT INTO page_revision_job_titles(revision_id,job_title_id) VALUES($1,$2)', [id, job]);
+      for (const media of validated.mediaIds) await client.query('INSERT INTO page_revision_media(page_id,revision_id,media_id) VALUES($1,$2,$3)', [v3PageId, id, media]);
+    }
+    await client.query(`UPDATE pages SET draft_revision_id=$2,published_revision_id=$3,
+      published_at=now(),published_by=$4,version=3 WHERE id=$1`, [v3PageId, draftId, publishedId, uid]);
+    await client.query(`INSERT INTO page_requests(actor_uid,client_mutation_id,operation,target_id,request_hash,response,status)
+      VALUES($1,$2,'draft',$3,$4,$5::jsonb,200)`, [uid, randomUUID(), v3PageId, 'b'.repeat(64), JSON.stringify({ id: v3PageId, draft_revision_id: draftId, version: 3 })]);
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  async function v3Snapshot() {
+    // JSON text keeps every column, JSONB content and full timestamp precision;
+    // no selected-field comparison can hide a lost alias or association.
+    const snapshot = {};
+    for (const [table, predicate, order] of [
+      ['pages', 'id=$1', 'id'], ['page_revisions', 'page_id=$1', 'id'],
+      ['page_media', 'page_id=$1', 'id'], ['page_revision_media', 'page_id=$1', 'revision_id,media_id'],
+      ['page_revision_job_titles', 'revision_id IN (SELECT id FROM page_revisions WHERE page_id=$1)', 'revision_id,job_title_id'],
+      ['page_requests', 'target_id=$1', 'actor_uid,client_mutation_id'],
+    ]) snapshot[table] = (await client.query(`SELECT to_jsonb(t)::text AS snapshot FROM ${table} t WHERE ${predicate} ORDER BY ${order}`, [v3PageId])).rows;
+    return snapshot;
+  }
+  const v3Before = await v3Snapshot(), laterLedger = await ledger();
+  assert.deepEqual(Object.fromEntries(Object.entries(v3Before).map(([table, rows]) => [table, rows.length])), {
+    pages: 1, page_revisions: 2, page_media: 1, page_revision_media: 2, page_revision_job_titles: 2, page_requests: 1,
+  });
   const withPages = await dump('with-pages');
   assert.equal(await classifyDump(withPages), 'present', 'real native TOC identifies the later Pages backup');
+  // Establish an independently restored schema reference (CHECK expressions
+  // can be flattened by pg_restore), then perturb every part of the v3 graph.
+  await legacyPreparation(); await restore(withPages);
+  const laterSchema = await schemaSnapshot();
+  assert.deepEqual(await v3Snapshot(), v3Before, 'reference roundtrip preserves the complete v3 graph');
   await client.query('UPDATE users SET name=$1 WHERE uid=$2', ['Alteração sintética posterior ao backup', uid]);
   await client.query('UPDATE pages SET version=7 WHERE id=$1', [pageId]);
+  await client.query(`UPDATE pages SET slug=$2,draft_revision_id=$3,published_revision_id=NULL,
+    published_at=NULL,published_by=NULL,version=9 WHERE id=$1`, [v3PageId, `changed-${v3PageId}`, publishedId]);
+  await client.query(`UPDATE page_revisions SET document=jsonb_set(document,'{metadata,category}','"Alterada"'::jsonb) WHERE page_id=$1`, [v3PageId]);
+  await client.query('DELETE FROM page_revision_media WHERE page_id=$1', [v3PageId]);
+  await client.query('DELETE FROM page_revision_job_titles WHERE revision_id=ANY($1::uuid[])', [[publishedId, draftId]]);
+  await client.query('DELETE FROM page_media WHERE id=$1', [mediaId]);
+  await client.query('DELETE FROM page_requests WHERE target_id=$1 AND actor_uid=$2', [v3PageId, uid]);
+  const v3Changed = await v3Snapshot();
+  for (const table of Object.keys(v3Before)) assert.notDeepEqual(v3Changed[table], v3Before[table], `${table}: restore must repair a real change`);
   const executionsBeforeLaterRestore = cleanupExecutions;
   await legacyPreparation(); await restore(withPages);
   assert.equal(cleanupExecutions, executionsBeforeLaterRestore, 'later Pages backup restores without special cleanup');
@@ -255,8 +371,13 @@ try {
   assert.equal((await client.query('SELECT draft_revision_id,version FROM pages WHERE id=$1', [pageId])).rows[0].draft_revision_id, revisionId);
   assert.equal((await client.query('SELECT version FROM pages WHERE id=$1', [pageId])).rows[0].version, 0);
   assert.equal((await client.query('SELECT title FROM page_revisions WHERE id=$1', [revisionId])).rows[0].title, 'Revisão sintética preservada');
+  assert.deepEqual(await v3Snapshot(), v3Before, 'full v3 snapshot, alias, private media, revision/audience references and receipt restored exactly');
+  assert.deepEqual(await ledger(), laterLedger, 'later backup restores the complete migration ledger and timestamps');
+  assert.deepEqual(await schemaSnapshot(), laterSchema, 'later backup restores the complete schema');
+  assert.equal(createHash('sha256').update(await readFile(join(privateDirectory, storageKey))).digest('hex'), mediaHash,
+    'database-only restore leaves the owned private fixture bytes intact; not an uploads restore');
   await verifyMigrations();
-  console.log('Recovery rehearsal PASS: exact receiver SQL/TOC, native PG16 refusal guards, 040/041 recovery and later Pages backup preservation. Installed receiver/API/cron acceptance remains an operator gate.');
+  console.log('Recovery rehearsal PASS: exact receiver SQL/TOC, native PG16 refusal guards, 040/041/042 recovery, pre-042 restore/re-upgrade and later Pages backup preservation including full v3 alias/media/revision parity. Installed receiver/API/cron acceptance remains an operator gate.');
 } finally {
   client?.release(); await pool.end();
   if (directory) await rm(directory, { recursive: true, force: true });

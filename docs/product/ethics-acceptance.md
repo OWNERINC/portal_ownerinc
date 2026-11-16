@@ -48,8 +48,10 @@ servidor e nunca reutiliza uma resposta de outra conta.
   exatos dos três endpoints de bootstrap acima são isentos.
 - A camada frontend trata esse 403 como encaminhamento ao termo, não como logout.
   A navegação persistente e os acessos diretos aguardam a validação de perfil.
-- O destino de retorno aceita somente documentos `.html` na mesma origem, exclui
-  login/termo/index e preserva query e fragmento. Destino inválido usa dashboard.
+- O destino de retorno aceita documentos `.html` na mesma origem e aliases Pages
+  estritos `/conteudos/<slug>` (ASCII minúsculo, 1–120 caracteres, hífens simples).
+  Exclui login/termo/index/announcements, API/uploads, dotdot e separadores
+  codificados; preserva query/fragmento. Destino inválido usa `/dashboard.html`.
 - O estado no navegador nunca é autoridade para liberar API ou registrar aceite.
   Detectar rolagem é um requisito da interface, não uma evidência antifraude.
 

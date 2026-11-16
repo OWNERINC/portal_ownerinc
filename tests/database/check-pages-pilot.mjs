@@ -40,7 +40,7 @@ export async function checkPagesPilotDatabase() {
     assert.equal(migrated.mime_type, 'image/webp');
     assert.equal(migrated.storage_key, `pages-${oldMedia}.webp`);
     assert.equal(migrated.kind, 'image');
-    // Compare the effective bootstrap+pending-migrations shape with 040→041,
+    // Compare the effective bootstrap+pending-migrations shape with 040→041→042,
     // rather than equating SQL source text with the resulting database schema.
     const { PGlite } = await import(pathToFileURL(resolve(process.env.PGLITE_MODULE_PATH)).href);
     const fresh = new PGlite();
@@ -48,13 +48,13 @@ export async function checkPagesPilotDatabase() {
       await fresh.exec('CREATE ROLE portal_api; CREATE ROLE portal_cron; CREATE TABLE users(uid TEXT PRIMARY KEY); CREATE TABLE job_titles(id UUID PRIMARY KEY)');
       const bootstrap = await readFile(new URL('../../api/db/schema.sql', import.meta.url), 'utf8');
       await fresh.exec(bootstrap.slice(bootstrap.indexOf('CREATE TABLE IF NOT EXISTS pages ('), bootstrap.indexOf('-- The legacy catalog seed')));
-      for (const name of ['040_pages.sql', '041_pages_media.sql']) await fresh.exec(await readFile(new URL(`../../api/db/migrations/${name}`, import.meta.url), 'utf8'));
+      for (const name of ['040_pages.sql', '041_pages_media.sql', '042_pages_reference_fidelity.sql']) await fresh.exec(await readFile(new URL(`../../api/db/migrations/${name}`, import.meta.url), 'utf8'));
       for (const sql of [
         "SELECT table_name,column_name,is_nullable,data_type,column_default FROM information_schema.columns WHERE table_schema='public' AND (table_name='pages' OR table_name LIKE 'page_%') ORDER BY table_name,ordinal_position",
         "SELECT conrelid::regclass::text AS table_name,conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid IN (SELECT oid FROM pg_class WHERE relname='pages' OR relname LIKE 'page_%') ORDER BY table_name,conname",
         "SELECT tablename,indexname,indexdef FROM pg_indexes WHERE schemaname='public' AND (tablename='pages' OR tablename LIKE 'page_%') ORDER BY tablename,indexname",
         "SELECT grantee,table_name,privilege_type FROM information_schema.role_table_grants WHERE grantee IN ('portal_api','portal_cron') AND (table_name='pages' OR table_name LIKE 'page_%') ORDER BY grantee,table_name,privilege_type",
-      ]) assert.deepEqual((await fresh.query(sql)).rows, (await h.db.query(sql)).rows, 'bootstrap+040+041 and populated 040→041 must converge');
+      ]) assert.deepEqual((await fresh.query(sql)).rows, (await h.db.query(sql)).rows, 'bootstrap+040+041+042 and populated 040→041→042 must converge');
     } finally { await fresh.close(); }
     await save(oldId, oldDocument);
     await publish(oldId);
@@ -206,7 +206,7 @@ export async function checkPagesPilotDatabase() {
       assert.ok(privileges.includes('SELECT') && privileges.includes('INSERT'));
       assert.ok(!privileges.includes('UPDATE') && !privileges.includes('DELETE'));
     }
-    console.log(`Pages pilot database PASS: ${assertions} HTTP checks; populated 040→041, v1 preservation, v2 pilot, real GIF/MP3/MP4 probe/decode, typed private access, replay, rollback, publication/history/archive. PGlite serialized; Firebase synthetic.`);
+    console.log(`Pages pilot database PASS: ${assertions} HTTP checks; populated 040→041→042, v1 preservation, v2 pilot, real GIF/MP3/MP4 probe/decode, typed private access, replay, rollback, publication/history/archive. PGlite serialized; Firebase synthetic.`);
   } finally { await h?.close(); await fixtures.close(); }
 }
 

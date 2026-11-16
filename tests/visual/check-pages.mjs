@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createPagesDatabaseHarness, pageDocument } from '../database/check-pages.mjs';
-import { pagesEditorPageProperties } from '../helpers/pages-browser.mjs';
+import { pagesEditorPageProperties, pagesEditorPreview } from '../helpers/pages-browser.mjs';
 
 for (const name of ['PLAYWRIGHT_MODULE_PATH', 'AXE_MODULE_PATH', 'PGLITE_MODULE_PATH']) {
   if (!process.env[name]) throw new Error(`Set external ${name}; no production environment is used`);
@@ -34,6 +34,7 @@ async function api(method, path, body, actor = 'super') {
 
 async function contextFor(uid = 'super', width = 1366) {
   const context = await browser.newContext({ viewport: { width, height: width > 1000 ? 900 : 840 }, reducedMotion: 'reduce' });
+  await context.route('**/*', route => new URL(route.request().url()).origin === h.origin ? route.fallback() : route.abort('blockedbyclient'));
   await context.route('**/js/firebase-config.js', route => route.fulfill({ contentType: 'text/javascript', body: `
     const listeners = new Set();
     const account = uid => uid ? { uid, getIdToken: async () => uid } : null;
@@ -109,13 +110,13 @@ try {
   await saveResponse;
   await editor.page.getByText(/^Salvo(?:\b|$)/).first().waitFor({ state: 'visible' });
   assert.equal((await api('get', `/${id}`, undefined, 'reader')).document.metadata.title, original.metadata.title, 'save must not alter publication');
-  await editor.page.getByRole('button', { name: /Prévia mobile/i }).click();
+  await pagesEditorPreview(editor.page,'mobile');
   await editor.page.getByRole('heading', { name: 'Novo comunicado — rascunho sintético', exact: true }).waitFor({ state: 'visible' });
   const previewImage = editor.page.getByRole('img', { name: 'Imagem sintética do comunicado' });
   await previewImage.waitFor({ state: 'visible' });
   await previewImage.evaluate(image => image.decode());
   assert.equal(await previewImage.evaluate(image => image.naturalWidth), 120);
-  await editor.page.getByRole('button', { name: /^Editar$/i }).click();
+  await pagesEditorPreview(editor.page, 'edit');
   assert.equal(await title.inputValue(), 'Novo comunicado — rascunho sintético');
   results.push({ scenario: 'real editor, selected rich text, private image upload, mobile preview, save and publication isolation', pass: true });
 

@@ -39,6 +39,7 @@ const expectedVersions = [
   '039_ethics_acceptances',
   '040_pages',
   '041_pages_media',
+  '042_pages_reference_fidelity',
 ];
 
 const historicalVersions = Object.freeze([
@@ -462,7 +463,24 @@ async function verifyPages(pool) {
     (SELECT count(*) = 4 FROM pg_constraint WHERE conrelid IN ('pages'::regclass,'page_revisions'::regclass,'page_media'::regclass) AND confrelid = 'users'::regclass AND confdeltype = 'n') AS anonymization,
     EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'page_requests'::regclass AND contype = 'p' AND pg_get_constraintdef(oid) = 'PRIMARY KEY (actor_uid, client_mutation_id)') AS requests_identity,
     EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'page_media'::regclass AND conname = 'page_media_typed_check' AND pg_get_constraintdef(oid) LIKE '%IS TRUE%') AS typed_media,
-    EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'page_revisions'::regclass AND conname = 'page_revisions_schema_version_check' AND pg_get_constraintdef(oid) LIKE '%2%') AS versions`);
+    EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'page_revisions'::regclass
+      AND conname = 'page_revisions_schema_version_check' AND contype = 'c' AND convalidated
+      AND pg_get_constraintdef(oid) = 'CHECK ((schema_version = ANY (ARRAY[1, 2, 3])))') AS versions,
+    EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'pages'
+      AND column_name = 'slug' AND data_type = 'text' AND is_nullable = 'YES' AND column_default IS NULL) AS slug_column,
+    EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid = 'pages'::regclass
+      AND conname = 'pages_slug_check' AND contype = 'c' AND convalidated
+      -- pg_dump/restore reparses BETWEEN and flattens its associative AND.
+      -- Accept only these two complete equivalent trees, never token matches.
+      AND pg_get_constraintdef(oid) IN (
+        'CHECK (((slug IS NULL) OR (((length(slug) >= 1) AND (length(slug) <= 120)) AND (slug ~ ''^[a-z0-9]+(-[a-z0-9]+)*$''::text))))',
+        'CHECK (((slug IS NULL) OR ((length(slug) >= 1) AND (length(slug) <= 120) AND (slug ~ ''^[a-z0-9]+(-[a-z0-9]+)*$''::text))))')) AS slug_check,
+    EXISTS(SELECT 1 FROM pg_index i JOIN pg_class index_rel ON index_rel.oid = i.indexrelid
+      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attname = 'slug' AND NOT a.attisdropped
+      WHERE i.indrelid = 'public.pages'::regclass AND index_rel.relname = 'pages_slug_unique_idx'
+        AND i.indisunique AND i.indisvalid AND i.indisready AND i.indimmediate
+        AND i.indnatts = 1 AND i.indnkeyatts = 1 AND i.indkey[0] = a.attnum AND i.indexprs IS NULL
+        AND pg_get_expr(i.indpred, i.indrelid) = '(slug IS NOT NULL)') AS slug_unique`);
   if (!Object.values(shape.rows[0]).every(value => value === true)) throw new Error('Pages relational invariants are incomplete');
 }
 

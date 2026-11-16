@@ -1,5 +1,7 @@
 // Deliberately independent of the browser editor and ProseMirror packages.
 const { uuid } = require('../route-utils');
+const { createRichTextValidator } = require('./validation-common');
+const { validateV3 } = require('./validation-v3');
 
 class PagesError extends Error {
   constructor(status, reason, message = reason) { super(message); this.status = status; this.reason = reason; }
@@ -23,6 +25,7 @@ function validateDocument(input, { publishing = false } = {}) {
   let bytes;
   try { bytes = Buffer.byteLength(JSON.stringify(input)); } catch { fail(); }
   if (bytes > 1024 * 1024) throw new PagesError(413, 'document_too_large');
+  if (input?.schema_version === 3) return validateV3(input, { publishing, PagesError, safeLink });
   keys(input, ['schema_version', 'template', 'metadata', 'presentation', 'sections']);
   if (![1, 2].includes(input.schema_version)) fail();
   const v2 = input.schema_version === 2;
@@ -71,42 +74,10 @@ function validateDocument(input, { publishing = false } = {}) {
       else if (!['strong', 'em', 'underline'].includes(mark.type) || mark.attrs !== undefined) fail();
     }
   }
-  function pm(node, parent, listDepth = 0, depth = 0) {
-    if (++nodes > 20000 || depth > 12) fail();
-    keys(node, ['type'], ['content', 'attrs', 'text', 'marks']);
-    const inline = parent === 'paragraph' || parent === 'heading';
-    if (node.type === 'text') {
-      if (!inline || Object.hasOwn(node, 'content') || Object.hasOwn(node, 'attrs')) fail();
-      text(node.text, 100000); if (!node.text.length) fail(); chars += node.text.length;
-      if (node.text.trim()) meaningful = true;
-      marks(node.marks);
-      return;
-    }
-    if (node.type === 'hard_break') {
-      if (!inline || node.text !== undefined || node.content !== undefined || node.attrs !== undefined) fail(); marks(node.marks); return;
-    }
-    if (node.text !== undefined || node.marks !== undefined) fail();
-    const content = node.content === undefined ? [] : node.content;
-    if (!Array.isArray(content)) fail();
-    if (node.type === 'doc') { if (parent || !content.length) fail(); }
-    else if (node.type === 'paragraph' || node.type === 'heading') {
-      if (!['doc', 'list_item'].includes(parent)) fail();
-      if (node.type === 'heading') { keys(node.attrs, ['level']); if (![2, 3].includes(node.attrs.level)) fail(); }
-    } else if (['bullet_list', 'ordered_list'].includes(node.type)) {
-      if (!['doc', 'list_item'].includes(parent) || ++listDepth > 2 || !content.length) fail();
-      if (node.type === 'ordered_list' && node.attrs !== undefined) {
-        keys(node.attrs, ['order']); if (!Number.isInteger(node.attrs.order) || node.attrs.order < 1 || node.attrs.order > 100000) fail();
-      }
-    } else if (node.type === 'list_item') {
-      if (!['bullet_list', 'ordered_list'].includes(parent) || content[0]?.type !== 'paragraph') fail();
-    } else fail();
-    if (!['heading', 'ordered_list'].includes(node.type) && node.attrs !== undefined) fail();
-    if (content.some(n => !object(n))) fail();
-    if (['bullet_list', 'ordered_list'].includes(node.type) && content.some(n => n.type !== 'list_item')) fail();
-    if (['doc', 'list_item'].includes(node.type) && content.some(n => !['paragraph', 'heading', 'bullet_list', 'ordered_list'].includes(n.type))) fail();
-    if (['paragraph', 'heading'].includes(node.type) && content.some(n => !['text', 'hard_break'].includes(n.type))) fail();
-    content.forEach(n => pm(n, node.type, listDepth, depth + 1));
-  }
+  const pm = createRichTextValidator({ fail, object, keys, text, marks,
+    countNode() { if (++nodes > 20000) fail(); },
+    onText(value) { chars += value.length; if (value.trim()) meaningful = true; },
+  });
   if (!Array.isArray(input.sections) || !input.sections.length || input.sections.length > (v2 ? 20 : 1)) fail();
   for (const section of input.sections) {
     keys(section, ['id', 'label', 'rows']); id(section.id); text(section.label, 200); chars += section.label.length;
@@ -173,7 +144,7 @@ function validateMutation(body, operation) {
   keys(body, ['client_mutation_id', ...(operation === 'create' ? [] : ['expected_version']), ...extra]);
   if (!uuid(body.client_mutation_id)) fail('invalid_mutation');
   if (operation !== 'create' && (!Number.isSafeInteger(body.expected_version) || body.expected_version < 0)) fail('invalid_version');
-  if (operation === 'create' && !['comunicado','owner-news'].includes(body.template_id)) fail('invalid_template');
+  if (operation === 'create' && !['comunicado','owner-news','guia-interno'].includes(body.template_id)) fail('invalid_template');
   if (operation === 'publish' && !uuid(body.revision_id)) fail('invalid_revision');
   return body;
 }

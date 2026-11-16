@@ -48,6 +48,24 @@ Um rascunho pode estar incompleto; a publicação tem validação adicional.
 
 ## Identidade, revisões e concorrência
 
+A migration aditiva `042_pages_reference_fidelity` prepara o armazenamento para
+revisões 1/2/3 e acrescenta `pages.slug` como texto nullable, sem default ou backfill.
+Valores não nulos têm 1–120 caracteres ASCII minúsculos/numéricos separados por
+hífen simples e unicidade parcial (`WHERE slug IS NOT NULL`). UUID continua sendo
+a identidade. A migration não atribui aliases, modifica snapshots, referências,
+timestamps ou grants, nem habilita writer/rotas v3. O bootstrap inclui a coluna e
+os checks de 042, mas mantém 040/041/042 pendentes para aplicar os grants e a
+expansão de mídia na ordem existente. Readiness exige o ledger atual **e** a forma
+efetiva da coluna, checks validados e índice único parcial.
+
+O harness PGlite descartável aceita `afterFoundation` e `afterMedia`; aplica 042
+duas vezes após o hook de 041 para conferir preservação de v1/v2. O ensaio nativo
+`scripts/test-pages-recovery.mjs` inclui dump pré-042, restore ordinário após 042,
+readiness recusada até reaplicar migrations e recuperação pré-Pages usando o SQL
+literal do receptor inalterado. PGlite/guardas locais não comprovam esse restore:
+PostgreSQL 16 nativo, clientes pg_dump/pg_restore, concorrência e ambiente
+descartável explicitamente aprovado continuam gates separados de rollout.
+
 `pages` contém identidade, autoria, versão de concorrência e ponteiros de rascunho
 e publicação. `page_revisions` contém snapshots; `page_revision_job_titles` e
 `page_revision_media` contêm suas referências, inseridas na mesma transação.
@@ -71,6 +89,118 @@ mesma chave com outro conteúdo é conflito. Recibos não contêm tokens ou snap
 Não há exclusão definitiva exposta. Arquivar suspende leitura e mídia publicada.
 Restaurar preserva o rascunho e não republica automaticamente. Revisões antigas e
 arquivos referenciados permanecem preservados; esta entrega não introduz expurgo.
+
+### Alias estável e sugestões de categoria
+
+Create e save de rascunho reservam `pages.slug` na mesma transação de revisão,
+auditoria e recibo, usando o título validado (inclusive o título real do modelo).
+Título vazio mantém alias nulo. A base normalizada ASCII tem até 80 caracteres;
+colisão usa `base-UUIDsemHifens` (até 113). Alias existente nunca muda ao renomear.
+Não há slug fornecido pelo cliente, backfill ou reserva por leitura/publicação.
+Ordem de locks: requisição → página (ou INSERT próprio) → advisory transacional
+`pages-alias:<base>`. Ambos os candidatos são consultados sob esse lock, sem lock
+na página concorrente. Sufixo ocupado retorna `409 slug_conflict`; uma corrida
+entre bases distintas encontra o índice único como última defesa, faz rollback
+completo e retorna o mesmo conflito, sem retry cego na transação abortada.
+
+Workspace e novos ACKs retornam `slug` nullable. Replay devolve o recibo original
+sem reservar alias; recibos antigos podem omitir o campo e não apagam o slug do
+estado do editor. A baseline e o pending imutável continuam independentes desses
+metadados confirmados. Nenhuma URL é adivinhada a partir do título no cliente.
+
+`GET /api/pages/by-slug/:slug` é autenticado e passa pelo gate de Ética. Aceita
+somente o formato ASCII persistido (1–120 caracteres), retorna o mesmo DTO da
+leitura por UUID, incluindo slug, e aplica a mesma query de publicação/cargo ativo/
+conta atual. Ausência, rascunho, arquivo e audiência externa resultam em 404 sem
+lookup público preliminar. Admin sem cargo elegível não recebe acesso universal.
+Não acrescenta redirect nem mídia pública. A rota amigável de shell é descrita abaixo.
+
+### URL amigável no shell
+
+`/conteudos/<slug>` aceita somente o alias persistido ASCII minúsculo/numérico,
+com hífens simples e 1–120 caracteres. O router usa `/pages.html` para tabela,
+import e fetch do template, mas conserva pathname/query/hash reais no histórico
+e na visita. O app chama `readSlug`, nunca adivinha UUID/alias a partir do título
+nem transforma query de prévia em bypass da leitura. URLs antigas por UUID e
+prévia explícita continuam suportadas. Links de catálogo, gestão e retorno são
+root-relative; o catálogo atual sem slug no DTO conserva o fallback por UUID.
+
+`pages.html` declara `<base href="/">` antes dos assets. Entrada por SPA desde um
+dashboard sem base acrescenta uma base self ao documento persistente, conservada
+por sua vida restante: removê-la na saída causaria pedidos relativos errados no
+Back nativo antes de `popstate`. O router respeita a base dos links e usa a URL
+real para fragmentos locais deslocados por ela. Não modifica o gerador de shell.
+
+Login e Ética mantêm `next` com query/hash. Destinos externos, credenciais na URL,
+loops, API/uploads, announcements, dotdot, controles e separadores codificados
+são recusados; fallback é `/dashboard.html`. Autorização, gate de Ética e guardas
+de sessão/navegação continuam independentes do alias.
+
+Nginx serve somente o shell pela regex quoted e restrita de `/conteudos/`.
+Um prefixo normal (sem `^~`) responde 404 aos inválidos/segmentos extras, em vez
+de cair no index global. Alias ausente ainda recebe shell público, seguido de
+404 autenticado uniforme da API. `/api` e `/uploads` mantêm seus proxies/guardas.
+
+`tests/visual/check-pages-friendly-route.mjs` usa Chrome isolado e API/SQL reais
+em PGlite serializado, identidades sintéticas e bloqueio de rede externa. Confere
+visita direta primeiro, refresh, fragmentos sem refetch, entrada SPA desde dashboard,
+assets, editor/retorno, Back/Forward, login→Ética→alias, erro/retry, contas externas,
+sem cargo/cargo inativo, admin/super sem audiência e troca de conta com read pendente.
+O servidor estático desse check **simula** somente o shell Nginx; não comprova
+`nginx -t` nativo. Esse gate continua **PENDENTE** localmente no Windows, sem
+binário Linux autorizado. O job CI nativo existente permanece inalterado.
+
+`GET /api/pages/categories?limit=50&offset=0&q=` exige editor/publicador e retorna
+array de strings com `X-Total-Count`. Sugestões são categorias distintas não vazias
+dos heads de rascunho não arquivados: apenas autoria própria para editor, todas as
+autorias revisáveis para publicador. Busca case-insensitive e paginação usam SQL
+parametrizado; `q` tem até 80 caracteres. Categoria continua livre, revisionada e
+limitada a 80 caracteres, sem catálogo obrigatório nem efeito sobre audiência.
+
+`tests/database/check-pages-v3.mjs` inclui aliases/categorias por SQL/HTTP reais,
+rollback de auditoria/índice único e replay após rename. A corrida de unicidade é
+injetada deterministicamente por trigger, **não** evidência de concorrência.
+PGlite serializado não substitui duas conexões em PostgreSQL 16 descartável;
+esse gate continua **PENDENTE**, sem cluster autorizado ou serviço iniciado.
+
+### Gate de novas revisões v3
+
+`PAGES_V3_WRITES_ENABLED` é `false` por padrão no ambiente/Compose. Apenas o valor
+de ambiente literal `true` (ou a opção booleana `true` do router) habilita novas
+revisões v3. O workspace informa `document_support` com `read_versions: [1,2,3]`
+e `write_versions: [1,2]` ou `[1,2,3]`, sem alterar as capacidades reais. O catálogo
+continua um array; cada modelo declara seu schema efetivamente gerado. Comunicado
+permanece v1 e Owner News v2. `guia-interno@1` gera v3 e só é anunciado quando o
+writer está explicitamente habilitado. A receita de produção aloca UUIDs novos,
+não importa fixtures, começa sem audiência/mídia e informa que é ilustrativa,
+não uma política oficial. Create com o gate desligado retorna
+`409 document_version_disabled`; replay autorizado de create já confirmado continua
+idempotente, sem nova página/revisão/auditoria.
+
+Sob o mesmo lock/transação, replay reautoriza o ator e confere o hash antes do
+gate: retry de uma revisão já confirmada continua retornando o ACK original com
+o writer desligado. Novas revisões v3 retornam `409 document_version_disabled`;
+head v3 recusa downgrade para v1/v2 com `409 schema_downgrade_conflict`. Essas
+recusas não inserem revisão, projeções, auditoria ou recibo. Publicar uma revisão
+v3 já salva continua possível com validação integral e audiência ativa, mesmo
+com o writer desligado; arquivar/restaurar não converte o snapshot nem republica.
+
+O estado do editor mantém o documento recebido sem upgrade implícito e expõe
+`editable`/`editingUnavailableReason` para a futura UI somente leitura. Metadados
+de suporte não substituem o documento nem o pending; a fotografia pendente é
+profundamente imutável e pode reconciliar ACK mesmo após desabilitar o writer.
+O ACK só avança a baseline enviada, preservando alterações posteriores. Não se
+habilita um novo writer visual nesta etapa.
+
+As referências tipadas de imagem/GIF/áudio/vídeo, cada item de galeria e cada ação
+de download são verificadas contra mídia registrada da **mesma página e kind**.
+Placeholders nulos não projetam IDs; IDs repetidos geram uma só associação por
+revisão. Duração de legendas e quotas históricas de 50 arquivos/100 MiB permanecem.
+`tests/database/check-pages-v3.mjs` prova esses contratos por rotas, uploads e SQL
+reais em PGlite, incluindo rollback de auditoria e perda de ACK após COMMIT real.
+Usa as mesmas variáveis externas de PGlite/FFmpeg dos checks existentes. Isto não
+substitui os gates de PostgreSQL 16 nativo, concorrência entre processos, restore
+ou prévia visual aprovada: permanecem **PENDENTES** antes de qualquer rollout.
 
 ## Capacidades e audiência
 
@@ -153,6 +283,466 @@ Controles têm foco visível, alvo mínimo de 44 px, Escape/retorno de foco e re
 a movimento reduzido. Ações não dependem de hover; opções ficam contextuais.
 
 ## Validação reproduzível e limites de evidência
+
+### Consolidação funcional de referência (Task 17)
+
+A [matriz de evidências](../reviews/2026-11-11-pages-reference-fidelity.md) distingue
+checks locais PASS, gates PENDING e lacunas BLOCKED. A sequência adicional
+`tests/visual/check-pages-feature-roundtrip.mjs` também roda dentro de
+`check-pages-v2.mjs`. Usa `featureDocument` inteiro, registra bytes privados reais
+no harness e exercita os controles existentes, SQL, reload, prévia, revisão exata,
+leitor por cargo e isolamento do rascunho posterior. O helper de teste
+`pagesFeatureDocument` não é receita de produção. `referenceDocument` continua
+reservado ao estado visual das pranchas, sem CSS que esconda blocos funcionais.
+O teste mobile de foreground também usa as cinco seções funcionais completas.
+
+Erros de save 400/403/404/409/413 e timeout de transporte são injetados em visitas
+independentes; texto dirty e head SQL permanecem. O check de banco confirma 413
+real do parser, referências de outra página rejeitadas, catálogo publicado sem
+rascunho alheio, storage ausente e COMMIT confirmado sem ACK. As respostas 404
+de `/uploads` no harness provam somente sua superfície Express sem mount público;
+não substituem a configuração efetiva de Nginx. A identidade Firebase é substituída;
+middleware de conta/Ética/capacidades, rotas e SQL continuam reais.
+
+O formulário contextual do botão oferece rótulo, preset e destinos seção/URL,
+download e vídeo. `editor-destinations.js` mantém os controles no inspector existente.
+Download/vídeo são escolhas locais até **Aplicar destino**: só um candidato válido
+altera o documento, com opt-in v3 e uma entrada de histórico. Abrir/escolher/cancelar
+ou aplicar dados inválidos não converte o legado. A escrita v3 continua default off.
+
+O workspace entrega `media: [{id, kind}]` somente a quem já tem `mayEdit` da página,
+sem storage keys ou paths; leitores de revisão recebem lista vazia. A consulta usa
+o registro `page_media` da própria página, inclusive uploads históricos ou ainda
+sem colocação. ACK confirmado da visita atual acrescenta ID/kind ao inventário;
+undo não apaga arquivos. Downloads selecionam esse registro, com tipo derivado,
+nome de até 120 caracteres, basename não vazio, sem controles/separadores de caminho
+e extensão exata `.webp`, `.gif`, `.mp3` ou `.mp4`. A API revalida autoria/referências.
+
+Vídeo seleciona somente IDs de blocos `video`/`video_embed` do documento atual.
+Alvos ausentes/incompatíveis são informados, e a exclusão direta de vídeo referenciado
+pede trocar o destino antes. O botão YouTube foca o consentimento existente sem
+montar iframe. Aplicação usa guardas de permissão, IME, operação pendente e descarte;
+controles de visita anterior não modificam a atual. O teste integrado cria ambos
+os botões e aplica os destinos pela UI, verifica JSON/SQL após salvar/recarregar e
+exercita download autenticado e foco de consentimento na prévia e no leitor.
+
+#### Rollback compatível e privacidade
+
+Habilitar o writer requer leitores/validadores v3 e migration 042 disponíveis antes
+da primeira gravação v3. Desligar `PAGES_V3_WRITES_ENABLED` suspende novas revisões,
+mantém leitura, publicação de revisões já salvas e reconciliação idempotente. Não
+reverte snapshots, apaga mídia ou permite downgrade por clientes antigos. Após
+existirem revisões v3, rollback de aplicação deve conservar leitor v3 e 042; voltar
+a uma release exclusivamente v1/v2 não é compatível. Restore nativo é gate separado,
+não consequência de um teste em PGlite. Nenhum script/receptor de deploy foi alterado
+pela Task 17; o histórico de deploy abaixo permanece um registro de sua própria data.
+
+Downloads suportam somente imagem JPEG/PNG/WebP normalizada, GIF, MP3 e MP4 privados
+já validados; não há suporte genérico a PDF/Office. Todas as referências de galeria
+e download pertencem à mesma página e revisão autorizada. YouTube é externo e não
+se torna privado pelo login; não há request de player/thumbnail antes do clique de
+consentimento. Checklist de revisão é pessoal, local à sessão, opcional e não é
+enviado ao backend. Nenhum desses recursos amplia autoria ou audiência por cargo.
+
+### Renderer compartilhado v3 (Task 10)
+
+`renderDocument` continua retornando cleanup e não converte revisões v1/v2.
+`renderV3Block(block, context) -> {node, refresh, dispose}` recebe `richNode`,
+`imageFigure` e `mediaFigure` por contexto, sem import circular. Galeria conserva
+ordem/identidade por ID, resolve o item atual a cada refresh, aborta substituições
+e revoga blobs tardios/removidos. GIF exige iniciar/parar explícitos. FAQ usa
+`details/summary` independentes; expansão é somente DOM, sem salvar documento.
+
+YouTube não monta iframe, thumbnail ou preconnect antes do clique no próprio
+aviso de conexão externa. Uma ação de botão apenas foca esse aviso. A URL é
+construída somente com provider/ID validado no host `youtube-nocookie.com`, sem
+autoplay. Descarregar/cleanup remove `src` e iframe. Autenticação do Portal não
+torna o vídeo externo privado; a validação local usa stub pós-clique, não player
+ao vivo. Placeholders de mídia/galeria/FAQ são exclusivos de edição/prévia.
+
+O painter v3 usa `resolveAppearance` para texto, header, pares internos de
+callout/botão e captions/créditos (14 px normal). O part `link` centraliza a mesma
+precedência usada pelo gate AA; `text_color` explícito ganha do link. Captions de
+estilo legado continuam `#6C706D`, mesmo quando esse par reprova uma nova publicação
+v3: não há correção silenciosa. Ícones são SVGs locais de vocabulário fechado e
+tags continuam texto. `applyBlockStyle(node, block, doc?)` mantém a chamada antiga.
+
+`aside_right` reserva 260 px e gap 20 px; container queries empilham as duas
+composições v3 pela superfície, inclusive em prévia estreita sobre desktop.
+Seções vazias conservam âncora sem caixa/altura adicional, sem exceção por fixture.
+Este lote não adiciona authoring de novos blocos/marcas nem conclui o workspace:
+essas interfaces permanecem nas Tasks 12/13/14.
+
+`tests/visual/check-pages-renderer-v3.mjs` confere renderer/API privada reais,
+PGlite serializado e Chrome, usando somente contas sintéticas/loopback próprios.
+Inclui geometria de 180/390/1044 px, editor existente com blocos/marcas já suportados,
+FAQ por teclado, captions computadas/AA, URLs amigáveis, descarte e regressões
+v1/v2. PostgreSQL 16, Firebase/Nginx nativos e aceite visual final continuam
+**PENDENTES**, não demonstrados pelo teste.
+
+### Inserção e organização do editor (Task 11)
+
+`composition.js` expõe comandos puros `insertAt`, `insertColumns`,
+`reorderSection` e `setBlockWidth`, retornando documento ou `null` em alvo inválido,
+limite/no-op. Inserção valida índices inteiros, IDs de todo o grafo (incluindo
+itens FAQ/galeria), marcas/destinos e orçamentos agregados. Duplicação conserva
+referências de mídia/destinos, mas gera IDs novos para bloco e itens. Texto/imagem
+legados continuam v1; composição legada continua v2. `aside_right` usa `editV3`,
+duas colunas reais e exige suporte de escrita 3 **antes** de converter na UI.
+O writer permanece desligado por padrão. Full confirma merge esquerda→direita;
+cancelamento não altera o rascunho/histórico. Half cria duas colunas quando preciso.
+Todo candidato estrutural é validado **depois** da conversão de versão/layout:
+novos bytes ou a contagem v3 de links não podem produzir uma edição insalvável.
+Recusa mantém documento/versão/histórico e restaura o valor do controle de largura.
+
+`editor-insert.js` exporta `openInsertPanel`, `insertionPoint` e
+`resolveInsertionPoint`. O painel captura IDs de seção/linha/coluna e âncora de
+bloco antes/depois, sem reconsultar seleção após await. Novo grupo de duas colunas
+não converte a linha selecionada. Colunas vazias têm destino explícito. Upload
+continua no pipeline existente e só insere referência após ACK; âncora removida
+retém o arquivo enviado para escolha explícita de outro destino, sem reenviar bytes
+ou alegar rollback físico. Arquivo aguardando destino também impede arquivamento e
+exige confirmação explícita ao recarregar, mesmo com rascunho limpo; cancelar
+preserva o handle, e aceitar abandona apenas a colocação local, não os bytes enviados.
+O catálogo tem sete grupos, escolha real destaque/botão,
+busca sem acentos e FAQ/separador em Outros blocos. FAQ/galeria novos são apenas
+rascunhos vazios v3, com indisponibilidade da autoria de itens declarada; edição
+completa permanece na Task 12. Conteúdo existente usa o renderer compartilhado.
+Busca e clique mantêm `aria-expanded` sincronizado com a visibilidade dessa escolha,
+com `aria-controls` apontando para o grupo real de opções.
+
+A estrutura recebe a fábrica Sortable por injeção, move seções por UUID e oferece
+Subir/Descer e Alt+setas. Drop inválido/Escape restaura a ordem e os recursos são
+descartados com o workspace. Todas as mudanças usam a timeline existente; PM
+permanece identificado por bloco. `tests/visual/check-pages-insertion.mjs` usa
+Chrome, rotas/SQL reais em PGlite serializado e contas sintéticas, com rede externa
+bloqueada e listeners loopback próprios. O teste de arraste/ponteiro em 50/100/150%
+agora usa o controle real de zoom da Task 14, mantendo a estrutura lateral sem
+escala; confere também Escape e comandos por teclado. PostgreSQL/Firebase/Nginx
+nativos continuam gates separados pendentes.
+
+### Autoria de mídia e FAQ (Task 12)
+
+`editor-media.js` expõe `createBlockFields({page,block,resolveBlock,transact,upload,
+onFocus,createRichEditor,...bindings}) -> {node,refresh,dispose}`. O coordenador
+continua dono do documento, da timeline e do pipeline de upload. `node` contém os
+campos contextuais de mídia/galeria; em FAQ contém os campos nativos e as respostas
+PM reais no canvas, sem cópia no inspector. `refresh(bookmark?)` reconcilia por
+IDs; `dispose()` destrói apenas os recursos locais. Remover itens/referências e
+undo não excluem arquivos do servidor.
+
+Bindings exatos para consumidores posteriores: `bindNative(control,sync,
+unavailable?,retained?)`, `nativeMeta(event)`, `canEdit()`, `canAct()` (ações
+estruturais/picker também respeitam IME), `richOptions` (bridge global, limites,
+composição, permissões, `onSelection(itemId)`), `registerEditor(itemId,editor)`,
+`unregisterEditor(itemId)`, `onSource(blockId)` e `onChange()` para refresh do
+renderer/guardas. `onFocus(itemId?)` seleciona o item verdadeiro. `transact(meta,
+change)` recebe o documento clonado atual e retorna boolean; handlers resolvem
+bloco/item por ID, nunca conservam o objeto de uma revisão anterior.
+
+`upload(files,target)` recebe `File[]` e alvo imutável: galeria usa
+`{target:'gallery',blockId,expectedKind:'image'}`; substituição usa
+`{target:'replace',blockId,itemId?,sourceType,expectedKind}`. O único pipeline
+serializa arquivos por página, conserva cada ACK e sua referência antes de enviar
+o próximo. Falha conserva os itens anteriores, o arquivo/chave atual e os próximos
+arquivos para retry explícito; não reenvia automaticamente COMMIT incerto. Cancelar
+abandona apenas a fila local. Alvo removido após ACK reutiliza a recuperação de
+colocação existente, sem reenviar bytes nem anexar silenciosamente a outra coluna;
+os próximos arquivos não são enviados e precisam ser selecionados novamente após
+resolver esse destino. Quotas históricas de 50 arquivos/100 MiB e validação de
+bytes continuam na API existente. Limite local de 50 itens e budgets finais são
+conferidos antes de gravar referências. Perda de suporte durante upload mantém o
+ACK para recuperação, sem alterar um documento indisponível.
+
+Pickers nomeados usam `audio/mpeg,.mp3`, `video/mp4,.mp4` e os MIME de imagem/GIF
+suportados. MIME errado não é tratado como upload pronto. Replace só altera o
+`media_id` após ACK; caption/alt/credit e IDs sobrevivem à troca, reorder, histórico
+e save/reload. Controles descartados, mesmo com IDs repetidos numa nova visita,
+não podem enviar arquivos nem modificar o documento atual.
+
+FAQ tem perguntas nativas de até 200 caracteres com guardas/IME e EditorViews de
+resposta keyed por `blockId:itemId`. Formatação contextual e bookmarks
+`{blockId,itemId,from,to}` apontam para a resposta focada, compartilhando a timeline
+global. Reorder conserva a view; remoção destrói somente a view removida e undo
+restaura documento/seleção sem recriar as demais.
+
+`parseYouTubeURL(input)` em `document-v3.js` retorna somente
+`{provider:'youtube',video_id}` ou `null`: HTTPS, hosts exatos, watch/shorts/embed
+ou youtu.be, ID exato de 11 caracteres, sem credenciais/portas não padrão/iframe.
+Tracking não é persistido. A escolha explícita entre link incorporado e MP4 privado
+mantém o formulário local até ID válido ou ACK; cancelar não muda a fonte. Troca
+preserva o ID do bloco, tem undo e nunca apaga bytes históricos. Aviso de terceiro
+explica que login do Portal não torna YouTube privado. Player/thumbnail não são
+carregados pelo formulário; leitura/prévia reutilizam o consentimento da Task 10.
+Novas ações v3 conferem `write_versions` antes do upgrade; writer segue default off.
+
+O schema PM agora abre/edita marcas v3 já armazenadas `text_color`/`highlight` com
+hex normalizado e atributos DOM próprios `data-pages-text_color`/
+`data-pages-highlight`. Paste com valor inválido não cria marca; transação com
+marca v3 em documento legado é recusada. Não há color picker novo (Task 13).
+
+`tests/visual/check-pages-editor-media.mjs` executa Chrome, PM, SQL/HTTP e bytes
+privados reais em PGlite serializado, com identidades sintéticas e somente loopback
+próprio. Exercita autoria→save→reload→prévia→publicação/leitor por cargo, partial
+upload/retry após COMMIT real perdido, replace/cancel, FAQ/IME/foco/identidade,
+tipos privados, captions e descarte por troca de conta. Rede externa é bloqueada;
+não comprova player YouTube ao vivo, Auth real, PostgreSQL/Nginx nativos ou aceite
+visual final da Task 14.
+
+### Estilo e inspetor contextual (Task 13)
+
+`editor-style.js` mantém o formulário local separado do coordenador. Exporta
+`openStylePanel({page,anchor,document,onApply,canAct,available,bindNative,onLegacy})`
+→ `{close,dialog}` e `createInspector({document,block,onAppearance,onReset,onTags,onWidth,
+onAdvanced,canAct,available,bindNative,nativeMeta})` → `{node,blockId,dispose}`.
+`onApply(defaults)` recebe os sete defaults completos e válidos; retornar `false`
+mantém o painel aberto. Abrir, cancelar, Escape ou aplicar sem mudança não converte
+o documento nem cria histórico. Tema/Tipografia/Cores têm navegação por setas,
+Home/End e foco visível. Paletas e hex afetam propriedades persistidas reais;
+abrir uma paleta não troca silenciosamente o branco existente por sua amostra.
+
+`onAppearance(patch)` usa `null` por propriedade para remover somente o override
+explícito, sem remover `style` legado. Nesses blocos, a opção diz “Remover ajuste
+(manter estilo legado)”; nos blocos sem pin, o mesmo reset herda normalmente o padrão
+da página. A ação avançada separada `onReset()` remove `style` e `appearance` de forma
+atômica e avisa explicitamente que substitui cores e tipografia legadas. Pares internos
+de callout/botão nunca são copiados para representar cores do wrapper externo.
+Imagem, GIF e galeria mostram Tamanho desabilitado/não aplicável na posição original;
+suas legendas continuam em 14 px pelo contrato do renderer. Tags de bloco
+não alteram `metadata.tags`; ícone genérico não altera `callout.icon`. Campos inválidos
+são recusados/restaurados. Largura e composição reutilizam comandos limitados e a
+confirmação de merge. Opções avançadas adotam mover/duplicar/excluir/destino e os
+presets legados existentes. O bulk legado continua alterando apenas blocos existentes,
+sem criar herança em documentos v2. Writer v3 indisponível desabilita apenas os novos
+controles; documento v3 sem escrita suportada permanece realmente somente leitura.
+
+`styleCandidate(document,change)` é puro: usa opt-in v3 e a contagem estrutural
+existente após conversão, incluindo limites agregados de marcas, links, tags e bytes.
+O coordenador confere suporte/readonly/IME antes de chamá-lo e continua dono da única
+timeline. Defaults não reescrevem overrides nem cores legadas. Canvas/prévia/leitor
+consomem o painter, SVGs locais e resolução canônica de aparência; alertas AA usam
+`appearanceIssues`, sem aprovação visual fictícia ou contorno do gate de publicação.
+
+`openInlineColorPanel({page,anchor,mark,onApply,canAct,bindNative,contrast})` →
+`{close,dialog}` edita apenas a seleção capturada em rich text ou resposta FAQ ativa.
+`onApply(color|null)` aplica/remove a marca; `contrast(color)` fornece o aviso canônico.
+`Editor.prepareColor(name,color|null,bookmark)` retorna `{content,beforeSelection,
+selection}` ou `null`, sem despachar transação PM. Recusa seleção vazia/modificada,
+cor inválida, view destruída/IME/no-op. O coordenador verifica identidade e conteúdo
+do campo e confirma upgrade + marca em uma entrada global; depois sincroniza a
+mesma EditorView e seleção. Não há histórico PM concorrente nem upgrade por cancelar.
+Os hex de página e inline reconciliam somente seu draft local após o cleanup nativo
+de `compositionend`, incluindo um `input` final emitido imediatamente na mesma tarefa.
+A confirmação no documento continua bloqueada durante composição.
+
+`tests/visual/check-pages-style.mjs` usa Chrome + SQL/HTTP reais em PGlite, identidade
+sintética e rede externa bloqueada. Cobre cancel/reopen/save/reload, herança/override,
+propriedades e merge, seleção rich/FAQ, undo atômico/identidade PM, rejeição HTTP AA,
+IME CDP longo, controles retirados e writer desligado. Chrome final/mobile completo,
+comparação das seis pranchas e gates nativos/IME físico permanecem separados.
+
+### Workspace desktop e controles de sessão (Task 14)
+
+O frame desktop tem header 72 px, barra 56 px e rails 220/280 px. Modelo é um
+select real: escolher abre confirmação e cria **outra** página só depois da guarda
+de saída. Cancelar/falhar conserva documento, URL e EditorViews. Chave incerta e
+ACK já confirmado são retidos por modelo durante a visita; falha de navegação não
+autoriza outro create. A confirmação de saída vale uma vez para a fotografia
+exata; a guarda do shell verifica novamente qualquer mudança antes de sair.
+
+`createEditorWorkspace` recebe `onUndo/onRedo/onModel/onDevice/onZoom`, oferece
+`setHistory({canUndo,canRedo})` e `setViewport({device,zoom})`. Desktop usa a largura
+disponível; celular tem **390 CSS px** reais. 50/75/100/125/150% transformam apenas
+a superfície interna, com origem top-left e wrapper de scroll medido; toolbar e
+inspetor são irmãos sem escala. Preview usa a mesma superfície. São controles de
+sessão, não emulação física ou edição do JSON/tamanho de fonte. O espaço contextual
+reserva a altura real da toolbar não escalada, inclusive em cards compactos a 50%,
+sem sobrepor texto ou caret. A medição inclui scrollWidth/scrollHeight efetivos.
+O container da superfície empilha também as linhas `two_equal` legadas em 390 px,
+mesmo com navegador desktop largo; voltar ao desktop restaura as colunas sem
+converter v2 para v3 nem recriar os EditorViews.
+
+Salvar continua explícito, por ação quando dirty, propriedades da Página ou
+Mod+S. `createPageButton` exige ACK real; `current:false` não exibe Salvo quando a
+revisão enviada foi confirmada mas há edições posteriores. `resetConfirmation()`
+restaura o estado sem apagar SVGs/listeners. FAQ usa disclosures sobre os campos
+nativos e EditorViews keyed existentes, sem editor ou cópia de resposta paralelos.
+
+A tipografia da receita Guia é delimitada ao modelo v3, sem `style` legado e com
+scale standard: `typographyMetrics` é canônico para painter, labels e gate AA.
+As fontes efetivas desktop incluem capa 36 px e corpo da introdução 15 px; o campo
+Tamanho completo mostra essas métricas. Cada opção usa suas métricas prospectivas,
+inclusive ao voltar de small/large ao standard do modelo. Presets explícitos e
+documentos v1/v2 conservam suas métricas. Tags reais permanecem persistidas e
+visíveis/editáveis no inspetor; o canvas de edição não duplica uma linha de badges.
+O leitor/prévia mantém sua apresentação de tags. O wordmark compacto recorta o SVG
+local, sem desenhar uma nova marca.
+
+`tests/visual/check-pages-workspace.mjs` registra Chrome + SQL/HTTP em PGlite,
+contas sintéticas e loopback isolado. Captura os três estados desktop e verifica
+geometria, cinco zooms em desktop/mobile390 a 1366/1600, drag/caret, alvos por
+teclado/toque simulado, JSON/EditorView estáveis,
+create/retry/guarda, ACK honesto, readonly e restauração do Portal. A comparação
+inclui asserções dos retângulos Estilo (360,118,400,663) e Inserir (24,118,380,621),
+âncoras de introdução/cards/FAQ/áudio e densidade das perguntas recolhidas (2 px
+de tolerância para métricas de texto). Ícones locais de prévia/publicação/dispositivo
+são decorativos; os controles mantêm seus nomes acessíveis e ações reais. A comparação
+final das seis pranchas (Task 18), PostgreSQL/Firebase/
+Nginx nativos e IME/aparelho físico permanecem gates separados, não comprovados.
+
+### Conteúdo compacto e ciclo mobile (Task 16)
+
+Até 1099 px, o inspetor é um diálogo **não modal**: o mesmo texto/EditorView continua
+editável no canvas. Conteúdo reúne B/I/U/Link, fonte/escala combinadas e o campo de
+fundo compartilhado. Estilo recebe os controles adicionais reais da toolbar;
+Posição mantém organização avançada. Nenhum documento ou editor paralelo é criado.
+O combinado “Manrope · 16 px” descreve a **escala base**, com essa distinção no title
+e aria-description; a receita adapta capa/introdução no telefone (28/19 px nos
+títulos, 14 px no corpo). O controle completo preserva os labels prospectivos.
+Alterar fonte/escala combinadas usa uma só transação guardada de aparência.
+Os parágrafos mobile herdam o foreground canônico, incluindo o padrão da página
+e substituições do bloco; não há cor de texto forçada apenas no editor.
+
+Abaixo de 600 px, Blocos/Prévia/Publicar ficam juntos e os demais controles reais
+passam ao menu. A folha de 389 px tem limite pela altura disponível; fechamento
+e Concluir edição preservam dirty/texto e devolvem foco ao alvo ainda disponível.
+O retorno confere a área visual e o recorte dos ancestrais, não só a existência de
+um retângulo de layout. Se nenhum candidato está visível, `restoreVisibleFocus`
+revela o alvo retido antes de focá-lo, ajustando também o offset do teclado.
+Concluir não salva. A folha possui `watchVisualViewport` apenas enquanto aberta no
+breakpoint compacto; resize/scroll consideram height/offsetTop e safe-area, com
+remoção ao fechar, mudar breakpoint, navegar ou descartar a página. Painéis e
+diálogos aninhados possuem seu próprio watcher enquanto abertos. Escape aninhado
+fecha apenas o modal superior; Back e descarte também limpam os hooks.
+
+`tests/visual/check-pages-mobile-reference.mjs` exige as mesmas instalações externas
+de PGlite/Playwright/Axe e `PAGES_REFERENCE_DIR`; `MOBILE_VISUAL_OUTPUT` seleciona os
+artefatos. O teste valida o hash original e âncoras 390×820, comandos reais, bytes
+salvos, identidade PM, sete larguras, axe A/AA, rotação, viewport reduzida/offset e
+safe-area simulados, diálogos aninhados e reflow equivalente a 200% (683×450).
+Teclado/IME/toque físico e gesto de zoom nativo continuam pendentes; simulação não
+é evidência desses gates. A API/SQL usa somente o harness loopback descartável.
+
+### Revisão editável e snapshot conferido (Task 15)
+
+`openReview({page,state,api,cargos,onChanged,onPublish,canAct?,opener?})` retorna
+`{close,refresh}`. O coordenador chama `refresh()` em mudanças do estado e mantém
+`canAct` vinculado à visita, operações exclusivas e uploads/colocações pendentes.
+Título, categoria livre com sugestões autorizadas e audiência usam a mesma timeline
+do editor. Categoria só converte v1/v2 em uma edição efetiva com writer v3 habilitado.
+Publicador sem autoria pode expandir a audiência para conferência, mas seus campos
+ficam disabled; publicar uma revisão existente não exige capacidade de editar.
+
+`reviewSession(state)` conserva uma sessão por instância de estado, inclusive ao
+fechar/reabrir o modal. `createReviewSession(state)` expõe a lógica pura testável.
+O estado oferece `subscribe(listener) -> unsubscribe`; a sessão observa cada
+mutação/save/ACK/upload durante a vida do estado, independentemente do DOM do modal.
+Editar e desfazer, ou falhar/cancelar upload com o modal fechado, não recupera checks
+anteriores. Essa invalidação conserva o payload congelado de publicação incerta.
+Seu snapshot é `{version,revisionId,documentHash,checks}`; `documentHash` é o JSON
+integral com chaves de objeto ordenadas como fingerprint local sem colisão, não
+digest truncado; ordem de arrays permanece semântica. Conteúdo, versão,
+revisão, uploads, conflito e falha invalidam a conferência. Os três checks são
+opcionais, pessoais e nunca enviados/persistidos. Não são aprovação de outra pessoa
+nem substituem validação local e do servidor. Salvar é explícito dentro do modal;
+só o ACK muda a revisão exibida. Voltar, × e Escape conservam as edições dirty e
+as guardas normais. A URL usa exclusivamente o slug confirmado ou `/pages.html?id=UUID`.
+
+O modal verifica o workspace ao abrir/retomar foco e antes de uma nova publicação.
+Head divergente bloqueia a revisão até recarga explícita; não é adotado silenciosamente.
+CAS do servidor continua fechando a corrida após essa leitura. `onPublish(payload)`
+recebe o objeto congelado exato `{expected_version,revision_id,client_mutation_id}`.
+Falha ambígua retém esse payload através de fechar/reabrir e bloqueia novas edições,
+save, histórico e arquivamento até retry explícito. Esse retry reconcilia o recibo
+original sem um preflight que confundiria o CAS já consumido com conflito externo.
+Validação de conteúdo/cargos atuais não bloqueia essa reconciliação exata; inclusive
+um cargo desativado após COMMIT não impede recuperar o recibo. Falha de consulta
+do catálogo também não impede o retry já pendente. Autorização do servidor e guardas
+de operação/visita permanecem obrigatórias; publicação nova continua validada.
+O preflight de publicação respeita a versão do documento. Em v3, respostas de FAQ
+com texto contam como conteúdo, inclusive numa página composta somente por FAQ.
+Galerias exigem itens, arquivo e texto alternativo por item; FAQ exige itens com
+pergunta e resposta textual; vídeo incorporado exige título e transcrição. As
+pendências identificam bloco (ordem do documento), item e campo no tooltip e na
+descrição acessível da ação de publicação. Rascunhos incompletos continuam salváveis;
+validação estrutural, propriedade/tipo de mídia e autorização final pertencem à API.
+As regras de preflight v1/v2 e o bypass do recibo incerto permanecem preservados.
+Saída/reload com publicação incerta exige a guarda de descarte; não há armazenamento
+persistente de operações locais. Erro definitivo permite corrigir o documento;
+409 ou acesso negado invalida a revisão. Nenhum campo de checklist chega ao backend.
+
+`tests/visual/check-pages-review.mjs` usa Chrome, HTTP/SQL reais e PGlite serializado
+em loopback próprio. Verifica edição/save/retry, payload exato, concorrência CAS,
+publicador somente leitura, sugestões/cargos/alias e captura 1600×1160 com anchors
+do manifest original. A revisão honesta mostra o ID confirmado e pendências reais
+no lugar da frase de protótipo. Não constitui aceite das seis pranchas ou validação
+de PostgreSQL/Firebase/Nginx nativos.
+
+`tests/unit/pages-publication-preflight.test.mjs` compara o preflight com o validador
+real para conteúdo v3 completo/incompleto e conserva os contratos legados.
+`tests/visual/check-pages-publication-preflight.mjs` exercita autoria de FAQ sem
+texto auxiliar, save/reload/revisão/publicação/leitor e bloqueio de galeria/FAQ/embed
+incompletos antes de qualquer POST. Usa Chrome e HTTP/SQL reais no harness PGlite
+serializado, identidade sintética e somente loopback próprio; não substitui os gates
+nativos ou o aceite visual pendente.
+
+### Timeline local do rascunho (Task 9)
+
+`history.js` exporta `createDraftHistory({document,maxEntries=100,maxBytes=20971520})`.
+`commit(document,{group,selection,beforeSelection,time,closeGroup,composing})` retorna
+boolean; `undo()`/`redo()` retornam `{document,selection}` ou `null`. Snapshots e
+bookmarks são cópias independentes. O limite conta transações e seus snapshots
+serializados UTF-8, incluindo redo; remove as mais antigas e conserva pelo menos
+uma transação, mesmo se ela exceder sozinha o orçamento. Nova edição corta redo.
+`clear()` limpa a timeline sem alterar o documento atual; `closeGroup()` fecha
+somente o agrupamento. Digitação no mesmo campo agrupa até 500 ms inclusive;
+composição IME continua no mesmo grupo até o fim explícito. Blur, troca de bloco,
+comandos estruturais/de formatação e save fecham grupos. No-op/cancelamento não
+criam entrada; exceção em `transact` não altera a cópia de trabalho.
+
+`createEditorState` é a autoridade única: `transact(meta,change)`, `undo()`,
+`redo()`, `canUndo`, `canRedo`, `selection`, `closeHistoryGroup()`. `change` recebe
+uma cópia e pode cancelar com `false`/`null`. `changed()`/`replace()` continuam
+compatíveis, com before independente para callers legados que já mutaram o objeto.
+Nenhuma entrada contém workspace, permissões, versões CAS, pending ou bytes de mídia.
+Undo é local: não desfaz publicação, grants ou upload físico, apenas referências.
+Saving, uploads, conflito, IME ativo e operações/ambiguidades de upload do editor
+bloqueiam navegação da timeline. Edição posterior durante save continua permitida;
+falha ambígua permite undo/nova edição, sem modificar o pending congelado nem
+habilitar publicação antes de reconciliar o ACK original. Save/ACK não são entradas
+e nunca limpam o histórico. Undo pós-save fica dirty até retornar à baseline ou
+obter novo ACK explícito.
+
+Após ACK real de v3 (inclusive retry idempotente), o estado conserva um piso de
+formato 3 fora dos snapshots. Undo de entrada v1/v2 restaura seu conteúdo por
+`upgradeDocument`, sem enviar downgrade do head. Antes desse ACK, undo restaura
+o JSON legado exato. Piso não altera pending, versão, slug ou suporte confirmado.
+
+`createRichEditor` integrado recebe `historyCommands:{undo,redo}` e não instala
+`history()` paralelo. Atalhos, toolbar existente e recuperação de exclusão usam
+a mesma timeline. Sem bridge, mantém fallback ProseMirror local. `bookmark()` e
+os metadados before/after de `onChange(content,meta)` usam
+`{blockId,itemId?,from,to}`; metadados não textuais usam `null`.
+`sync(content,bookmark)` aplica transação silenciosa, clampa seleção e mantém o
+EditorView, sem feedback de conteúdo ou sincronização durante IME. Callbacks
+resolvem blocos pelo ID na cópia atual. `mark(name,attrs)` aceita atributos de
+marcas já existentes e recusa marcas desconhecidas; não antecipa a UI da Task 13.
+
+Campos nativos também rastreiam IME e bloqueiam undo até o fim explícito, inclusive
+em composições acima de 500 ms. Durante upload, resultado de upload incerto,
+operação exclusiva, conflito ou writer indisponível, campos de conteúdo ficam
+desabilitados e eventos sintéticos rejeitados restauram o valor do rascunho.
+Salvar ordinário em voo continua permitindo edições posteriores. Enter (inclusive
+fallback de parágrafo), Shift-Enter, indent/outdent de listas e comandos estruturais
+do keymap base têm limites próprios na timeline, separados da digitação adjacente.
+
+`node tests/visual/check-pages-history.mjs` usa as instalações externas de PGlite e
+Playwright (`PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH`), Chrome e listeners
+loopback próprios, com identidade sintética e rede externa bloqueada. Confere a
+UI/PM real, persistência/reload, perda de ACK após COMMIT, CAS, upload privado e
+IME real via CDP. A superfície mínima de FAQ testa somente o contrato de bookmark
+por item, sem introduzir UI de FAQ antes da Task 12. Não substitui PostgreSQL 16,
+concorrência nativa, Firebase/Nginx reais ou aceite visual final da Task 14.
 
 Executar `npm run build:public`, o check read-only do bundle, os testes focados,
 `npm run verify`, o check do shell gerado e `git diff --check`.
@@ -464,3 +1054,86 @@ agora normaliza os avisos para LF, preservando integralmente o texto e tornando
 o resultado compatível com o blob Git e checkouts Linux. O teste reproduzível
 também exige LF nos avisos. Capturas locais não integram o commit; autorização
 para commit não inclui push, merge, deploy ou mudanças em serviços reais.
+
+### Download privado e componente de botão — Task 8, 11/11/2026
+
+`GET /api/pages/:id/media/:mediaId/download` usa o mesmo handler autenticado,
+gate de Ética, seleção de query e `store.mediaRecord` da entrega inline. Aceita
+somente `preview=1` **ou** `revision_id=UUID`: staged exige autoria/editPages;
+revisão exige autoria autorizada/publicador; leitura normal exige referência na
+publicação atual e cargo ativo elegível. Não há acesso universal de administrador.
+O nome do attachment é `material-<UUID>.<webp|gif|mp3|mp4>`, derivado do kind
+normalizado, nunca de query, header, nome editorial ou caminho enviado pelo cliente.
+Os bytes vêm somente do storage_key privado registrado. Respostas mantêm MIME
+normalizado, `nosniff`, `private, no-store` e `acceptRanges:false`. Arquivo ausente
+retorna JSON 404 `media_unavailable`, sem disposition/MIME de attachment residual.
+
+`createPagesAPI(page).download(pageId, mediaId, {revisionId, staged, signal})`
+retorna a object URL de `fetchAPIAsset` vinculado ao lifecycle/sessão, como `asset`.
+Não navega no endpoint nem transmite Bearer em URL. O consumidor precisa revogar
+o blob. `public/pages/button.js` exporta
+`createPageButton({label,preset,icon,action,context}) -> {node,dispose,setDisabled}`.
+`node` é o botão/link real; `setDisabled(boolean)` impede ativação, inclusive por
+evento sintético, e remove href quando desabilitado. `dispose()` é idempotente,
+aborta a operação, invalida a geração e revoga blobs, inclusive respostas tardias.
+O contexto é `{api,pageId,revisionId,staged,host,resolveBlock,signal}`;
+`resolveBlock(id)` retorna o bloco atual do mesmo documento.
+
+- Ações serializadas continuam somente `url`, `section`, `video`, `download`.
+  O componente usa apenas DOM/local SVG. O download cria um anchor blob efêmero
+  com `file_name` validado; erro anuncia retry, sem baixar URL nua ou anunciar Salvo.
+- `activateVideo(id,{signal})` é um callback de integração opcional no contexto.
+  O renderer resolve vídeo local para `mediaFigure.activate()`: carrega bytes e
+  foca o controle real, **nunca** chama `play()`. Para `video_embed`, somente foca
+  `[data-pages-video-consent]` já montado no wrapper do bloco. Esse controle pertence
+  ao renderer de embed da Task 10 e deve explicar/obter consentimento antes de
+  criar iframe. Task 8 não cria iframe nem adiciona renderer de embed substituto;
+  sem controle montado, informa indisponibilidade e permite retry.
+- Comandos **somente de UI**, nunca JSON: `action` ausente, contexto
+  `{command:'upload'|'save',canAuthor:true,onCommand,signal}`.
+  `onCommand({command,signal}) -> Promise<{acknowledged:true}>` precisa aguardar
+  o fluxo de upload/save real e adaptar seu ACK. Seleção de arquivo, retorno
+  síncrono, void, false, rejeição, aborto ou ACK incerto **não** confirmam sucesso.
+  Save confirmado muda label para `Salvo`/preset `confirmed`; nova tentativa limpa
+  a confirmação antes de começar. Upload só confirma envio, não salvamento.
+  O caller continua responsável pelo picker, autorização atual, pending imutável,
+  CAS/idempotência e semântica de baseline. Não conectar callback que apenas abre
+  picker ou agenda save. Task 14 fará essa integração no editor existente.
+- Presets visuais `primary`, `secondary`, `text`, `video`, `upload`; `confirmed`
+  não é estado inicial configurável e só nasce do ACK assíncrono. Aparência segue
+  `reference-1.png`: Manrope, 44 px visíveis, ícones locais, foco 2 px + gap 2 px,
+  label estável no busy. Wrapper/presets/ícone ausente legados são preservados;
+  botões v3 usam foreground/background do `resolveAppearance`, o mesmo par do gate AA.
+
+Checks: `tests/unit/pages-button.test.mjs`, router/renderer e
+`tests/database/check-pages-v3.mjs` (uploads/SQL/HTTP reais em PGlite, quatro kinds,
+histórico, acesso staged/revisão/cargo e storage ausente).
+`tests/visual/check-pages-buttons.mjs` usa o componente real, API/autenticação com
+Firebase sintético, PGlite serializado e Chrome isolado em loopback, sem rede
+externa. Confere geometria/foco/busy, falha/retry/duplo clique, ACKs reais de upload
+e save, descarte e troca de conta. Não habilita writer, UI de autor para leitor,
+serviços ou permissões reais. PostgreSQL 16 nativo, concorrência, restore, Firebase
+real e Nginx nativo continuam gates **PENDENTES**, não PASS deste lote.
+
+#### Correções de revisão Task 8 — round 1
+
+Botão de seção publicado mantém o anchor absoluto de mesmo documento e **não**
+intercepta sua navegação nativa por fragmento: os handlers já existentes do shell
+atribuem `portalNavigation`, atualizam a URL ativa e restauram foco/posição. O
+componente nunca chama `window.history.pushState` diretamente. Com `staged` ou
+`revisionId`, o clique é somente foco/scroll no host, sem mudar URL ou histórico,
+inclusive no editor dirty. Não há alteração dos guards ou índices do router.
+
+Filename validado/persistido é preservado byte a byte no atributo `download`:
+espaços iniciais seguros, como ` guia.webp`, são válidos pelo contrato v3 e não
+podem ser recusados ou trimados no cliente. Continuam recusados controles,
+separadores de caminho, basename vazio, excesso de tamanho e extensão incorreta.
+O basename do attachment do servidor continua independente desse nome editorial.
+
+`tests/visual/check-pages-friendly-route.mjs` inclui o componente de produção no
+shell real: seção→perfil, índices distintos, salto multi-Back/Forward, cancelamento
+e aceite de saída do perfil dirty, restauração de foco e prévias staged/revision
+sem entradas adicionais. Conserva as regressões de skip-link dirty/busy da Task 7.
+`pages-button.test.mjs` testa a fronteira validador **publishing:true**→componente
+para nomes com espaço inicial e retry/download dos quatro kinds, sem invalidar
+snapshots anteriores. Os limites de ambiente/nativos descritos acima permanecem.

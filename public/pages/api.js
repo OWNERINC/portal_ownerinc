@@ -15,6 +15,8 @@ export function createPagesAPI(page) {
     },
     workspace(id) { return get(`/${encodeURIComponent(id)}/workspace`); },
     read(id) { return get(`/${encodeURIComponent(id)}`); },
+    readSlug(slug) { return get(`/by-slug/${encodeURIComponent(slug)}`); },
+    categories(query) { return request.fetchAPIPage(`/api/pages/categories?${new URLSearchParams(query)}`, { signal: page.signal }); },
     preview(id, revisionId) { return get(`/${encodeURIComponent(id)}/preview${revisionId ? `?revision_id=${encodeURIComponent(revisionId)}` : ''}`); },
     create(body) { return send('', body); },
     save(id, body) { return send(`/${encodeURIComponent(id)}/draft`, body, 'PUT'); },
@@ -26,6 +28,10 @@ export function createPagesAPI(page) {
     asset(id, mediaId, { revisionId, staged = false, signal } = {}) {
       const query = staged ? '?preview=1' : revisionId ? `?revision_id=${encodeURIComponent(revisionId)}` : '';
       return request.fetchAPIAsset(`/api/pages/${encodeURIComponent(id)}/media/${encodeURIComponent(mediaId)}${query}`, { signal: signal || page.signal });
+    },
+    download(id, mediaId, { revisionId, staged = false, signal } = {}) {
+      const query = staged ? '?preview=1' : revisionId ? `?revision_id=${encodeURIComponent(revisionId)}` : '';
+      return request.fetchAPIAsset(`/api/pages/${encodeURIComponent(id)}/media/${encodeURIComponent(mediaId)}/download${query}`, { signal: signal || page.signal });
     },
   };
 }

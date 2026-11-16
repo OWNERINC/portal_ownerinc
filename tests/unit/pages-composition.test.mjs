@@ -7,8 +7,8 @@ import vm from 'node:vm';
 const require = createRequire(import.meta.url);
 const { createTemplate } = require('../../api/pages/templates');
 const { validateDocument } = require('../../api/pages/validation');
-const context = vm.createContext({ crypto: { randomUUID }, URL });
-for (const file of ['model','composition','state']) {
+const context = vm.createContext({ crypto: { randomUUID }, URL, TextEncoder });
+for (const file of ['model','composition','document-v3','history','state']) {
   const source = (await readFile(`public/pages/${file}.js`, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
   vm.runInContext(source, context);
 }
@@ -117,4 +117,11 @@ test('real state replacement commits composed copies and preserves the exact amb
   const further = call('compose', state.document, { type: 'section' }); state.replace(further);
   assert.equal(state.document.sections.length, 2); assert.equal(JSON.stringify(state.pending), pending); assert.equal(state.publishable, false);
   assert.deepEqual(workspace.draft.document, original);
+});
+test('compose insert compatibility rejects negative/fractional/out-of-range indexes rather than clamping or upgrading', () => {
+  const doc = createTemplate(), before = JSON.stringify(doc), column = doc.sections[0].rows[0].columns[0];
+  for (const index of [-1, 0.5, column.blocks.length + 1]) assert.equal(call('compose', doc, { type: 'insert', columnId: column.id, index, block: call('genericBlock', 'divider') }), null);
+  assert.equal(JSON.stringify(doc), before);
+  const next = plain(call('compose', doc, { type: 'insert', columnId: column.id, block: call('genericBlock', 'button') }));
+  assert.equal(next.schema_version, 2); validateDocument(next);
 });
