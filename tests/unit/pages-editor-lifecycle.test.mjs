@@ -14,7 +14,7 @@ import { resolveAppearance } from '../../public/pages/appearance.js';
 
 // Execute the real editor, model, state, DOM helpers and lifecycle. Only the
 // browser rendering engine (PM/media) and network are controlled seams.
-async function harness(t, { dialogs, support, document: initialDocument, mobile = false, registered = [] } = {}) {
+async function harness(t, { dialogs, support, document: initialDocument, mobile = false, registered = [], capabilities = { edit: true, publish: true, archive: true } } = {}) {
   const doc = new FixtureNode('document'); doc.ownerDocument = doc; doc.documentElement = doc;
   doc.createElement = tag => new FixtureNode(tag, doc);
   doc.createElementNS = (_, tag) => doc.createElement(tag);
@@ -32,7 +32,7 @@ async function harness(t, { dialogs, support, document: initialDocument, mobile 
   const workspaces = [], uploads = [], editors = [], figures = [], sortables = [];
   const api = {
     async workspace(id) { workspaces.push(id); return { id, version: 0, draft_revision_id: `revision-${id}`, published_revision_id: null,
-      draft: { document: initialDocument ? structuredClone(initialDocument) : createTemplate() }, media:structuredClone(registered), document_support: support, capabilities: { edit: true, publish: true, archive: true } }; },
+      draft: { document: initialDocument ? structuredClone(initialDocument) : createTemplate() }, media:structuredClone(registered), document_support: support, capabilities: { ...capabilities } }; },
     async cargos() { return []; },
     async templates() { return []; },
     upload(id, file, key) { const pending = { id, file, key, ...deferred() }; uploads.push(pending); return pending.promise; },
@@ -41,11 +41,17 @@ async function harness(t, { dialogs, support, document: initialDocument, mobile 
     AbortController, DOMException, setTimeout, clearTimeout, cancelAnimationFrame() {}, createPagesAPI: () => api,
     createSortable: (host, options) => { const sortable = { host, options, destroy() {} }; sortables.push(sortable); return sortable; }, applyBlockStyle() {}, richNode() {},
     createRichEditor({ content, blockId, itemId, onChange, onFocus, onSelection, isLayoutDragging, historyCommands }) {
-      const editor = { content, itemId, historyCommands, bookmark: () => ({blockId,...(itemId ? {itemId} : {}),from:1,to:1}), sync(content) { this.content = content; }, destroyed: 0, destroy() { this.destroyed++; }, onChange, onFocus, onSelection, isLayoutDragging, marks: new Set(), active(mark) { return this.marks.has(mark); }, focus() {} }; editors.push(editor); return editor;
+      const editor = { content, itemId, historyCommands, format: 'paragraph', selectionFormat() { return this.format; }, bookmark: () => ({blockId,...(itemId ? {itemId} : {}),from:1,to:1}), sync(content) { this.content = content; }, destroyed: 0, destroy() { this.destroyed++; }, onChange, onFocus, onSelection, isLayoutDragging, marks: new Set(), active(mark) { return this.marks.has(mark); }, focus() {} }; editors.push(editor); return editor;
     },
     imageFigure() { const figure = { node: doc.createElement('figure'), destroyed: 0, dispose() { figure.destroyed++; } }; figures.push(figure); return figure; },
     mediaFigure(block, options) { const figure = { node: doc.createElement('figure'), block, options, refreshed: 0, destroyed: 0, refresh() { figure.refreshed++; }, dispose() { figure.destroyed++; } }; figures.push(figure); return figure; },
-    renderDocument: () => () => {}, openPagesDialog(options) { if (dialogs) { dialogs.push(options); return {}; } assert.fail('This test does not open dialogs'); },
+    renderDocument: () => () => {}, openPagesDialog(options) {
+      if (!dialogs) assert.fail('This test does not open dialogs');
+      const dialog=doc.createElement('dialog'),feedback=doc.createElement('p'),actions=doc.createElement('div'),confirm=doc.createElement('button');
+      feedback.setAttribute('role','alert'); actions.className='pages-actions'; confirm.className='btn btn-primary';
+      actions.append(confirm); dialog.append(options.content,feedback,actions);
+      dialogs.push({...options,action:()=>options.action(feedback)}); return dialog;
+    },
   });
   async function load(file, names, transform = source => source) {
     const source = transform((await readFile(file, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, ''));
@@ -53,6 +59,7 @@ async function harness(t, { dialogs, support, document: initialDocument, mobile 
   }
   await load('public/js/page-lifecycle.js', 'createPageLifecycle');
   await load('public/pages/appearance.js', 'normalizeHex, resolveAppearance, appearanceIssues, typographyMetrics', source => source.replace(/^export \{[^\n]+\};/gm, ''));
+  await load('public/pages/publication-issues.js', 'publicationIssueDetails, publicationIssueTarget');
   await load('public/pages/model.js', 'clone, newId, allBlocks, blockList, textBlock, publicationIssues, safeLink');
   await load('public/pages/drag-guard.js', 'compositionDropGuard');
   await load('public/pages/composition.js', 'compose, findBlock, findColumn, columns, genericBlock, defaultStyle, adjacentMove, insertAt, insertColumns, reorderSection, setBlockWidth, cloneBlock');
@@ -63,6 +70,7 @@ async function harness(t, { dialogs, support, document: initialDocument, mobile 
   await load('public/pages/dialog.js', 'mountPagesDialog');
   await load('public/pages/editor-review.js', 'openReview, reviewSession');
   await load('public/pages/editor-panels.js', 'openEditorPanel, watchVisualViewport, visibleFocusTarget, restoreVisibleFocus');
+  await load('public/pages/editor-menus.js', 'createEditorMenus');
   await load('public/pages/editor-workspace.js', 'createEditorWorkspace, createModelDraftController, editorAction, editorIcon');
   await load('public/pages/button.js', 'createPageButton');
   await load('public/pages/editor-insert.js', 'openInsertPanel, insertionPoint, resolveInsertionPoint');
@@ -384,12 +392,14 @@ test('block drag uses pointer fallback and its scoped PM guard cannot serialize 
   const ordinary = new TestEvent('drop');
   assert.equal(guard(null, ordinary), false, 'ordinary rich-text drops retain PM behavior');
   sortable.options.onStart(); assert.equal(editor.isLayoutDragging(), true);
+  assert.equal(h.root.dataset.layoutDragging, 'true', 'visible toolbar yields pointer hit-testing during block drag');
   let prevented = 0, stopped = 0;
   assert.equal(guard(null, { preventDefault() { prevented++; }, stopPropagation() { stopped++; } }), true);
   assert.equal(prevented, 1); assert.equal(stopped, 1);
   const block = h.state.document.sections[0].rows[0].columns[0].blocks[0];
   sortable.options.onEnd({ item: { dataset: { blockId: block.id } }, to: sortable.host });
   assert.equal(editor.isLayoutDragging(), false); assert.equal(guard(null, ordinary), false);
+  assert.equal(h.root.dataset.layoutDragging, 'false', 'toolbar hit-testing restored after drop');
   assert.equal(JSON.stringify(h.state.document), before, 'no-op block drop must not alter prose, schema version or dirty state');
   assert.equal(editor.destroyed, 0, 'keyed PM instance survives');
 });
@@ -425,9 +435,9 @@ test('editor chrome groups header, metadata, structure and block controls withou
   const h = await harness(t), before = JSON.stringify(h.state.document);
   assert.equal(h.root.querySelector('h1').textContent, 'Editar Page');
   assert.ok(h.root.querySelector('.pages-v2-header').contains(h.root.querySelector('.pages-save-status')));
-  assert.equal(h.root.querySelector('.pages-primary-actions').querySelectorAll('button').length, 4, 'preview menu has the three real modes plus Publish');
-  assert.equal(h.root.querySelector('.pages-secondary-actions').querySelectorAll('button').length, 3, 'explicit Save is retained with reload/archive in Page properties');
-  assert.ok(h.root.querySelector('.pages-secondary-actions').contains(h.root.querySelector('.pages-action-button')));
+  assert.equal(h.root.querySelector('.pages-primary-actions').querySelectorAll('button').length, 5, 'three preview modes, Save and Publish');
+  assert.equal(h.root.querySelector('.pages-secondary-actions').querySelectorAll('button').length, 2, 'reload/archive remain in Page properties');
+  assert.ok(h.root.querySelector('.pages-operation-bar').contains(h.root.querySelector('.pages-action-button')));
   for (const key of ['title', 'summary']) assert.ok(h.root.querySelector(`.pages-metadata-${key}`));
   for (const header of ['pages-section-header', 'pages-row-header']) {
     const node = h.root.querySelector(`.${header}`);
@@ -441,6 +451,56 @@ test('editor chrome groups header, metadata, structure and block controls withou
   assert.equal(header.querySelector('.pages-select-block').textContent, 'Selecionar texto 1');
   assert.equal(h.root.querySelector('input[type="file"]').getAttribute('accept'), 'image/jpeg,image/png,image/webp,image/gif,audio/mpeg,video/mp4');
   assert.equal(JSON.stringify(h.state.document), before); assert.equal(h.state.dirty, false);
+});
+
+test('Save stays in one chrome parent through dirty, busy, old ACK, uncertain retry and conflict without rebuilding views', async t => {
+  const h = await harness(t, { mobile: true }), state = h.state;
+  const save = h.root.querySelector('.pages-action-button'), parent = save.parentElement;
+  const status = h.root.querySelector('.pages-save-status'), publish = h.root.querySelectorAll('button').find(n => n.textContent === 'Publicar');
+  const title = h.root.querySelector('.pages-metadata-title').querySelector('input');
+  const edit = value => { title.value = value; title.dispatchEvent(new TestEvent('input')); };
+  const retained = [...h.editors];
+  assert.equal(save.disabled, true); assert.equal(status.textContent, 'Rascunho salvo');
+  edit('Submitted'); assert.equal(save.parentElement, parent); assert.equal(save.disabled, false);
+  assert.equal(publish.disabled, true); assert.equal(h.root.querySelector('.pages-publish-reason').textContent, 'Salve o rascunho para revisar.');
+  const held = deferred(); let calls = 0, payload;
+  h.api.save = (_id, body) => { calls++; payload = body; return held.promise; };
+  save.click(); save.click(); await drain();
+  assert.equal(calls, 1); assert.equal(state.status, 'saving'); assert.equal(save.disabled, true); assert.equal(save.parentElement, parent);
+  edit('Newer'); held.resolve({ version: 1, draft_revision_id: 'r1' }); await drain();
+  assert.equal(payload.document.metadata.title, 'Submitted'); assert.equal(state.status, 'dirty');
+  assert.equal(save.getAttribute('data-preset'), 'secondary'); assert.equal(status.textContent, 'Alterações não salvas');
+  h.api.save = async () => { throw Object.assign(Error('503'), { status: 503 }); };
+  save.click(); await drain(); const bytes = JSON.stringify(state.pending);
+  assert.match(status.textContent, /não confirmado/); edit('After failure');
+  h.api.save = async (_id, body) => { assert.equal(JSON.stringify(body), bytes); return { version: 2, draft_revision_id: 'r2' }; };
+  save.click(); await drain(); assert.equal(state.status, 'dirty'); assert.equal(save.parentElement, parent);
+  h.api.save = async () => ({ version: 3, draft_revision_id: 'r3' }); save.click(); await drain();
+  assert.equal(state.status, 'saved'); assert.equal(save.getAttribute('data-preset'), 'confirmed');
+  edit('Conflict'); h.api.save = async () => { throw Object.assign(Error('CAS'), { status: 409 }); };
+  save.click(); await drain(); assert.match(status.textContent, /Conflito/); assert.equal(save.disabled, true); assert.equal(publish.disabled, true);
+  assert.equal(save.parentElement, parent); assert.deepEqual(h.editors, retained); assert.ok(retained.every(e => e.destroyed === 0));
+});
+
+test('Save chrome honors review-only and disabled writer capabilities without exposing an active command', async t => {
+  const review = await harness(t, { capabilities: { edit: false, publish: true, archive: true }, mobile: true });
+  assert.equal(review.root.querySelector('.pages-action-button'), null);
+  assert.equal(review.root.querySelector('.pages-metadata-title').querySelector('input').disabled, true);
+  const disabled = await harness(t, { document: upgradeDocument(createTemplate()), support: { read_versions: [1,2,3], write_versions: [1,2] } });
+  const save = disabled.root.querySelector('.pages-action-button');
+  assert.equal(save.disabled, true); assert.equal(save.getAttribute('aria-disabled'), 'true');
+  save.click(); await drain(); assert.equal(disabled.state.pending, null); assert.equal(disabled.state.status, 'saved');
+});
+
+test('a late save ACK updates only its originating state, never a replacement visit chrome', async t => {
+  const h = await harness(t), origin = h.state, held = deferred();
+  const title = h.root.querySelector('.pages-metadata-title').querySelector('input'); title.value = 'Origin'; title.dispatchEvent(new TestEvent('input'));
+  h.api.save = () => held.promise; const retired = h.root.querySelector('.pages-action-button'); retired.click(); await drain();
+  await h.replaceWithoutGuard('?id=second'); const current = h.state, currentSave = h.root.querySelector('.pages-action-button');
+  held.resolve({ version: 1, draft_revision_id: 'origin-saved' }); await drain();
+  assert.equal(origin.status, 'saved'); assert.equal(current.workspace.draft_revision_id, 'revision-second');
+  assert.equal(currentSave.getAttribute('data-preset'), 'secondary'); assert.equal(currentSave.disabled, true);
+  assert.equal(h.root.querySelector('.pages-save-status').textContent, 'Rascunho salvo'); assert.equal(retired.getAttribute('data-preset'), 'secondary');
 });
 
 test('V2 mounts a dedicated workspace without changing the document and restores the Portal shell on disposal', async t => {
@@ -580,6 +640,18 @@ test('V2 moved formatting controls reflect caret marks without rebuilding the to
   assert.equal(pm.destroyed, 0);
 });
 
+for (const mobile of [false,true]) test(`selection format reflects focus/selection without recreating controls (compact=${mobile})`, async t => {
+  const h=await harness(t,{mobile}),pm=h.editors[0];
+  const kind=h.root.querySelector('[data-text-format]');
+  for(const format of ['2','3','paragraph','mixed']) {
+    pm.format=format; pm.onSelection(); assert.equal(kind.value,format);
+    assert.equal(h.root.querySelector('[data-text-format]'),kind);
+  }
+  pm.format='2'; pm.onFocus(); assert.equal(kind.value,'2');
+  assert.equal(kind.querySelector('[value="mixed"]').disabled,true);
+  assert.equal(pm.destroyed,0);
+});
+
 test('localized presentation options retain enum values and keyed editors; selection-only updates preserve toolbar controls', async t => {
   const h = await harness(t), pm = h.editors[0];
   h.root.querySelector('.pages-select-block').click();
@@ -615,7 +687,7 @@ test('button and callout fields display Portuguese options without changing thei
   const tone = control('Tom'); assert.equal(tone.querySelectorAll('option').find(node => node.value === 'attention').textContent, 'Atenção');
   tone.value = 'attention'; tone.dispatchEvent(new TestEvent('change'));
   assert.equal(h.state.document.sections[0].rows[0].columns[0].blocks.find(block => block.type === 'callout').tone, 'attention');
-  assert.equal(control('Ícone').querySelectorAll('option').find(node => node.value === 'none').textContent, 'Sem ícone');
+  assert.equal(control('Ícone do destaque').querySelectorAll('option').find(node => node.value === 'none').textContent, 'Sem ícone');
   assert.equal(pm.destroyed, 0);
 });
 

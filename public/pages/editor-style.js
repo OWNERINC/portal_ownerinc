@@ -102,7 +102,8 @@ export function openStylePanel({ page, anchor, document: doc, onApply, canAct = 
   let scope = 'accent';
   const scopeControl = selectControl('Propriedade da cor', { foreground:'Texto',background:'Fundo',accent:'Destaque' }, scope, value => { if (!current()) return; scope=value; hex.value=draft[scope]; refresh(); });
   const hex = el('input', { value:draft.accent, maxlength:32, 'aria-label':'Cor personalizada de destaque', spellcheck:'false' });
-  const warning = el('p',{className:'pages-style-contrast',role:'status'}), invalid=el('p',{className:'pages-style-invalid',role:'alert'});
+  const warning = el('p',{className:'pages-style-contrast',role:'status'}), invalid=el('p',{id:`${prefix}-invalid`,className:'pages-style-invalid',role:'alert'});
+  hex.setAttribute('aria-describedby',`${prefix}-invalid`);
   const apply = button('✓ Aplicar estilo', () => {
     if (!current() || !available || !normalizeHex(hex.value)) return;
     const value = normalizeDefaults({...draft,[scope]:normalizeHex(hex.value)}); if (!value) return;
@@ -120,10 +121,12 @@ export function openStylePanel({ page, anchor, document: doc, onApply, canAct = 
     sample.style.fontSize={small:'14px',standard:'16px',large:'19.2px'}[draft.scale];
     for (const pick of palettes.children) pick.setAttribute('aria-pressed',String(pick.dataset.themePalette===draft.palette));
     const valid=!!normalizeHex(hex.value); hex.setAttribute('aria-invalid',String(!valid));
-    invalid.textContent=valid?'':'Use uma cor hexadecimal #RRGGBB.'; apply.disabled=!valid || !canAct() || !available;
+    const message=valid?'':'Use uma cor hexadecimal #RRGGBB.';
+    if(invalid.textContent!==message)invalid.textContent=message;
+    apply.disabled=!valid || !canAct() || !available;
     controls.forEach(control=>{control.disabled=!available||!canAct();});
     const preview=upgradeDocument(doc); preview.presentation={theme:'conecta',defaults:{...draft}};
-    warning.textContent=contrastText(preview);
+    const contrast=contrastText(preview); if(warning.textContent!==contrast)warning.textContent=contrast;
   }
   function show(tab, focus = false) {
     selected=tab; scope=tab==='colors'?scopeControl.value:'accent'; hex.value=draft[scope];
@@ -136,13 +139,13 @@ export function openStylePanel({ page, anchor, document: doc, onApply, canAct = 
   }
   for (const [key,text] of [['theme','Tema'],['typography','Tipografia'],['colors','Cores']]) tabs.append(button(text,()=>show(key),{id:`${prefix}-${key}`,role:'tab','aria-controls':`${prefix}-body`,'data-style-tab':key}));
   tabs.addEventListener('keydown',event=>{const keys=['theme','typography','colors'],i=keys.indexOf(selected);let next;if(event.key==='ArrowRight')next=keys[(i+1)%3];if(event.key==='ArrowLeft')next=keys[(i+2)%3];if(event.key==='Home')next=keys[0];if(event.key==='End')next=keys[2];if(next){event.preventDefault();show(next,true);}});
-  content.append(note,tabs,body,invalid,warning,apply);
+  content.append(note,tabs,body,invalid,warning);
+  const actions=el('div',{className:'pages-panel-actions'},apply);
   if(!available)content.append(el('p',{role:'status',text:'O servidor não permite escrita v3. Os presets legados continuam disponíveis abaixo.'}));
   if (onLegacy) content.append(el('details',{className:'pages-style-legacy'},el('summary',{text:'Estilo legado dos blocos existentes'}),el('p',{text:'Altera somente os blocos existentes, sem criar herança.'}),button('Abrir presets legados',()=>{if(!current())return;close(false);onLegacy();})));
-  panel=openEditorPanel({page,anchor,title:'Estilo da página',content,className:'pages-page-style-panel'});
+  panel=openEditorPanel({page,anchor,anchorOffset:10,title:'Estilo da página',content,actions,className:'pages-page-style-panel'});
   // Native close/Escape also retires callbacks, even when a detached control is held.
   panel.dialog.addEventListener('close',()=>{closed=true;});
-  if (anchor && window.innerWidth>=1100) { const box=anchor.getBoundingClientRect(); panel.dialog.style.setProperty('--panel-left',`${Math.max(16,Math.min(box.left+10,window.innerWidth-416))}px`); panel.dialog.style.setProperty('--panel-top',`${Math.max(16,Math.min(box.bottom,window.innerHeight-100))}px`); }
   for (const control of controls) bindNative?.(control,()=>{if(control===hex)hex.value=draft[scope];else if(control===scopeControl)scopeControl.value=scope;else control.value=draft[control===font?'font':control===scale?'scale':'align'];},()=>!available,()=>!closed&&panel.dialog.isConnected);
   show('theme'); return {close,dialog:panel.dialog};
 }
@@ -156,7 +159,7 @@ export function createInspector({ document: doc, block, onAppearance, onReset, o
     const sync=()=>{input.value=block.appearance?.[key]||effective[key];}; bindNative?.(input,sync,()=>!available,()=>!disposed&&node.isConnected); return field(label,input);
   };
   const textual=block.type!=='divider';
-  // Compact Content uses the same atomic appearance callback as the full fields.
+  // Compact typography uses the same atomic appearance callback as the full fields.
   // 16 px is the standard base scale, not a claim that every heading/body uses it.
   if (textual && !['image','gif','gallery'].includes(block.type)) {
     const options = {};
@@ -190,32 +193,34 @@ export function createInspector({ document: doc, block, onAppearance, onReset, o
   else node.append(el('p',{text:'Tipografia, tamanho e alinhamento não se aplicam ao separador.'}));
   const savedWidth=findBlock(doc,block.id)?.row.layout==='single'?'full':'half';
   const width=selectControl('Largura do bloco',{full:'Linha inteira',half:'Meia linha'},savedWidth,value=>{if(current())onWidth(value,width);else width.value=savedWidth;});
-  bindNative?.(width,()=>{width.value=findBlock(doc,block.id)?.row.layout==='single'?'full':'half';},()=>false,()=>!disposed&&node.isConnected);node.append(field('Largura',width));
+  const widthField=field('Largura',width);
+  bindNative?.(width,()=>{width.value=findBlock(doc,block.id)?.row.layout==='single'?'full':'half';},()=>false,()=>!disposed&&node.isConnected);
   const savedFill=block.appearance?.background||(block.style?effective.background:'inherit');
-  const fill=selectControl('Fundo do bloco',{none:'Sem preenchimento',inherit:block.style?'Remover ajuste (manter estilo legado)':doc.presentation?.defaults?.palette==='conecta'?'Padrão Conecta':'Padrão da página',custom:'Cor personalizada',...Object.fromEntries(fills.map(c=>[c,c]))},savedFill,value=>{if(!current()||!available){fill.value=savedFill;return;}if(value==='custom'){const root=node.closest('#page-editor-root');root?.querySelector('[data-sheet-tab="position"]')?.click();advanced.open=true;hex.focus();fill.value=savedFill;return;}if(onAppearance({background:value==='inherit'?null:value})===false)fill.value=savedFill;});
+  const fill=selectControl('Fundo do bloco',{none:'Sem preenchimento',inherit:block.style?'Remover ajuste (manter estilo legado)':doc.presentation?.defaults?.palette==='conecta'?'Padrão Conecta':'Padrão da página',custom:'Cor personalizada',...Object.fromEntries(fills.map(c=>[c,c]))},savedFill,value=>{if(!current()||!available){fill.value=savedFill;return;}if(value==='custom'){hex.focus();fill.value=savedFill;return;}if(onAppearance({background:value==='inherit'?null:value})===false)fill.value=savedFill;});
   if(!fills.includes(savedFill)&&!['none','inherit'].includes(savedFill)){fill.append(el('option',{value:savedFill,text:savedFill}));fill.value=savedFill;}
   const hex=el('input',{value:effective.background,'aria-label':'Cor de fundo personalizada',maxlength:32,spellcheck:'false'});
-  const feedback=el('p',{className:'pages-style-invalid',role:'alert'});
+  const feedback=el('p',{id:`pages-inspector-${++panelSequence}-error`,className:'pages-style-invalid',role:'alert'});
+  hex.setAttribute('aria-describedby',feedback.id);
   const reset=()=>{hex.value=effective.background;};bindNative?.(hex,reset,()=>!available,()=>!disposed&&node.isConnected);
-  hex.addEventListener('change',()=>{if(!current()||!available){reset();return;}const color=normalizeHex(hex.value);if(!color){feedback.textContent='Use uma cor hexadecimal #RRGGBB.';reset();return;}hex.value=color;if(onAppearance({background:color})===false)reset();});
+  hex.addEventListener('change',()=>{if(!current()||!available){reset();return;}const color=normalizeHex(hex.value);hex.setAttribute('aria-invalid',String(!color));if(!color){feedback.textContent='Use uma cor hexadecimal #RRGGBB.';return;}feedback.textContent='';hex.value=color;if(onAppearance({background:color})===false)reset();});
   bindNative?.(fill,()=>{fill.value=savedFill;},()=>!available,()=>!disposed&&node.isConnected);
   const swatches=el('div',{className:'pages-fill-swatches',role:'group','aria-label':'Cores de fundo'},...fills.map(color=>swatch(color,()=>{if(current()&&available)onAppearance({background:color});},{disabled:!available})));
   const fillField=field('Fundo',fill); fillField.classList.add('pages-shared-fill');
-  node.append(fillField,swatches,feedback);
+  node.append(fillField,swatches,field('Cor de fundo personalizada',hex),feedback);
   const tags=el('input',{value:(block.tags||[]).join(', '),'aria-label':'Tags do bloco',maxlength:838});
+  const tagsFeedback=el('p',{id:`pages-inspector-${++panelSequence}-tags-error`,className:'pages-style-invalid',role:'alert'});
+  tags.setAttribute('aria-describedby',tagsFeedback.id);
   bindNative?.(tags,()=>{tags.value=(block.tags||[]).join(', ');},()=>!available,()=>!disposed&&node.isConnected);
-  tags.addEventListener('change',event=>{if(!current()||!available){tags.value=(block.tags||[]).join(', ');return;}const values=parseLocalTags(tags.value);if(!values){feedback.textContent='Use até 20 tags únicas, não vazias, de 40 caracteres.';tags.value=(block.tags||[]).join(', ');return;}if(onTags(values,nativeMeta(event))===false)tags.value=(block.tags||[]).join(', ');});
-  node.append(field('Tags',tags),control('Ícone',icons,'icon'));
-  const advanced=el('details',{className:'pages-inspector-advanced','data-inspector-section':'position'},el('summary',{text:'Opções avançadas'}));
-  advanced.append(field('Cor de fundo personalizada',hex));
-  onAdvanced?.(advanced);
-  if(onReset)advanced.append(button(block.style?'Usar padrão da página — substituir cores e tipografia legadas':'Usar padrão da página para este bloco',()=>{if(current()&&available)onReset();},{className:'btn btn-ghost pages-reset-appearance',disabled:!available}));
-  node.append(advanced);
-  if(!available)node.append(el('p',{text:'Personalização v3 indisponível no servidor. Use os presets legados em Opções avançadas.'}));
+  tags.addEventListener('change',event=>{if(!current()||!available){tags.value=(block.tags||[]).join(', ');return;}const values=parseLocalTags(tags.value);tags.setAttribute('aria-invalid',String(!values));if(!values){tagsFeedback.textContent='Use até 20 tags únicas, não vazias, de 40 caracteres.';tags.value=(block.tags||[]).join(', ');return;}tagsFeedback.textContent='';if(onTags(values,nativeMeta(event))===false)tags.value=(block.tags||[]).join(', ');});
+  node.append(field('Tags',tags),tagsFeedback,control('Ícone',icons,'icon'));
+  if(onReset)node.append(button(block.style?'Usar padrão da página — substituir cores e tipografia legadas':'Usar padrão da página para este bloco',()=>{if(current()&&available)onReset();},{className:'btn btn-ghost pages-reset-appearance',disabled:!available}));
+  if(!available)node.append(el('p',{text:'Personalização v3 indisponível no servidor. Use os presets legados em Estilo.'}));
   node.append(el('p',{className:'pages-style-contrast',role:'status',text:contrastText(doc)}));
-  for(const child of node.children)if(child!==advanced)child.dataset.inspectorSection='style';
-  const compact=node.querySelector('.pages-compact-typography');if(compact)compact.dataset.inspectorSection='content';
-  fillField.dataset.inspectorSection='content-style';
+  const style=el('section',{className:'pages-inspector-group','data-inspector-section':'style'},el('h3',{text:'Estilo'}),...Array.from(node.children));
+  const position=el('section',{className:'pages-inspector-group','data-inspector-section':'position'},el('h3',{text:'Posição'}),widthField);
+  // Keep the existing callback/transaction authority; only its host is now flat.
+  onAdvanced?.(position);
+  node.append(style,position);
   return {node,blockId:block.id,dispose(){disposed=true;}};
 }
 

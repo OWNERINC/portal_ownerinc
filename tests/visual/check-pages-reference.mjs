@@ -56,7 +56,7 @@ const selectors = {
   'selected-block': block(ids.introductionBlock), 'context-toolbar': '.pages-v2-viewport > .pages-format-tools',
   'audio-placeholder': block(ids.audioBlock), inspector: '.pages-v2-inspector',
   'inspector-font': '.pages-v2-inspector select[aria-label="Tipografia"]', 'inspector-size': '.pages-v2-inspector select[aria-label="Tamanho"]',
-  'inspector-align': '.pages-style-inspector > .pages-field select[aria-label="Alinhamento"]', 'inspector-width': '.pages-v2-inspector select[aria-label="Largura do bloco"]',
+  'inspector-align': '.pages-inspector-group[data-inspector-section=style] > .pages-field select[aria-label="Alinhamento"]', 'inspector-width': '.pages-v2-inspector select[aria-label="Largura do bloco"]',
   'inspector-fill': '.pages-v2-inspector select[aria-label="Fundo do bloco"]', 'inspector-tags': '.pages-v2-inspector input[aria-label="Tags do bloco"]',
   'inspector-icon': '.pages-v2-inspector select[aria-label="Ícone"]', 'daily-card': block(ids.dailyBlock), 'meetings-card': block(ids.meetingsBlock), faq: block(ids.faqBlock),
   'style-popover': '.pages-page-style-panel', 'style-tabs': '.pages-style-tabs', 'font-example': '.pages-style-sample',

@@ -7,25 +7,29 @@ import { renderDocument, imageFigure, mediaFigure, applyBlockStyle, richNode } f
 import { renderV3Block, v3Icon } from './render-blocks-v3.js';
 import { openPagesDialog } from './dialog.js';
 import { openReview, reviewSession } from './editor-review.js';
+import { publicationIssueTarget } from './publication-issues.js';
 import { compose, findBlock, findColumn, columns, genericBlock, defaultStyle, adjacentMove, insertAt, insertColumns, reorderSection, setBlockWidth, cloneBlock } from './composition.js';
 import { editV3, parseYouTubeURL } from './document-v3.js';
 import { createBlockFields, mediaAccept, mediaKind } from './editor-media.js';
 import { createDestinationFields } from './editor-destinations.js';
 import { openInsertPanel, insertionPoint, resolveInsertionPoint } from './editor-insert.js';
 import { createEditorWorkspace, createModelDraftController, editorAction, editorIcon } from './editor-workspace.js';
+import { createEditorMenus } from './editor-menus.js';
 import { createPageButton } from './button.js';
 import { navigate } from '../js/router.js';
 import { openEditorPanel } from './editor-panels.js';
 import { openStylePanel, createInspector, openInlineColorPanel, styleCandidate } from './editor-style.js';
 import { resolveAppearance, appearanceIssues, typographyMetrics } from './appearance.js';
 
-const statusLabels = { saved: 'Rascunho salvo', saving: 'Salvando…', dirty: 'Alterações não salvas', failure: 'Falha ao salvar — tente novamente', conflict: 'Conflito — recarregue a página' };
+const statusLabels = { saved: 'Rascunho salvo', saving: 'Salvando…', dirty: 'Alterações não salvas', failure: 'Falha ao salvar — tente novamente', conflict: 'Conflito — alterações locais preservadas. Recarregue para continuar.' };
 const blockLabels = { rich_text: 'Texto', image: 'Imagem', gif: 'GIF', audio: 'Áudio', video: 'Vídeo', callout: 'Destaque', button: 'Botão', divider: 'Separador', gallery: 'Galeria', faq: 'FAQ', video_embed: 'Vídeo incorporado' };
 const optionLabels = { start: 'À esquerda', center: 'Centralizado', end: 'À direita', small: 'Pequena', standard: 'Padrão', large: 'Grande', neutral: 'Neutra', brand: 'Marca', warm: 'Quente', manrope: 'Manrope', 'source-serif-4': 'Source Serif 4', oswald: 'Oswald', info: 'Informação', attention: 'Atenção', success: 'Sucesso', none: 'Sem ícone', alert: 'Alerta', check: 'Confirmação', primary: 'Primário', secondary: 'Secundário', text: 'Texto' };
 
 export function mountPageEditor(page) {
   const root = document.getElementById('page-editor-root'); if (!root) return;
   const api = createPagesAPI(page);
+  const menus = createEditorMenus({ page });
+  let unregisterTextMenu, unregisterPreviewMenu;
   let state, cargos = [], activeId, activeItemId, mode = 'edit', disposed = false, writePending = false, uploadRetry = null;
   let richEditors = new Map(), blockDisposers = [], previewDispose, editorHost, previewHost, toolbar, status, saveButton, publishButton, feedback, uploadStatus, retryUploadButton, cancelUploadButton, undoDeleteButton, loadSequence = 0;
   let metadataSync = [];
@@ -50,16 +54,22 @@ export function mountPageEditor(page) {
   page.listen(window, 'beforeunload', event => {
     if (state?.dirty || state?.pending || state?.blocked || writePending || uploadRetry || pendingPlacement || publishUncertain()) { event.preventDefault(); event.returnValue = ''; }
   });
-  function destroyBlocks() { layoutDragging = false; sortables.forEach(item => item.destroy()); sortables = []; blockNodes.forEach(item => item.dispose?.()); blockNodes.clear(); richEditors.forEach(editor => editor.destroy()); richEditors.clear(); blockDisposers.forEach(fn => fn()); blockDisposers = []; }
+  function setLayoutDragging(value) { layoutDragging = value; root.dataset.layoutDragging = String(value); }
+  function destroyBlocks() { setLayoutDragging(false); sortables.forEach(item => item.destroy()); sortables = []; blockNodes.forEach(item => item.dispose?.()); blockNodes.clear(); richEditors.forEach(editor => editor.destroy()); richEditors.clear(); blockDisposers.forEach(fn => fn()); blockDisposers = []; }
   page.cleanup(() => { disposed = true; modelController?.dispose(); saveControl?.dispose(); inspectorUI?.dispose(); nativeFields.clear(); nativeCompositions.clear(); workspaceUI?.dispose(); editorPanel?.close(false); previewDispose?.(); destroyBlocks(); uploadRetry = null; document.body.classList.remove('pages-editor-active'); });
   function update() {
     if (!live() || !state || !status) return;
-    status.textContent = statusLabels[state.status];
+    const label = state.status === 'failure' && state.pending ? 'Salvamento não confirmado — tente novamente para reconciliar a revisão enviada. Alterações posteriores ainda não foram salvas.' : statusLabels[state.status];
+    if (status.textContent !== label) status.textContent = label;
     saveControl.setDisabled(!state.workspace.capabilities.edit || (!state.writable && !state.pending) || state.blocked || writePending || publishUncertain() || state.status === 'conflict' || (!state.dirty && !state.pending));
     if (state.dirty || state.pending) saveControl.resetConfirmation();
-    if(state.workspace.capabilities.edit){const host=root.querySelector(state.dirty||state.pending?'.pages-primary-actions':'.pages-secondary-actions');if(host&&saveButton.parentElement!==host)host.insertBefore(saveButton,host.firstElementChild);}
     // Only a confirmed clean revision can enter the publication dialog.
     publishButton.disabled = !state.publishable || writePending || !!uploadRetry || !!pendingPlacement;
+    const publishReason = root.querySelector('.pages-publish-reason');
+    if (publishReason) {
+      const reason = !publishButton.disabled ? '' : state.status === 'conflict' ? 'Resolva o conflito antes de revisar.' : state.dirty || state.pending || state.status === 'saving' ? 'Salve o rascunho para revisar.' : 'Conclua a operação pendente para revisar.';
+      if (publishReason.textContent !== reason) publishReason.textContent = reason;
+    }
     uploadStatus.textContent = state.uploads ? 'Enviando mídia…' : uploadRetry ? uploadRetry.uncertain ? 'Upload não confirmado. Tente novamente com a mesma chave ou cancele.' : 'Falha no upload. Itens anteriores conservados. Tente novamente ou cancele.' : '';
     if (retryUploadButton) { retryUploadButton.hidden = !uploadRetry; retryUploadButton.disabled = state.blocked; }
     if (cancelUploadButton) { cancelUploadButton.hidden = !uploadRetry; cancelUploadButton.disabled = state.blocked; }
@@ -108,6 +118,14 @@ export function mountPageEditor(page) {
   const editorKey = (blockId, itemId) => itemId ? `${blockId}:${itemId}` : blockId;
   const activeEditor = () => richEditors.get(editorKey(activeId, activeItemId));
   const bookmark = () => activeEditor()?.bookmark?.() || null;
+  function refreshTextSelection() {
+    const editor = activeEditor();
+    if (!contextTools || !editor) return;
+    // Compact chrome relocates the toolbar's groups into the inspector.
+    const kind = root.querySelector('[data-text-format]');
+    if (kind) kind.value = editor.selectionFormat();
+    root.querySelectorAll('[data-mark]').forEach(control => control.setAttribute('aria-pressed', String(editor.active(control.dataset.mark))));
+  }
   function historyBlocked() { return writePending || publishUncertain() || !!uploadRetry || nativeCompositions.size > 0 || [...richEditors.values()].some(editor => editor.composing); }
   function historyAction(direction) {
     if (historyBlocked() || !state[direction]()) return false;
@@ -188,8 +206,9 @@ export function mountPageEditor(page) {
   function renderToolbar() {
     if (!toolbar || !state?.editable || !live()) return;
     const block = allBlocks(state.document).find(item => item.id === activeId);
-    const disclosures=inspectorUI&&inspectorUI.blockId===block?.id?{advanced:inspectorUI.node.querySelector('.pages-inspector-advanced')?.open,legacy:inspectorUI.node.querySelector('.pages-legacy-presentation')?.open}:null;
+    const disclosures=inspectorUI&&inspectorUI.blockId===block?.id?{legacy:inspectorUI.node.querySelector('.pages-legacy-presentation')?.open}:null;
     inspectorUI?.dispose(); inspectorUI = null;
+    unregisterTextMenu?.(); unregisterTextMenu = null;
     contextTools?.remove(); contextTools = null;
     workspaceUI?.placeContextTools(null, null);
     toolbar.replaceChildren(); if (!block) { toolbar.append(el('span', { className: 'pages-toolbar-empty', text: 'Selecione um bloco para editar.' })); workspaceUI?.select(null, null, false); return; }
@@ -225,10 +244,10 @@ export function mountPageEditor(page) {
       control.addEventListener('change', () => composition({ type: 'style', blockId: block.id, style: { ...(findBlock(state.document, block.id).block.style || defaultStyle()), [key]: control.value } }));
       presentation.append(field(label, control));
     }
-    const legacyPresentation = el('details', { className: 'pages-legacy-presentation' }, el('summary', { text: 'Presets legados deste bloco' }), presentation,
+    const legacyPresentation = el('details', { className: 'pages-legacy-presentation' }, el('summary', { text: 'Presets legados deste bloco' }),
+      el('p',{className:'pages-panel-help',text:'Mantém a apresentação de documentos anteriores. Alterações afetam este bloco; o padrão da página não substitui estes presets automaticamente.'}),presentation,
       toolbarCommand('Presets legados em todos os blocos existentes', () => openLegacyStyle(null)));
     presentation.removeAttribute('data-inspector-section');
-    advancedNodes.push(legacyPresentation);
     // Width uses the same bounded command and merge confirmation as Task 11.
     const origin=state, sequence=loadSequence;
     const canStyle=()=>live()&&state===origin&&loadSequence===sequence&&canEditContent()&&!historyBlocked()&&v3Available();
@@ -261,34 +280,44 @@ export function mountPageEditor(page) {
         node.append(...advancedNodes,field('Composição da linha',layout));
       }
     });
+    inspectorUI.node.querySelector('[data-inspector-section="style"]').append(legacyPresentation);
     toolbar.append(inspectorUI.node);
-    if(disclosures){inspectorUI.node.querySelector('.pages-inspector-advanced').open=disclosures.advanced;inspectorUI.node.querySelector('.pages-legacy-presentation').open=disclosures.legacy;}
+    if(disclosures)inspectorUI.node.querySelector('.pages-legacy-presentation').open=disclosures.legacy;
     if (['rich_text','callout','faq'].includes(block.type)) {
-      const editor = activeEditor();
-      if (!editor) return;
+      if (!activeEditor()) return;
       const formats = el('div', { className: 'pages-format-tools', role: 'toolbar', 'aria-label': 'Formatação do texto selecionado' });
       const marks = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Estilo do texto' });
-      for (const [label, mark] of [['Negrito','strong'],['Itálico','em'],['Sublinhado','underline']]) marks.append(toolbarCommand(label, () => editor.mark(mark), { 'aria-pressed': String(editor.active(mark)), 'data-mark': mark }));
-      const kind = el('select', { 'aria-label': 'Formato do texto' }, el('option', { value: 'paragraph', text: 'Texto' }), el('option', { value: '2', text: 'Título 2' }), el('option', { value: '3', text: 'Título 3' }));
-      let textFormat = 'paragraph'; nativeField(kind, () => { kind.value = textFormat; });
-      kind.addEventListener('change', () => { const applied = kind.value === 'paragraph' ? editor.paragraph() : editor.heading(Number(kind.value)); if (applied) textFormat = kind.value; else kind.value = textFormat; });
+      for (const [label, mark] of [['Negrito','strong'],['Itálico','em'],['Sublinhado','underline']]) marks.append(toolbarCommand(label, () => activeEditor()?.mark(mark), { 'aria-pressed': String(activeEditor().active(mark)), 'data-mark': mark }));
+      const kind = el('select', { 'aria-label': 'Formato do texto', 'data-text-format': '' }, el('option', { value: 'paragraph', text: 'Texto' }), el('option', { value: '2', text: 'Título 2' }), el('option', { value: '3', text: 'Título 3' }), el('option', { value: 'mixed', text: 'Formatos mistos', disabled: true }));
+      const syncFormat = () => { kind.value = activeEditor()?.selectionFormat() || 'paragraph'; };
+      syncFormat(); nativeField(kind, syncFormat);
+      kind.addEventListener('change', () => {
+        const editor = activeEditor();
+        if (kind.value === 'paragraph') editor?.paragraph();
+        else if (['2','3'].includes(kind.value)) editor?.heading(Number(kind.value));
+        syncFormat();
+      });
       const structure = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Parágrafos e títulos' }, kind);
-      const lists = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Listas' }, toolbarCommand('Lista', () => editor.list(false)), toolbarCommand('Lista numerada', () => editor.list(true)), toolbarCommand('Remover lista', () => editor.unlist()));
-      const links = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Links' }, toolbarCommand('Link', () => {
+      const lists = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Listas' }, toolbarCommand('Lista', () => activeEditor()?.list(false)), toolbarCommand('Lista numerada', () => activeEditor()?.list(true)), toolbarCommand('Remover lista', () => activeEditor()?.unlist()));
+      const links = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Links' }, toolbarCommand('Link', event => {
+          const editor = activeEditor(), selection = editor?.bookmark(), origin = state;
           const input = el('input', { type: 'text', maxlength: 2048, placeholder: 'https://… ou /caminho' });
-          openPagesDialog({ page, title: 'Link no texto selecionado', content: field('Endereço HTTPS ou caminho do Portal', input), confirmText: 'Aplicar link', action: async () => {
+          openPagesDialog({ page, opener: event.currentTarget, title: 'Link no texto selecionado', content: field('Endereço HTTPS ou caminho do Portal', input), confirmText: 'Aplicar link', action: async () => {
             if (!safeLink(input.value)) throw new Error('Informe um endereço HTTPS sem credenciais ou um caminho iniciado por /.');
+            if (state !== origin || activeEditor() !== editor || JSON.stringify(editor?.bookmark()) !== JSON.stringify(selection)) throw new Error('A seleção do texto mudou. Selecione o texto novamente.');
             editor.link(input.value);
           } });
-        }), toolbarCommand('Remover link', () => { if (editor.active('link')) editor.link(''); }));
+        }), toolbarCommand('Remover link', () => { const editor = activeEditor(); if (editor?.active('link')) editor.link(''); }));
       const history = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Histórico do texto' }, toolbarCommand('Desfazer texto', () => historyAction('undo'), { 'data-history': 'undo', disabled: !state.canUndo || historyBlocked() }), toolbarCommand('Refazer texto', () => historyAction('redo'), { 'data-history': 'redo', disabled: !state.canRedo || historyBlocked() }));
       const more = el('details', { className: 'pages-format-more' }, el('summary', { text: '•••', 'aria-label': 'Mais opções de texto' }), el('div', { className: 'pages-format-overflow' }, lists, history));
+      unregisterTextMenu = menus.register(more);
       more.querySelector('.pages-format-overflow').append(links.children[links.children.length-1]);
       const inlineColors=el('div',{className:'pages-toolbar-group',role:'group','aria-label':'Cores do texto selecionado'},
         toolbarCommand('Realce do texto selecionado',event=>openInlineColor('highlight',event.currentTarget),{disabled:!v3Available(),'aria-label':'Realce do texto selecionado'}),
         toolbarCommand('Cor do texto selecionado',event=>openInlineColor('text_color',event.currentTarget),{disabled:!v3Available(),'aria-label':'Cor do texto selecionado'}));
       inlineColors.children[0].replaceChildren(editorIcon('marker'));inlineColors.children[1].replaceChildren(editorIcon('palette'));
       formats.append(structure, marks, links, inlineColors, more);
+      for (const control of [...marks.children, ...links.children, ...inlineColors.children]) control.classList.add('pages-format-compact');
       for (const [mark, glyph] of [['strong','B'], ['em','I'], ['underline','U']]) {
         const control = marks.querySelector(`[data-mark="${mark}"]`); control.setAttribute('aria-label', control.textContent); control.title = control.textContent; control.textContent = glyph;
       }
@@ -325,9 +354,10 @@ export function mountPageEditor(page) {
       if (['rich_text','callout'].includes(block.type)) {
         if (block.type === 'callout') {
           const fields = el('div', { className: 'pages-block-fields' });
-          for (const [key, label, options] of [['tone','Tom',['info','attention','success']], ['icon','Ícone',['none','info','alert','check']]]) {
+          for (const [key, label, options] of [['tone','Tom',['info','attention','success']], ['icon','Ícone do destaque',['none','info','alert','check']]]) {
             const control = el('select', { 'aria-label': label }); options.forEach(value => control.append(el('option', { value, text: optionLabels[value], selected: value === block[key] })));
-            bind(control, value => value[key]); control.addEventListener('change', () => { editBlock(block.id, key, control.value, false); }); fields.append(field(label, control));
+            bind(control, value => value[key]); control.addEventListener('change', () => { editBlock(block.id, key, control.value, false); });
+            const styleField=field(label, control);styleField.dataset.inspectorSection='style';fields.append(styleField);
           }
           entry.fields = fields;
         }
@@ -338,8 +368,8 @@ export function mountPageEditor(page) {
             historyCommands: { undo: () => historyAction('undo'), redo: () => historyAction('redo') },
             canEdit: canEditContent, allowV3Marks: () => state.document.schema_version === 3 && v3Available(),
             onHistoryBoundary: () => state.closeHistoryGroup(), onComposition: () => update(),
-            onChange(content, meta = {}) { edit({ ...meta, group: `${block.id}:content` }, doc => { const value = findBlock(doc, block.id)?.block; if (!value) return false; value.content = content; }); }, onFocus() { if (activeId !== block.id) select(block.id); workspaceUI?.focusText(); },
-            onSelection() { if (activeId === block.id) contextTools?.querySelectorAll('[data-mark]').forEach(control => control.setAttribute('aria-pressed', String(richEditors.get(block.id)?.active(control.dataset.mark) || false))); }, onLimit() { page.toast('Limite: 100 mil caracteres e dois níveis de listas.'); } });
+            onChange(content, meta = {}) { edit({ ...meta, group: `${block.id}:content` }, doc => { const value = findBlock(doc, block.id)?.block; if (!value) return false; value.content = content; }); }, onFocus() { if (activeId !== block.id) select(block.id); refreshTextSelection(); workspaceUI?.focusText(); },
+            onSelection() { if (activeId === block.id) refreshTextSelection(); }, onLimit() { page.toast('Limite: 100 mil caracteres e dois níveis de listas.'); } });
           richEditors.set(block.id, editor);
         }
       } else if (['image','gif','audio','video','gallery','faq','video_embed'].includes(block.type)) {
@@ -351,18 +381,18 @@ export function mountPageEditor(page) {
           nativeField(pick,()=>{},()=>false,()=>blockNodes.get(block.id)===entry);
           node.append(pick);const syncPicker=()=>{pick.hidden=!!currentBlock()?.media_id;};syncPicker();entry.syncAudioPicker=syncPicker;
         }
-        const fields = createBlockFields({ page, block, resolveBlock: currentBlock, createRichEditor,
+        const fields = createBlockFields({ page, block, resolveBlock: currentBlock, createRichEditor, previewRoot: figure?.node,
           canEdit: canEditContent, canAct: () => canEditContent() && !historyBlocked(), bindNative: nativeField, nativeMeta,
           transact(meta, change) { return edit(meta, doc => { if (change(doc) === false) return false; const found = findBlock(doc, block.id); if (!found) return false; const candidate = clone(doc); findBlock(candidate, block.id).column.blocks.splice(found.index,1); return !!insertAt(candidate, { columnId: found.column.id, index: found.index, block: found.block }); }); },
           upload: (files,target) => { void upload(files[0], newId(), target, files.slice(1)); },
           onSource: id => openVideoSource(null, id),
-          onFocus(itemId) { const changed = activeId !== block.id || activeItemId !== itemId; if (changed) state.closeHistoryGroup(); activeItemId = itemId; if (activeId !== block.id) { activeId = block.id; select(block.id); } else if (changed) renderToolbar(); if (itemId && block.type === 'faq') workspaceUI?.focusText(); },
+          onFocus(itemId) { const changed = activeId !== block.id || activeItemId !== itemId; if (changed) state.closeHistoryGroup(); activeItemId = itemId; if (activeId !== block.id) { activeId = block.id; select(block.id); } else if (changed) renderToolbar(); refreshTextSelection(); if (itemId && block.type === 'faq') workspaceUI?.focusText(); },
           registerEditor: (itemId, editor) => richEditors.set(editorKey(block.id,itemId),editor),
           unregisterEditor: itemId => { richEditors.delete(editorKey(block.id,itemId)); if (activeId === block.id && activeItemId === itemId) { activeItemId = null; renderToolbar(); } },
           richOptions: { canEdit: canEditContent, allowV3Marks: () => state.document.schema_version === 3 && v3Available(), isLayoutDragging: () => layoutDragging,
             historyCommands: { undo: () => historyAction('undo'), redo: () => historyAction('redo') },
             onHistoryBoundary: () => state.closeHistoryGroup(), onComposition: () => update(),
-            onSelection(itemId) { if (activeId === block.id && activeItemId === itemId) contextTools?.querySelectorAll('[data-mark]').forEach(control => control.setAttribute('aria-pressed', String(activeEditor()?.active(control.dataset.mark) || false))); },
+            onSelection(itemId) { if (activeId === block.id && activeItemId === itemId) refreshTextSelection(); },
             onLimit: () => page.toast('Limite: 100 mil caracteres e dois níveis de listas.') },
           onChange: () => { figure?.refresh?.(); refreshNativeFields(); },
         });
@@ -382,7 +412,8 @@ export function mountPageEditor(page) {
         entry.reconcile = () => { refreshButton(); destinations.refresh(); };
         entry.syncDestinations = destinations.refresh;
         entry.dispose = () => destinations.dispose();
-        entry.fields = el('div', { className: 'pages-block-fields' }, field('Rótulo', label), field('Estilo do botão', preset), destinations.node);
+        const presetField=field('Estilo do botão', preset);presetField.dataset.inspectorSection='style';
+        entry.fields = el('div', { className: 'pages-block-fields' }, field('Rótulo', label), presetField, destinations.node);
         entry.reconcile();
       } else if (block.type === 'divider') {
         node.append(el('hr'));
@@ -428,13 +459,13 @@ export function mountPageEditor(page) {
           if (editable) sortables.push(createSortable(host, { group: 'pages-blocks', draggable: '.pages-editor-block', handle: '.pages-drag-handle', filter: 'input,textarea,select,.ProseMirror', preventOnFilter: false, animation: 0, emptyInsertThreshold: 30,
             forceFallback: true, fallbackOnBody: true,
             onMove: () => canEditContent() && !historyBlocked() && !state.blocked,
-            onStart() { layoutDragging = true; },
+            onStart() { setLayoutDragging(true); },
             onEnd(event) {
               try {
                 const blockId = event.item.dataset.blockId, columnId = event.to.dataset.columnId, beforeId = event.item.nextElementSibling?.dataset.blockId;
                 if (!composition({ type: 'move', blockId, columnId, ...(beforeId ? { beforeId } : {}) }, 'Bloco movido por arraste.')) renderBlocks();
                 activeId = blockId; select(blockId); editorHost.querySelector(`[data-block-id="${blockId}"] .pages-select-block`)?.focus();
-              } finally { layoutDragging = false; }
+              } finally { setLayoutDragging(false); }
             } }));
         }
         rowNode.append(grid); group.append(rowNode);
@@ -532,8 +563,10 @@ export function mountPageEditor(page) {
     const source = el('select', { 'aria-label': 'Fonte do vídeo' }, el('option', { value: 'private', text: 'Upload MP4 privado' }), el('option', { value: 'youtube', text: 'Link incorporado do YouTube', disabled: !v3Available() }));
     const address = el('input', { type: 'url', maxlength: 2048, 'aria-label': 'URL do YouTube', placeholder: 'https://www.youtube.com/watch?v=…' });
     const warning = el('p', { text: 'YouTube é um serviço de terceiros. O vídeo externo não é privado pelo login do Portal. A leitura só conecta após consentimento no próprio aviso; não carregamos miniaturas ou player agora.' });
-    openPagesDialog({ page, title: blockId ? 'Trocar fonte do vídeo' : 'Adicionar vídeo', content: el('div', {}, field('Fonte', source), field('Link incorporado', address), warning,
-      el('p', { text: blockId ? 'Confirmar substitui a fonte deste bloco. Cancelar mantém o conteúdo anterior. Os arquivos históricos não são excluídos.' : 'Escolha um arquivo MP4 privado ou informe um link válido. Cancelar não cria bloco.' })), confirmText: 'Confirmar fonte', action: async () => {
+    const external = el('div', {}, field('URL do YouTube', address), warning);
+    const privateHelp = el('p', { text: 'Escolha um arquivo MP4 privado. O acesso ao arquivo permanece protegido pelo login e pelas permissões do Portal.' });
+    const dialog = openPagesDialog({ page, title: blockId ? 'Trocar fonte do vídeo' : 'Adicionar vídeo', content: el('div', {}, field('Fonte', source), privateHelp, external,
+      el('p', { text: blockId ? 'Confirmar substitui a fonte deste bloco. Cancelar mantém o conteúdo anterior. Os arquivos históricos não são excluídos.' : 'Cancelar não cria bloco.' })), confirmText: 'Escolher MP4', action: async feedback => {
       if (!live() || state !== origin || sequence !== loadSequence || !canEditContent()) throw Error('Edição indisponível.');
       const previous = blockId && findBlock(state.document, blockId)?.block;
       if (blockId && !['video','video_embed'].includes(previous?.type)) throw Error('O vídeo de destino não está mais disponível.');
@@ -542,7 +575,12 @@ export function mountPageEditor(page) {
         uploadInput.accept = mediaAccept('video'); uploadInput.value = ''; uploadInput.click(); return;
       }
       if (!v3Available()) throw Error('O servidor não permite escrita v3.');
-      const identity = parseYouTubeURL(address.value); if (!identity) throw Error('Informe uma URL HTTPS válida do YouTube (watch, shorts, embed ou youtu.be).');
+      const identity = parseYouTubeURL(address.value);
+      if (!identity) {
+        feedback.id = feedback.id || `pages-video-error-${newId()}`;
+        address.setAttribute('aria-describedby', feedback.id); address.setAttribute('aria-invalid', 'true');
+        throw Error('Informe uma URL HTTPS válida do YouTube (watch, shorts, embed ou youtu.be).');
+      }
       const value = { id: blockId || newId(), type: 'video_embed', ...identity, title: previous?.title || '', transcript: previous?.transcript || '' };
       for (const key of ['style','appearance','tags']) if (previous?.[key] !== undefined) value[key] = clone(previous[key]);
       const next = editV3(state.document, doc => {
@@ -554,6 +592,16 @@ export function mountPageEditor(page) {
       if (!applyComposition(next)) throw Error('Destino ou limites do documento indisponíveis.');
       activeId = value.id; activeItemId = null; select(value.id);
     } });
+    const syncSource = () => {
+      const youtube = source.value === 'youtube';
+      external.hidden = !youtube; privateHelp.hidden = youtube; address.disabled = !youtube;
+      address.removeAttribute('aria-invalid'); address.removeAttribute('aria-describedby');
+      dialog.querySelector('[role="alert"]').textContent = '';
+      dialog.querySelector('.pages-actions .btn-primary').textContent = youtube ? (blockId ? 'Aplicar fonte' : 'Inserir vídeo') : 'Escolher MP4';
+    };
+    source.addEventListener('change', syncSource);
+    address.addEventListener('input', () => { address.removeAttribute('aria-invalid'); });
+    syncSource();
   }
   function openInsertion(anchor, point = insertionPoint(state.document, { blockId: activeId })) {
     if (!state.editable || state.blocked || writePending || uploadRetry || state.status === 'conflict') return;
@@ -646,6 +694,41 @@ export function mountPageEditor(page) {
     if (!live() || state!==origin || sequence!==loadSequence || !state.publishable || uploadRetry || pendingPlacement) return;
     reviewUI?.close();
     reviewUI = openReview({page,state:origin,api,cargos,opener,
+      onIssue:issue=>{
+        if(!live()||state!==origin||sequence!==loadSequence||!canEditContent()||historyBlocked())return;
+        const target=publicationIssueTarget(state.document,issue);
+        if(!target){feedback.textContent=issue.message;return;}
+        showMode('edit');
+        let control;
+        if(!target.blockId){
+          workspaceUI?.showPage();
+          if(target.field==='audience'){
+            const summary=root.querySelector('[data-audience-summary]');if(summary)summary.parentElement.open=true;
+            control=root.querySelector('.pages-audience input:not(:disabled)')||summary;
+          }else control=root.querySelector('.pages-metadata-title input');
+        }else{
+          // Toolbar handlers capture activeEditor: establish the complete target
+          // identity before select renders them (focus may not change it again).
+          if(activeId!==target.blockId||activeItemId!==(target.itemId||null))state.closeHistoryGroup();
+          activeId=target.blockId;activeItemId=target.itemId||null;
+          select(target.blockId);
+          const entry=blockNodes.get(target.blockId);
+          let host=entry?.fields||entry?.node.querySelector('.pages-block-fields')||entry?.node;
+          if(target.itemId){
+            host=host?.querySelector(`[data-media-item-id="${target.itemId}"]`);
+            if(host?.tagName==='DETAILS')host.open=true;
+          }
+          if(['content','answer'].includes(target.field)){
+            const editor=richEditors.get(editorKey(target.blockId,target.itemId));
+            const rich=host?.querySelector('.ProseMirror');
+            if(editor){rich?.scrollIntoView({block:'center'});editor.focus();return;}
+          }
+          const selector=target.field==='media_id'?'button':target.field==='items'?'button':`[data-publication-field="${target.field}"]`;
+          control=host?.querySelector(selector);
+        }
+        if(control&&!control.disabled){control.scrollIntoView({block:'center'});control.focus();}
+        else feedback.textContent=issue.message;
+      },
       canAct:()=>live() && state===origin && sequence===loadSequence && !writePending && !uploadRetry && !pendingPlacement && !nativeCompositions.size,
       onChanged:()=>{if(live()&&state===origin){metadataSync.forEach(sync=>sync());renderBlocks();if(mode!=='edit')showMode(mode);update();}},
       onPublish:async payload=>{
@@ -678,6 +761,7 @@ export function mountPageEditor(page) {
       action:async()=>{await modelController.choose(template.id);}});
   }
   function build(workspace) {
+    menus.closeAll(); unregisterPreviewMenu?.(); unregisterPreviewMenu = null;
     workspaceUI?.dispose(); workspaceUI = null; editorPanel?.close(false);
     previewDispose?.(); destroyBlocks(); metadataSync = []; nativeFields.clear(); nativeCompositions.clear(); activeId = null; activeItemId = null; uploadPoint = null; pendingPlacement = null;
     const sequence = loadSequence;
@@ -698,9 +782,12 @@ export function mountPageEditor(page) {
     saveButton = saveControl.node;
     publishButton = editorAction('Publicar', 'publish', publish, { className: 'btn btn-primary' });
     const primaryActions = el('div', { className: 'pages-primary-actions' });
+    if (workspace.capabilities.edit) primaryActions.append(saveButton);
     if (workspace.capabilities.publish) primaryActions.append(publishButton);
+    publishButton.setAttribute('aria-describedby', 'pages-publish-reason');
+    const operations = el('div', { className: 'pages-operation-bar' }, status, primaryActions);
+    if (workspace.capabilities.publish) operations.append(el('p', { id: 'pages-publish-reason', className: 'pages-publish-reason' }));
     const secondaryActions = el('div', { className: 'pages-secondary-actions' });
-    if (workspace.capabilities.edit) secondaryActions.append(saveButton);
     if (workspace.capabilities.archive) secondaryActions.append(button(workspace.archived_at ? 'Restaurar' : 'Arquivar', archiveOrRestore));
     secondaryActions.append(button('Recarregar versão salva', () => {
       const message = pendingPlacement ? 'Descartar as alterações locais e a colocação do arquivo já enviado, carregando a versão salva? O envio do arquivo não será desfeito.' : 'Descartar as alterações locais e carregar a versão salva?';
@@ -710,7 +797,7 @@ export function mountPageEditor(page) {
     const back = link('', './pages.html?manage=1'); back.className = 'pages-v2-back'; back.setAttribute('aria-label', 'Voltar à gestão de Pages'); back.append(editorIcon('back'));
     const brand = link('', './dashboard.html'); brand.className = 'pages-v2-brand'; brand.setAttribute('aria-label', 'Conecta Ownerinc — início'); brand.append(el('span', { className: 'pages-v2-wordmark' }, el('img', { src: './assets/conecta/logo.svg', alt: 'Conecta', width: 104, height: 32 })));
     const header = el('header', { className: 'pages-heading pages-v2-header' }, back, brand, el('div', { className: 'pages-heading-copy' },
-      el('h1', { className: 'pages-visually-hidden', text: editable ? 'Editar Page' : 'Revisar Page' }), el('strong', { 'data-document-name': '', text: state.document.metadata.title }), el('span', { className: 'pages-v2-header-subtitle', text: editable ? 'Conteúdos / Edição de página' : 'Conteúdos / Somente revisão' })), status, primaryActions);
+      el('h1', { className: 'pages-visually-hidden', text: editable ? 'Editar Page' : 'Revisar Page' }), el('strong', { 'data-document-name': '', text: state.document.metadata.title }), el('span', { className: 'pages-v2-header-subtitle', text: editable ? 'Conteúdos / Edição de página' : 'Conteúdos / Somente revisão' })), operations);
     const metadata = el('div', { className: 'pages-metadata' });
     for (const [key, label, max, multiline] of [['title','Título',200,false],['summary','Resumo',1000,true]]) {
       const control = el(multiline ? 'textarea' : 'input', { maxlength: max, disabled: !editable }); control.value = state.document.metadata[key];
@@ -744,6 +831,7 @@ export function mountPageEditor(page) {
     if (editable) modes.append(button('Editar', () => showMode('edit'), { 'data-preview-mode': 'edit', 'aria-pressed': 'true' }));
     modes.append(button('Prévia desktop', () => showMode('desktop'), { 'data-preview-mode': 'desktop' }), button('Prévia mobile · 390 px', () => showMode('mobile'), { 'data-preview-mode': 'mobile' }));
     const previewMenu = el('details',{className:'pages-v2-preview-menu'},el('summary',{},editorIcon('eye'),el('span',{text:'Prévia'})),modes);
+    unregisterPreviewMenu = menus.register(previewMenu);
     primaryActions.insertBefore(previewMenu,primaryActions.firstElementChild);
     modes.addEventListener('click',()=>{previewMenu.open=false;});
     toolbar = el('div', { className: 'pages-context-toolbar', role: 'toolbar', 'aria-label': 'Ações do bloco selecionado', hidden: !editable });
@@ -761,11 +849,11 @@ export function mountPageEditor(page) {
     add.append(editorAction('Adicionar bloco', 'plus', event => openInsertion(event.currentTarget)), file,
       el('div', { className: 'pages-recovery-actions' }, undoDeleteButton, retryUploadButton, cancelUploadButton, placeUploadButton), compositionStatus, uploadStatus);
     inlineAdd=state.document.template.id==='guia-interno'?el('div',{className:'pages-inline-insert'},add.firstElementChild):null;
-    workspaceUI = createEditorWorkspace({ root, page, header, actions: secondaryActions, metadata, modes, toolbar, editorHost, previewHost, add, feedback,
+    workspaceUI = createEditorWorkspace({ root, page, menus, header, actions: secondaryActions, metadata, modes, toolbar, editorHost, previewHost, add, feedback,
       templates:availableTemplates,onUndo:()=>historyAction('undo'),onRedo:()=>historyAction('redo'),onModel:openModel,
       onInsert: openInsertion, onStyle: openStyle, onSelect: select, onSection: () => composition({ type: 'section' }),
       sortableFactory: createSortable, canReorder: () => canEditContent() && !historyBlocked() && !state.blocked,
-      onLayoutDragging: value => { layoutDragging = value; },
+      onLayoutDragging: setLayoutDragging,
       onReorderSection: command => applyComposition(reorderSection(state.document, command), 'Seção movida.') });
     modelController?.dispose();
     modelController=createModelDraftController({newId,create:payload=>api.create(payload),canAct:()=>live()&&canEditContent()&&!historyBlocked()&&!state.blocked,
@@ -784,6 +872,7 @@ export function mountPageEditor(page) {
     update();
   }
   async function load() {
+    menus.closeAll(); unregisterTextMenu?.(); unregisterTextMenu = null; unregisterPreviewMenu?.(); unregisterPreviewMenu = null;
     reviewUI?.close(); reviewUI=null;
     const sequence = ++loadSequence;
     document.body.classList.add('pages-editor-active');

@@ -59,7 +59,7 @@ export function createModelDraftController({ newId, create, beforeCreate, canAct
   };
 }
 
-export function createEditorWorkspace({ root, page, header, actions, metadata, modes, toolbar, editorHost, previewHost, add, feedback, onInsert, onStyle, onSection, onSelect,
+export function createEditorWorkspace({ root, page, menus, header, actions, metadata, modes, toolbar, editorHost, previewHost, add, feedback, onInsert, onStyle, onSection, onSelect,
   onUndo, onRedo, onModel, onDevice, onZoom, templates = [],
   sortableFactory, onReorderSection, canReorder = () => false, onLayoutDragging = () => {} }) {
   let disposed = false, activeSection, currentDocument, overlay, sheetOpener, textTools, textBlockNode, isEditable = false, restoringFocus = false, sectionSortable, sectionDragging = false, dragCancelled = false, stopViewport;
@@ -67,9 +67,11 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
   const compact = window.matchMedia?.('(max-width: 1099px)');
   const phone = window.matchMedia?.('(max-width: 599px)');
   const structure = el('nav', { className: 'pages-v2-structure', 'aria-label': 'Estrutura da página' });
+  structure.dataset.organizing = 'false';
   const sectionList = el('div', { className: 'pages-v2-section-list' });
   const organize = button('Organizar estrutura', () => {
-    const next = root.dataset.organizing !== 'true'; root.dataset.organizing = String(next); organize.setAttribute('aria-pressed', String(next));
+    const next = structure.dataset.organizing !== 'true';
+    structure.dataset.organizing = root.dataset.organizing = String(next); organize.setAttribute('aria-pressed', String(next));
   }, { 'aria-pressed': 'false', 'data-edit-only': '' });
   const sectionAdd = editorAction('Adicionar seção', 'plus', onSection, { 'data-edit-only': '' });
   organize.setAttribute('aria-label','Organizar estrutura');organize.textContent='Arraste para organizar';
@@ -84,7 +86,7 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
   const scaled = el('div', { className: 'pages-v2-scaled-surface' }, surface);
   const viewport = el('div', { className: 'pages-v2-viewport' }, scaled);
   const count = el('span');
-  const mobileNotice = el('p', { className: 'pages-v2-mobile-notice', text: 'Prévia · conteúdo ilustrativo', hidden: true });
+  const mobileNotice = el('p', { className: 'pages-v2-mobile-notice', text: 'Edição' });
   const center = el('div', { className: 'pages-v2-center' }, el('div', { className: 'pages-v2-canvas-label' }, count, el('span', { text: 'Rascunho · salvar é explícito' })), mobileNotice, viewport);
   let view = { device: 'desktop', zoom: 100 };
   function measureViewport() {
@@ -92,9 +94,12 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
     const geometry = viewportGeometry({ ...view, available: viewport.clientWidth || 1044, height: surface.offsetHeight });
     surface.style.width = `${geometry.width}px`;
     surface.style.transform = `scale(${geometry.scale})`;
-    // The toolbar is unscaled. Reserve its actual height inside the scaled paper
-    // so it cannot cover the caret/text at 50% or when selecting a compact card.
-    surface.style.setProperty('--pages-context-space', `${44 / geometry.scale + 28}px`);
+    // Keep the established paper spacing when it already clears the toolbar.
+    // The toolbar is unscaled, anchored 16 paper pixels inside the block: reserve
+    // its measured border-box plus a real 4px gap even at 50% or after wrapping.
+    const toolbarHeight = textTools?.offsetHeight || 44;
+    const contextSpace = Math.max(44 / geometry.scale + 28, (toolbarHeight + 4) / geometry.scale + 16);
+    surface.style.setProperty('--pages-context-space', `${contextSpace}px`);
     scaled.style.width = `${geometry.scaledWidth}px`;
     scaled.style.height = `${surface.offsetHeight * geometry.scale}px`;
     positionTextTools();
@@ -102,9 +107,11 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
   const inspectorTitle = el('h2', { text: 'Editar bloco' });
   const inspector = el('aside', { className: 'pages-v2-inspector', 'aria-label': 'Propriedades do editor' });
   const contentFields = el('div', { className: 'pages-v2-content-fields', 'data-inspector-section': 'content' });
+  const blockStyleFields = el('div', { className: 'pages-v2-block-style-fields', 'data-inspector-section': 'style' });
+  let styledFieldsHost;
   const mobileFormat = el('div', { className: 'pages-v2-mobile-format', 'data-inspector-section': 'content', hidden: true });
   const extraFormat = el('div', { className: 'pages-v2-extra-format', 'data-inspector-section': 'style', hidden: true });
-  const blockPanel = el('div', { className: 'pages-v2-block-panel' }, mobileFormat, contentFields, extraFormat, toolbar);
+  const blockPanel = el('div', { className: 'pages-v2-block-panel' }, mobileFormat, contentFields, blockStyleFields, extraFormat, toolbar);
   const pagePanel = el('div', { className: 'pages-v2-page-panel', hidden: true }, metadata, actions);
   function setTab(tab) {
     const isPage = tab === 'page'; blockPanel.hidden = isPage; pagePanel.hidden = !isPage;
@@ -192,25 +199,19 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
   const properties = topTools.querySelector('.pages-properties-toggle');
   const viewTools = topTools.querySelector('.pages-v2-view-tools');
   const primary = header.querySelector('.pages-primary-actions');
-  const publish = [...(primary?.querySelectorAll('button') || [])].find(node => node.textContent === 'Publicar');
   const preview = primary?.querySelector('.pages-v2-preview-menu');
   const overflowContent = el('div', { className: 'pages-v2-overflow-content' });
   const overflow = el('details', { className: 'pages-v2-overflow' }, el('summary', { text: '•••', 'aria-label': 'Mais ações do editor' }), overflowContent);
+  const unregisterOverflow = menus?.register(overflow);
   preview?.addEventListener('click', event => {
     if (!phone?.matches) return;
     overflow.open = false;
     if (event.target.closest('[data-preview-mode]')) preview.querySelector('summary').focus();
   });
-  primary?.addEventListener('click', event => {
-    // Opening the nested preview chooser is not a completed action. Keep its
-    // containing mobile menu open until an actual preview mode is selected.
-    if (event.target.closest('.pages-v2-preview-menu > summary')) return;
-    overflow.open = false; if (phone?.matches) overflow.querySelector('summary').focus();
-  });
   header.append(overflow);
   root.replaceChildren(header, topTools, feedback, workspace);
   root.dataset.inspectorOpen = 'false'; root.dataset.inspectorSection = 'content'; root.dataset.organizing = 'false';
-  const onKey = event => { if (event.key === 'Escape' && sectionDragging) { dragCancelled = true; event.preventDefault(); return; } if (event.key === 'Escape' && !document.querySelector('dialog[open]')) { if (overflow.open) { overflow.open = false; overflow.querySelector('summary').focus(); } else closeInspector(); } };
+  const onKey = event => { if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return; if (event.key === 'Escape' && sectionDragging) { dragCancelled = true; event.preventDefault(); return; } if (event.key === 'Escape' && !document.querySelector('dialog[open]')) closeInspector(); };
   window.addEventListener('keydown', onKey);
   const onHistory = () => { if (!document.querySelector('dialog[open]')) closeInspector(false); };
   window.addEventListener('popstate', onHistory);
@@ -218,12 +219,11 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
     overlay?.close(false);
     if (structure.parentElement !== workspace) workspace.insertBefore(structure, center);
     if (phone?.matches) {
-      overflowContent.append(primary, insert, modelHit, style, properties);
+      overflowContent.append(insert, modelHit, style, properties);
       if (preview) topTools.insertBefore(preview, topTools.children[1]);
-      if (publish) topTools.append(publish);
       overflowContent.append(viewTools);
     } else {
-      header.insertBefore(primary, overflow); if (preview) primary.append(preview); if (publish) primary.append(publish);
+      if (preview) primary.append(preview);
       topTools.append(viewTools);
       topTools.insertBefore(modelHit, style.parentElement===topTools?style:topTools.querySelector('.pages-v2-view-tools'));topTools.insertBefore(insert, modelHit); topTools.insertBefore(style, topTools.querySelector('.pages-v2-view-tools'));
       topTools.querySelector('.pages-v2-view-tools').append(properties);
@@ -257,8 +257,10 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
   onResize();
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
     root.style.setProperty('--inspector-height', `${inspector.getBoundingClientRect().height}px`);
+    root.style.setProperty('--pages-chrome-height', `${header.getBoundingClientRect().height}px`);
   }) : null;
   observer?.observe(inspector);
+  observer?.observe(header);
   const viewportObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(measureViewport) : null;
   viewportObserver?.observe(viewport); viewportObserver?.observe(surface);
   setViewport(view);
@@ -267,7 +269,13 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
     setViewport,
     setHistory({ canUndo, canRedo }) { undo.disabled = !canUndo; redo.disabled = !canRedo; },
     setModelBusy(value) { model.disabled = Boolean(value); },
-    placeContextTools(node, blockNode) { textBlockNode?.classList.remove('has-context-tools'); extraFormat.replaceChildren(); textTools = node; formatOrder = node ? [...node.children] : []; textBlockNode = blockNode; blockPanel.dataset.richText = String(!!node); blockNode?.classList.add('has-context-tools'); relocateTextTools(); measureViewport(); },
+    placeContextTools(node, blockNode) {
+      if (textTools) viewportObserver?.unobserve(textTools);
+      textBlockNode?.classList.remove('has-context-tools'); extraFormat.replaceChildren(); textTools = node; formatOrder = node ? [...node.children] : []; textBlockNode = blockNode; blockPanel.dataset.richText = String(!!node); blockNode?.classList.add('has-context-tools');
+      relocateTextTools();
+      if (textTools) viewportObserver?.observe(textTools);
+      measureViewport();
+    },
     focusText() {
       if (restoringFocus) return;
       openInspector('block'); root.dataset.inspectorSection = 'content';
@@ -290,7 +298,6 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
       count.textContent = `Página · ${doc.sections.length} ${doc.sections.length === 1 ? 'seção' : 'seções'}`;
       model.firstElementChild.textContent = `Modelo: ${doc.template.id === 'guia-interno' ? 'Guia interno' : doc.template.id === 'owner-news' ? 'Owner News' : 'Comunicado'}`;
       const hasCover = doc.schema_version === 3 && doc.template.id === 'guia-interno';
-      mobileNotice.hidden = !hasCover;
       canvasMetadata.hidden = hasCover;
       const subtitle = header.querySelector('.pages-v2-header-subtitle');
       if (subtitle) subtitle.textContent = `Conteúdos / ${doc.metadata.category || 'Página'}`;
@@ -326,9 +333,10 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
         const index = doc.sections.indexOf(section), label = section.label || 'Seção sem nome';
         const handle = button('⋮⋮', () => node.focus(), { className: 'btn btn-ghost pages-section-drag-handle', 'aria-label': `Arrastar seção ${label}; Alt+setas para mover`, 'data-edit-only': '', hidden: !isEditable });
         handle.addEventListener('keydown', event => { if (event.altKey && ['ArrowUp','ArrowDown'].includes(event.key)) { event.preventDefault(); move(section.id, event.key === 'ArrowUp' ? -1 : 1); } });
-        const position = el('details', { 'data-edit-only': '', hidden: !isEditable }, el('summary', { text: 'Posição', 'aria-label': `Posição da seção ${label}` }),
-          button('Subir', () => move(section.id, -1), { 'aria-label': `Subir seção ${label}`, disabled: index === 0 }),
-          button('Descer', () => move(section.id, 1), { 'aria-label': `Descer seção ${label}`, disabled: index === doc.sections.length - 1 }));
+        const position = el('details', { className: 'pages-v2-section-position', 'data-edit-only': '', hidden: !isEditable }, el('summary', { text: 'Posição', 'aria-label': `Posição da seção ${label}` }),
+          el('div', { className: 'pages-v2-section-actions' },
+            button('Subir', () => move(section.id, -1), { 'aria-label': `Subir seção ${label}`, disabled: index === 0 }),
+            button('Descer', () => move(section.id, 1), { 'aria-label': `Descer seção ${label}`, disabled: index === doc.sections.length - 1 })));
         return el('div', { className: 'pages-v2-section-entry', 'data-section-sort-id': section.id }, node, handle, position);
       }));
       if (sortableFactory && isEditable) sectionSortable = sortableFactory(sectionList, {
@@ -350,15 +358,25 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
       const section = currentDocument?.sections.find(s => s.rows.some(r => r.columns.some(c => c.blocks.some(b => b.id === block?.id))));
       activeSection = section?.id;
       sectionList.querySelectorAll('[data-structure-section]').forEach(node => node.setAttribute('aria-pressed', String(node.dataset.structureSection === activeSection)));
+      if (styledFieldsHost !== fields) {
+        // Retain native fields/callbacks while presenting button/callout styling
+        // outside Content. Return them to their keyed owner before switching.
+        if(styledFieldsHost)styledFieldsHost.append(...Array.from(blockStyleFields.children));
+        styledFieldsHost=fields;
+        if(fields)for(const child of Array.from(fields.children))if(child.dataset.inspectorSection==='style')blockStyleFields.append(child);
+      }
       if (fields && contentFields.firstElementChild !== fields) contentFields.replaceChildren(fields);
       if (fields) fields.hidden = false;
       if (!fields) contentFields.replaceChildren(el('p', { className: 'pages-v2-field-hint', text: block ? 'Edite o texto diretamente na página. Use Estilo ou Posição para personalizar este bloco.' : 'Selecione um bloco na página.' }));
+      const styleGroup=toolbar.querySelector('.pages-inspector-group[data-inspector-section="style"]');
+      if(styleGroup&&blockStyleFields.parentElement!==styleGroup)styleGroup.insertBefore(blockStyleFields,styleGroup.children[1]||null);
       if (open) openInspector('block');
       if (!pagePanel.hidden) return;
       inspectorTitle.textContent = compact?.matches && block ? 'Editar bloco' : section?.label || (block ? 'Editar bloco' : 'Selecione um bloco');
     },
-    showMode(editing) { root.dataset.editorMode = editing ? 'edit' : 'preview'; add.hidden=!editing||!isEditable; if(textTools)textTools.hidden=!editing; if (!editing) closeInspector(false); measureViewport(); },
+    showMode(editing) { root.dataset.editorMode = editing ? 'edit' : 'preview'; mobileNotice.textContent = editing ? 'Edição' : 'Prévia'; add.hidden=!editing||!isEditable; if(textTools)textTools.hidden=!editing; if (!editing) closeInspector(false); measureViewport(); },
     dispose() {
+      unregisterOverflow?.();
       if (disposed) return; disposed = true; overlay?.close(false); observer?.disconnect(); viewportObserver?.disconnect(); sectionSortable?.destroy(); onLayoutDragging(false);
       syncSheetViewport(); window.removeEventListener('popstate', onHistory);
       compact?.removeEventListener('change', onResize); window.removeEventListener('keydown', onKey);

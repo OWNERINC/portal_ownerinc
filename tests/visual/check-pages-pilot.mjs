@@ -40,8 +40,8 @@ async function saveUI(page, id) {
 }
 
 async function advancedControls(page, legacy = false) {
-  const advanced = page.locator('.pages-inspector-advanced');
-  if (!await advanced.evaluate(node => node.open)) await advanced.locator(':scope > summary').click();
+  const tab = page.locator(`[data-sheet-tab=${legacy ? 'style' : 'position'}]`);
+  if (await tab.isVisible()) await tab.click();
   if (legacy) {
     const presets = page.locator('.pages-legacy-presentation');
     if (!await presets.evaluate(node => node.open)) await presets.locator(':scope > summary').click();

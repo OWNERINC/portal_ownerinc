@@ -2,6 +2,7 @@ import { el, button, field, errorText } from './dom.js';
 import { newId, publicationIssues } from './model.js';
 import { editV3 } from './document-v3.js';
 import { mountPagesDialog } from './dialog.js';
+import { publicationIssueDetails, publicationIssueTarget } from './publication-issues.js';
 
 export const reviewURL = workspace => workspace.slug
   ? `/conteudos/${encodeURIComponent(workspace.slug)}` : `/pages.html?id=${encodeURIComponent(workspace.id)}`;
@@ -58,7 +59,7 @@ export function reviewSession(state) {
   return sessions.get(state);
 }
 
-export function openReview({ page, state, api, cargos, onChanged = () => {}, onPublish, canAct = () => true, opener }) {
+export function openReview({ page, state, api, cargos, onChanged = () => {}, onPublish, onIssue, canAct = () => true, opener }) {
   const session = reviewSession(state);
   let busy = false, closed = false, checking = false, composing = false, suggestionSequence = 0, modal;
   let lastDocumentHash=JSON.stringify(state.document);
@@ -68,6 +69,9 @@ export function openReview({ page, state, api, cargos, onChanged = () => {}, onP
   const feedback = el('p', {className:'pages-review-feedback',role:'alert'});
   const revision = el('p', {className:'pages-review-revision',role:'status'});
   const validation = el('span', {className:'pages-visually-hidden',id:`pages-review-validation-${newId()}`});
+  const issueSummary = el('p', {className:'pages-review-issue-summary',role:'status'});
+  const issueList = el('ul', {className:'pages-review-issues','aria-label':'Pendências de publicação'});
+  let issueSignature = '', issueActions = [];
   const title = el('input', {maxlength:200,value:state.document.metadata.title});
   const listId = `pages-review-categories-${newId()}`;
   const category = el('input', {maxlength:80,value:state.document.metadata.category || '',list:listId,autocomplete:'off'});
@@ -112,8 +116,9 @@ export function openReview({ page, state, api, cargos, onChanged = () => {}, onP
   }
   audience.append(el('p',{text:'Apenas colaboradores com um dos cargos ativos selecionados poderão ler. Nenhum cargo é selecionado automaticamente.'}));
   const url = el('p',{className:'pages-review-url'});
-  const checks = el('fieldset',{className:'pages-review-checks'},el('legend',{className:'pages-visually-hidden',text:'Conferência pessoal (não registrada; opcional)'}));
-  const checkFields = ['Prévia de celular conferida','Imagens com descrição alternativa','Conteúdo revisado pelo responsável'].map((text,index)=>{
+  const checks = el('fieldset',{className:'pages-review-checks'},el('legend',{text:'Conferência pessoal (opcional)'}),
+    el('p',{text:'Não registrada nem enviada. Não representa aprovação de outra pessoa e não substitui as pendências de publicação.'}));
+  const checkFields = ['Prévia de celular conferida','Imagens com descrição alternativa','Conferi o conteúdo'].map((text,index)=>{
     const input=el('input',{type:'checkbox'});input.addEventListener('change',()=>{session.check(index,input.checked);refresh();});
     checks.append(el('label',{},input,document.createTextNode(text)));return input;
   });
@@ -148,8 +153,9 @@ export function openReview({ page, state, api, cargos, onChanged = () => {}, onP
   const fields=el('div',{className:'pages-review-fields'},field('Título',title),field('Categoria',category),
     el('div',{className:'pages-field'},el('span',{text:'Visibilidade',id:`${listId}-visibility`}),visibility,audience));
   visibility.setAttribute('aria-labelledby',`${listId}-visibility ${listId}-visibility-value`); visibility.id=`${listId}-visibility-value`;
-  dialog.append(el('h2',{text:'Pronto para compartilhar?'}),x,el('p',{className:'pages-review-intro',text:'Revise como este conteúdo aparecerá no portal.'}),
-    fields,suggestions,url,checks,revision,validation,feedback,el('div',{className:'pages-actions'},save,back,publish));
+  dialog.append(el('div',{className:'pages-review-header'},el('h2',{text:'Pronto para compartilhar?'}),x),
+    el('div',{className:'pages-review-body'},el('p',{className:'pages-review-intro',text:'Revise como este conteúdo aparecerá no portal.'}),
+      fields,suggestions,url,revision,issueSummary,issueList,checks,validation,feedback),el('div',{className:'pages-actions'},save,back,publish));
   publish.setAttribute('aria-describedby',validation.id);
   function refresh() {
     if (!live()) return;
@@ -167,11 +173,33 @@ export function openReview({ page, state, api, cargos, onChanged = () => {}, onP
     checkFields.forEach((input,index)=>{input.checked=session.snapshot.checks[index];input.disabled=!session.ready||busy||checking;});
     // An uncertain write reconciles its immutable receipt. Current publication
     // validation applies to new writes, not an already committed operation.
-    const issues=session.uncertain?[]:publicationIssues(state.document,cargos);
-    revision.textContent=session.stale?'Esta revisão mudou em outra sessão. Volte à edição e recarregue.':
+    const details=session.uncertain?[]:publicationIssueDetails(state.document,cargos);
+    const issues=details.map(issue=>issue.message);
+    const summary=session.uncertain?'Aguardando confirmação da publicação anterior.':issues.length?`${issues.length} pendência(s) impedem uma nova publicação.`:'Nenhuma pendência de conteúdo encontrada.';
+    if(issueSummary.textContent!==summary)issueSummary.textContent=summary;
+    const signature=JSON.stringify([details,!!onIssue,state.editable]);
+    if(signature!==issueSignature){
+      issueSignature=signature;issueActions=[];
+      issueList.replaceChildren(...details.map(issue=>{
+        const row=el('li',{'data-publication-issue':issue.code},el('span',{text:issue.message}));
+        if(onIssue&&state.editable&&publicationIssueTarget(state.document,issue)){
+          const correct=button('Corrigir',()=>{
+            if(!canEdit()||checking||composing)return;
+            if(!publicationIssueTarget(state.document,issue)){feedback.textContent='O destino desta pendência não existe mais. Confira a lista atual.';return;}
+            modal.close(false);onIssue(issue);
+          },{'aria-label':`Corrigir: ${issue.message}`});
+          issueActions.push(correct);row.append(correct);
+        }
+        return row;
+      }));
+    }
+    issueList.hidden=!details.length;
+    issueActions.forEach(control=>{control.disabled=!canEdit()||checking||composing;});
+    const revisionText=session.stale?'Esta revisão mudou em outra sessão. Volte à edição e recarregue.':
       session.uncertain?'Publicação não confirmada. Tente novamente para reconciliar a mesma revisão.':
       !state.publishable?'Alterações ou operações pendentes. Salve e confira a revisão antes de publicar.':
       `Revisão salva: ${session.snapshot.revisionId}${issues.length?` · ${issues.length} pendência(s)`:''}`;
+    if(revision.textContent!==revisionText)revision.textContent=revisionText;
     revision.title=issues.join(' ') || 'Conferência pessoal, opcional e não registrada. Não representa aprovação de outra pessoa.';
     publish.disabled=!session.ready||busy||checking||composing||!!issues.length;
     publish.title=issues.join(' ');

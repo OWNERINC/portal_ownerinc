@@ -16,6 +16,136 @@ O exemplo de vestimenta é ilustrativo, não uma política oficial.
 
 ## Base e compatibilidade
 
+O inspector separa Conteúdo (campos do bloco e destinos), Estilo (tipografia,
+cores inclusive hexadecimal, ícone, tags e reset) e Posição (largura/composição,
+mover, duplicar e excluir). Desktop conserva os grupos abertos; o compacto usa
+as mesmas seções em suas abas. Presets legados continuam em disclosure secundário
+explicado dentro de Estilo; abrir controles não converte v1/v2/v3. `onAdvanced`
+conserva o callback de composição existente, mas recebe um grupo plano de Posição.
+Campos nativos de estilo de botão/callout são movidos, não clonados; ao trocar
+seleção retornam ao proprietário keyed. FAQ e EditorViews continuam inline por ID.
+
+Cada item de galeria tem título ordinal, tipo e identidade do arquivo privado,
+metadados e grupos distintos de arquivo/ordem/remoção. `previewRoot`, opcional em
+`createBlockFields`, fornece somente o DOM do painter atual: um MutationObserver
+restrito à galeria reaproveita `blob:` já autenticado, acompanha troca/remoção e é
+desconectado no dispose. Não cria URLs nem faz requisições extras. O painter mantém
+a propriedade/revogação das URLs. Campos de destino/download usam gaps de 16 px;
+labels preservam 8 px. Nenhuma transação ou validação SQL foi movida para o painel.
+
+`node tests/visual/check-pages-controls.mjs inspector` exige as mesmas variáveis
+locais de `menus`, com saída nova. Cobre 1366/390 px, legado, cor, largura,
+duplicação/exclusão/undo, três uploads reais, identidade/ordem/metadados/miniaturas,
+remoção/troca/undo, destino, save/SQL/reload e publicador read-only. Não substitui
+documento aberto nem comprova PostgreSQL concorrente, autenticação ou mobile físico.
+
+Os menus transitórios do editor (Prévia, Mais ações e Mais opções de texto)
+compartilham `createEditorMenus({page})`: `register(details)` devolve unregister,
+`closeAll({restoreFocus = false})` fecha sem salvar e `dispose()` libera listeners.
+Escape fecha apenas o menu superior e retorna ao summary; composição IME e dialogs
+abertos mantêm prioridade. Pointerdown fora fecha sem cancelar o clique nem mover
+foco. FAQ, público e opções avançadas não participam desse controlador.
+O caso local `node tests/visual/pages-editor-controls.mjs menus` exige
+`PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e um diretório novo em
+`PAGES_CONTROLS_OUTPUT`; usa apenas identidade e banco sintéticos, sem produção.
+O espaço do texto no canvas preserva a base existente e cresce quando a altura
+medida da barra não escalada exige mais folga: âncora de 16 px do papel e pelo
+menos 4 px de separação física, inclusive a 50%. ResizeObserver acompanha a barra
+atual e libera a anterior. Durante arraste de composição, a barra permanece
+visível, mas cede hit-testing aos destinos; o término restaura os controles.
+
+A estrutura conserva `onReorderSection({sectionId,beforeSectionId})` e os UUIDs do
+documento. A alça ocupa 44 × 44 px reais; Posição e os botões Subir/Descer têm linha
+própria e estilos compartilhados entre lateral e diálogo. `data-organizing` fica
+sincronizado no root e no próprio nav, sem depender do ancestral após reparenting.
+`node tests/visual/check-pages-controls.mjs structure` usa as mesmas variáveis do
+caso `menus` e confere 320/390/768/1366 px, foco, seleção, limites, Alt+setas, arraste,
+Escape, ordem SQL após save explícito e undo local sem recriar EditorViews.
+
+Salvar permanece em um único slot no chrome em todas as larguras, sem relocação
+por dirty/pending ou duplicação de acionadores no painel inferior. O header sticky
+reserva espaço no fluxo; sua altura medida limita o painel compacto para manter
+ação e status acessíveis. `update()` apenas sincroniza disponibilidade/status;
+`createPageButton` continua aguardando o ACK de `state.save(api)`. Confirmação de
+uma revisão anterior não confirma edições posteriores. Falha com pending anuncia
+salvamento não confirmado e o retry conserva payload/key; conflito preserva o local.
+Publicar disabled mantém aparência inativa inclusive em hover e motivo associado
+visível. Status só muda no DOM quando a mensagem muda, não a cada tecla.
+`node tests/visual/check-pages-controls.mjs save` usa a mesma configuração local,
+com 320/390/768/1366 px, painel aberto, busy/ACK/503, perda de ACK após COMMIT real,
+replay sem revisão duplicada, edição durante save, Mod+S, conflito e permissões.
+PGlite serializado não representa concorrência nativa PostgreSQL ou produção.
+
+Modais de tarefa (`openPagesDialog`, com o mesmo retorno `dialog`) têm scrim,
+centralização e margem mínima de 16 px na área visual disponível. Cabeçalho com X
+nomeado e ações ficam fora do corpo rolável; os controles de conteúdo são retidos,
+não clonados. Cancelar recebe foco inicial. Escape, X, Cancelar e histórico respeitam
+busy/composição; erro libera retry/cancelamento. Cleanup da visita força descarte,
+sem restauração de foco nem atualização tardia de controles removidos. Clique fora
+não descarta formulário. O opener opcional permite retornar ao Link da toolbar sem
+depender de pointerdown mover o foco do editor.
+
+Inserir, Estilo e cor conservam `openEditorPanel` e sua semântica nativa de foco:
+âncora no desktop e área segura central no compacto. A âncora de Estilo inclui seu
+deslocamento de 10 px em um único cálculo **antes** de `showModal`, sem reposicionar
+depois da abertura. Resize/viewport, scroll e ResizeObserver do acionador/container
+acompanham reflow; fechar libera esses listeners. Estilo mantém rascunho local,
+Aplicar explícito e rodapé fora do scroller; clique fora não descarta. Inputs/selects
+textuais têm 44 px e fonte de 16 px no compacto; checkboxes mantêm indicadores de
+18–20 px em linhas de 44 px, sem herdar padding/altura de campo textual. Dispositivo
+e Zoom usam suas classes próprias também quando movidos para Mais ações.
+
+O listener `focusin` do corpo também pertence à instância aberta e é removido no
+fechamento/cleanup; conteúdo reutilizado da estrutura não acumula scrolls ao reabrir.
+Hexadecimal e tags do inspector têm alertas e associações `aria-describedby`
+independentes, com `aria-invalid` próprio. Corrigir um não limpa o erro do outro;
+os callbacks/transações existentes e a validação do documento continuam a autoridade.
+O grid da audiência do editor usa linhas `max-content`: nomes de cargo longos
+podem crescer sem invadir o label seguinte, conservando o scroller e alvo mínimo de 44 px.
+
+`node tests/visual/check-pages-controls.mjs overlays` usa o mesmo harness local e
+variáveis do caso `menus`, em 1366×768 e 320/390/768×768. Mede primeira frame e frames
+seguintes da âncora em aberturas repetidas, reflow, foco/IME/busy/erro/cleanup, campos,
+checkboxes e rodapé, sem substituir o documento aberto nem recriar EditorViews.
+`check-pages-style.mjs --strict-reference-geometry` preserva as asserções históricas
+do botão 36 px + pseudoalvo; o modo funcional registra a divergência intencional e
+exige alvo real de 44 px sem extensão sobre vizinhos. Não é aceite das pranchas.
+
+A toolbar principal usa altura mínima, não fixa: linhas adicionais no tablet
+reservam espaço antes do canvas. Undo/redo têm 44 × 44 px reais, sem pseudoalvos
+sobrepostos; os demais alvos existentes conservam sua separação. O aviso compacto
+deriva exclusivamente de `showMode(editing)` (“Edição”/“Prévia”), inclusive após
+editar o conteúdo de um modelo. Não classifica documentos do autor como ilustrativos.
+Cabeçalhos do Guia mantêm as métricas do painter canônico também no celular
+(capa 36 px; título editorial 20 px com strong preservado), sem mudar cores,
+marcas, esquema ou payload. A paleta persistida não é corrigida implicitamente.
+A capa compacta reserva 4 px para a ascensão da fonte real dentro de seu fundo;
+isso evita o resultado axe incompleto por texto fora do limite do bloco, sem
+recortar glifos ou excluir o título da auditoria.
+
+`node tests/visual/check-pages-controls.mjs responsive` exige também `AXE_MODULE_PATH`.
+Cobre 320/390/599/600/768/1099/1100/1366/1600 px, alturas 640/768, canvas
+50/100/150%, modo/preview real, identidade PM e snapshots v1/v2/v3. Mede controles
+e pseudoalvos, colisões, hit-testing, contenção local, linhas do título e folga da
+toolbar contextual, além de overflow global. Axe inclui todos os títulos rich-text;
+o título laranja precisa ter um resultado PASS completo, não apenas zero violações.
+Resultados incompletos são registrados e falham, não excluídos nem chamados de PASS.
+Chrome 200% usa `settingsPrivate.setDefaultZoom(2)` em perfil descartável próprio,
+validado por DPR 2, viewport CSS pela metade e visualViewport.scale 1; não usa pinch
+ou transformação CSS como substituto. O check de renderer conserva as asserções
+históricas com `--strict-reference-typography`; o funcional distingue metadados do
+Guia 14/12 px de títulos genéricos 32/16 px e redimensiona o viewport autoritativo
+em vez de disputar a largura da superfície com seu ResizeObserver.
+
+O mesmo assertor de alvos do caso responsivo é repetido por combinação em uma
+matriz de 648 chaves distintas (três esquemas, dois modos, dois zooms de browser,
+três zooms de canvas, nove larguras CSS e duas alturas CSS). Para browser 200%,
+viewport físico 2× produz cada largura/altura CSS exata, confirmada com DPR 2 e
+pinch 1. Cada linha verifica geometria/pseudoalvos, contenção, colisão e hit-testing
+das quatro bordas; selects nativos não são isentos. Disabled conserva verificações
+de geometria/colisão sem afirmar ativação. A cor laranja computada, a presença de
+strong e seu peso >=700 são exigidos também em prévia, sem depender apenas de axe.
+
 O desenvolvimento parte de `2cecbe8`, incluindo o aceite obrigatório do Código de
 Ética. Nenhuma rota Pages fica isenta desse gate. A autenticação continua sendo
 Firebase Bearer, validada pelo middleware existente com o perfil atual no banco.
@@ -270,6 +400,28 @@ ProseMirror é responsável pelo DOM do texto editável, com schema restrito. N�
 o mecanismo de layout da página. Dependências do editor são locais, fixadas por
 lockfile, com bundle gerado reproduzível e avisos de licença; sem CDN ou migração
 de framework. SortableJS entra no lote de composição, fixado e incluído no mesmo bundle local.
+
+`createRichEditor.selectionFormat()` lê os textblocks da seleção ProseMirror e
+retorna exatamente `paragraph`, `2`, `3` ou `mixed` (também para respostas de FAQ).
+O select acompanha foco, seleção e histórico global, inclusive quando os grupos
+do toolbar mudam para o inspector compacto. `mixed` é informativo/disabled; não
+é comando. A atualização não reconstrói EditorViews nem deriva do último comando.
+Os comandos resolvem o editor ativo ao acionar; Link captura sua seleção somente
+ao abrir a tarefa e rejeita uma identidade/seleção que tenha mudado.
+
+Fonte de vídeo mantém o fluxo de upload existente: MP4 mostra explicação privada
+e `Escolher MP4`, sem campo/aviso do YouTube. YouTube mostra URL e aviso externo,
+com `Inserir vídeo` ou `Aplicar fonte` na substituição. URL inválida mantém o modal
+aberto com erro associado ao campo. Trocar o select não altera o documento;
+cancelar o modal/seletor mantém a fonte anterior. Edição não busca iframe nem
+miniatura externa; o consentimento de leitura permanece obrigatório.
+
+`node tests/visual/check-pages-controls.mjs text-video` usa o harness local com
+PGlite/Chrome e um novo `PAGES_CONTROLS_OUTPUT`. Exercita API real (incluindo listas
+e parágrafo vazio numa superfície sintética separada), H2→H3→texto, seleção mista,
+troca de blocos/FAQ, undo, Link/cor com seleção prévia e vídeo contextual em 1366/390.
+Confere identidade PM e ausência de autosave. Complementar com os runners de mídia
+e histórico e `npm run build:pages && npm run check:pages-build` após tocar o source.
 
 Salvamento inicial é explícito. A baseline só avança após confirmação do servidor
 e somente para a fotografia enviada. Digitação posterior continua dirty. Falha,
@@ -590,14 +742,21 @@ são decorativos; os controles mantêm seus nomes acessíveis e ações reais. A
 final das seis pranchas (Task 18), PostgreSQL/Firebase/
 Nginx nativos e IME/aparelho físico permanecem gates separados, não comprovados.
 
+O runner workspace mantém a largura histórica da toolbar em modo
+`node tests/visual/check-pages-workspace.mjs --strict-reference-geometry`.
+Sem a flag, verifica largura não escalada contra a medição inicial e registra
+divergências aprovadas em `results.json`/stderr; não declara fidelidade à prancha.
+As demais âncoras de referência e asserções funcionais continuam ativas nos dois modos.
+
 ### Conteúdo compacto e ciclo mobile (Task 16)
 
 Até 1099 px, o inspetor é um diálogo **não modal**: o mesmo texto/EditorView continua
-editável no canvas. Conteúdo reúne B/I/U/Link, fonte/escala combinadas e o campo de
-fundo compartilhado. Estilo recebe os controles adicionais reais da toolbar;
+editável no canvas. Conteúdo reúne B/I/U/Link, com alvos reais não sobrepostos de
+44×44 px no mínimo. Estilo reúne fonte/escala combinadas, o campo de fundo
+compartilhado e os controles adicionais reais da toolbar;
 Posição mantém organização avançada. Nenhum documento ou editor paralelo é criado.
 O combinado “Manrope · 16 px” descreve a **escala base**, com essa distinção no title
-e aria-description; a receita adapta capa/introdução no telefone (28/19 px nos
+e aria-description; a receita adapta capa/introdução no telefone (36/20 px nos
 títulos, 14 px no corpo). O controle completo preserva os labels prospectivos.
 Alterar fonte/escala combinadas usa uma só transação guardada de aparência.
 Os parágrafos mobile herdam o foreground canônico, incluindo o padrão da página
@@ -625,7 +784,7 @@ Teclado/IME/toque físico e gesto de zoom nativo continuam pendentes; simulaçã
 
 ### Revisão editável e snapshot conferido (Task 15)
 
-`openReview({page,state,api,cargos,onChanged,onPublish,canAct?,opener?})` retorna
+`openReview({page,state,api,cargos,onChanged,onPublish,onIssue?,canAct?,opener?})` retorna
 `{close,refresh}`. O coordenador chama `refresh()` em mudanças do estado e mantém
 `canAct` vinculado à visita, operações exclusivas e uploads/colocações pendentes.
 Título, categoria livre com sugestões autorizadas e audiência usam a mesma timeline
@@ -663,8 +822,23 @@ O preflight de publicação respeita a versão do documento. Em v3, respostas de
 com texto contam como conteúdo, inclusive numa página composta somente por FAQ.
 Galerias exigem itens, arquivo e texto alternativo por item; FAQ exige itens com
 pergunta e resposta textual; vídeo incorporado exige título e transcrição. As
-pendências identificam bloco (ordem do documento), item e campo no tooltip e na
-descrição acessível da ação de publicação. Rascunhos incompletos continuam salváveis;
+pendências identificam bloco (ordem do documento), item e campo numa lista visível,
+além do tooltip e da descrição acessível da ação de publicação. A função canônica
+`publicationIssueDetails(document,cargos)` retorna `{code,message,blockId?,itemId?,field?}`;
+`publicationIssues` deriva apenas as mensagens e conserva as regras, agregação e ordem
+legadas. `publicationIssueTarget` resolve IDs no documento atual; não infere campo
+editável de um caminho de contraste. Corrigir fecha a revisão antes de `onIssue(issue)`
+selecionar/focar título, público, bloco ou item existente. Destino removido antes do
+clique mantém a revisão/mensagem; sem destino seguro, não há ação inventada. Autoria,
+operações exclusivas e composição continuam guardadas. Cabeçalho/rodapé permanecem
+acessíveis com corpo rolável e alvos reais de 44 px, inclusive a 320 px. Checks pessoais
+têm legenda visível de opcionais/não registrados e não atribuem aprovação a terceiros.
+`node tests/visual/check-pages-controls.mjs review` acrescenta cargos longos, teclado,
+correções com SQL após save explícito, alvo removido, identidade PM e axe A/AA;
+exige `AXE_MODULE_PATH` além das variáveis do runner. A geometria histórica de revisão
+é comparada/classificada no runner amplo; `--strict-reference-geometry` preserva as
+asserções exatas e não deve ser anunciado como PASS quando diverge intencionalmente.
+Rascunhos incompletos continuam salváveis;
 validação estrutural, propriedade/tipo de mídia e autorização final pertencem à API.
 As regras de preflight v1/v2 e o bypass do recibo incerto permanecem preservados.
 Saída/reload com publicação incerta exige a guarda de descarte; não há armazenamento

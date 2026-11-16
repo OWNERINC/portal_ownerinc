@@ -77,7 +77,7 @@ try {
   assert.equal(await focusedVisible(panel().getByRole('button',{name:'Adicionar separador',exact:true})),true);
   await page.keyboard.press('Tab');
   assert.equal(await focusedVisible(panel().getByRole('combobox',{name:'Ponto de inserção'})),true);
-  assert.ok(await panel().evaluate(n=>n.scrollTop>0),'extra controls require real native scrolling');
+  assert.ok(await panel().locator('.pages-insert-panel-content').evaluate(n=>n.scrollTop>0),'extra controls require real native body scrolling under the retained heading');
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('button',{name:'Inserir bloco',exact:true}).evaluate(n=>n===document.activeElement),true);
   assert.deepEqual((await api('get',`/${id}/workspace`)).draft.document,doc);

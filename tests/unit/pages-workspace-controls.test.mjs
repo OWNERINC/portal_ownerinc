@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { FixtureNode, TestEvent } from '../helpers/frontend-feedback-harness.mjs';
 const require = createRequire(import.meta.url);
 const { createTemplate, listTemplates } = require('../../api/pages/templates');
 const { validateDocument, validateMutation } = require('../../api/pages/validation');
@@ -60,4 +61,111 @@ test('five zooms measure scaled scroll extents without modifying content and mob
     assert.equal(viewportGeometry({device:'mobile',zoom,available,height:944}).width,390);
   }
   assert.throws(()=>viewportGeometry({device:'desktop',zoom:90,available:1044,height:944}));
+});
+
+async function structureHarness(t) {
+  const document = new FixtureNode('document'); document.ownerDocument = document;
+  document.createElement = tag => new FixtureNode(tag, document);
+  document.createElementNS = (_, tag) => document.createElement(tag);
+  document.body = document.createElement('body'); document.append(document.body);
+  const window = new FixtureNode('window', document);
+  window.matchMedia = () => Object.assign(new FixtureNode('media', document), { matches: false });
+  const root = document.createElement('div'); document.body.append(root);
+  const calls = [], sortables = [], observers = []; let allowed = true;
+  class ResizeObserver {
+    nodes = new Set();
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    observe(node) { this.nodes.add(node); }
+    unobserve(node) { this.nodes.delete(node); }
+    disconnect() { this.nodes.clear(); }
+  }
+  const context = vm.createContext({ document, window, ResizeObserver, applyBlockStyle() {}, restoreVisibleFocus() {},
+    openEditorPanel({ content }) { const dialog = document.createElement('dialog'); document.body.append(dialog); dialog.append(content); return { close() { dialog.remove(); } }; },
+  });
+  for (const [file, names] of [['dom','el,button'], ['editor-workspace','createEditorWorkspace']]) {
+    const source = (await readFile(`public/pages/${file}.js`, 'utf8')).replace(/^import[^\n]+\n/gm,'').replace(/^export /gm,'');
+    vm.runInContext(`(() => { ${source}\nObject.assign(globalThis,{${names}}); })()`, context);
+  }
+  const doc = createTemplate('guia-interno');
+  const options = Object.fromEntries(['header','actions','metadata','modes','toolbar','editorHost','previewHost','add','feedback'].map(key => [key, document.createElement('div')]));
+  const primary = document.createElement('div'); primary.className = 'pages-primary-actions'; options.header.append(primary);
+  const workspace = context.createEditorWorkspace({ ...options, root, page: {}, canReorder: () => allowed,
+    sortableFactory(host, config) { const sortable = { host, config, destroy() {} }; sortables.push(sortable); return sortable; },
+    onReorderSection(value) { calls.push(JSON.parse(JSON.stringify(value))); return true; },
+  });
+  workspace.refresh(doc, true); workspace.rebuildStructure(doc); t.after(() => workspace.dispose());
+  return { workspace, root, document, doc, calls, sortables, observers, allow(value) { allowed = value; } };
+}
+
+test('context clearance reserves measured unscaled toolbar height at every zoom and device', async t => {
+  const h = await structureHarness(t);
+  const tools = h.document.createElement('div'), block = h.document.createElement('div');
+  h.root.append(block);
+  const surface = h.root.querySelector('.pages-editor-surface');
+  for (const height of [52, 96]) {
+    tools.offsetHeight = height;
+    h.workspace.placeContextTools(tools, block);
+    for (const device of ['desktop', 'mobile']) for (const zoom of [50,75,100,125,150]) {
+      h.workspace.setViewport({ device, zoom });
+      const reserved = parseFloat(surface.style.getPropertyValue('--pages-context-space'));
+      assert.equal(reserved, Math.max(44 / (zoom / 100) + 28, (height + 4) / (zoom / 100) + 16), `${device}/${zoom}: measured ${height}px toolbar`);
+      assert.ok(reserved * zoom / 100 > height + 16 * zoom / 100, 'text clears toolbar anchored 16 scaled pixels inside block');
+    }
+  }
+  const observer = h.observers.find(item => item.nodes.has(tools));
+  assert.ok(observer, 'toolbar metrics are observed, not assumed stable after mount');
+  h.workspace.setViewport({ device: 'desktop', zoom: 50 });
+  tools.offsetHeight = 120; observer.callback();
+  assert.equal(parseFloat(surface.style.getPropertyValue('--pages-context-space')), 264);
+  h.workspace.placeContextTools(null, null);
+  assert.equal(observer.nodes.has(tools), false, 'retired toolbar is unobserved');
+  h.workspace.placeContextTools(tools, block); h.workspace.dispose();
+  assert.ok(h.observers.every(item => item.nodes.size === 0), 'disposal disconnects all measurement observers');
+});
+
+test('mode notice follows edit/preview, never template provenance or a refresh of local content', async t => {
+  const h = await structureHarness(t), notice = h.root.querySelector('.pages-v2-mobile-notice');
+  for (const template of ['guia-interno','comunicado','owner-news']) {
+    h.doc.template.id = template;
+    h.doc.metadata.title = 'Título editado pelo autor';
+    const bytes = JSON.stringify(h.doc);
+    h.workspace.showMode(false); h.workspace.refresh(h.doc, true);
+    assert.equal(notice.textContent, 'Prévia');
+    assert.equal(notice.hidden, false);
+    h.workspace.showMode(true); h.workspace.refresh(h.doc, true);
+    assert.equal(notice.textContent, 'Edição');
+    assert.equal(h.root.querySelector('.pages-v2-mobile-notice'), notice);
+    assert.equal(JSON.stringify(h.doc), bytes, 'mode feedback cannot rewrite user content');
+  }
+});
+
+test('organizing state travels with the structure through dialog reparenting and rebuilds', async t => {
+  const h = await structureHarness(t), structure = h.workspace.structure;
+  const organize = structure.querySelectorAll('button').find(n => n.getAttribute('aria-label') === 'Organizar estrutura');
+  assert.equal(structure.dataset.organizing, 'false');
+  organize.click(); assert.equal(structure.dataset.organizing, 'true'); assert.equal(h.root.dataset.organizing, 'true');
+  h.root.querySelector('.pages-structure-toggle').click();
+  assert.equal(structure.parentElement.tagName, 'DIALOG');
+  organize.click(); assert.equal(structure.dataset.organizing, 'false'); assert.equal(h.root.dataset.organizing, 'false');
+  organize.click(); h.workspace.rebuildStructure(h.doc); assert.equal(structure.dataset.organizing, 'true');
+  assert.equal(organize.getAttribute('aria-pressed'), 'true');
+});
+
+test('section actions preserve UUID reorder contract, boundaries, permission and keyboard focus', async t => {
+  const h = await structureHarness(t), entries = h.workspace.structure.querySelectorAll('.pages-v2-section-entry');
+  assert.equal(entries[0].querySelector('details').className, 'pages-v2-section-position');
+  assert.equal(entries[0].querySelectorAll('button').find(n => n.getAttribute('aria-label') === 'Subir seção Capa').disabled, true);
+  const down = entries[0].querySelectorAll('button').find(n => n.getAttribute('aria-label') === 'Descer seção Capa'); down.click();
+  assert.deepEqual(h.calls.pop(), { sectionId: h.doc.sections[0].id, beforeSectionId: h.doc.sections[2].id });
+  assert.equal(h.document.activeElement.dataset.structureSection, h.doc.sections[0].id);
+  const link = entries[1].querySelector('[data-structure-section]');
+  link.dispatchEvent(new TestEvent('keydown', { altKey: true, key: 'ArrowUp' }));
+  assert.deepEqual(h.calls.pop(), { sectionId: h.doc.sections[1].id, beforeSectionId: h.doc.sections[0].id });
+  const handle = entries[0].querySelector('.pages-section-drag-handle');
+  handle.dispatchEvent(new TestEvent('keydown', { altKey: true, key: 'ArrowUp' })); assert.equal(h.calls.length, 0);
+  h.allow(false); down.click(); assert.equal(h.calls.length, 0);
+  const sortable = h.sortables.at(-1); assert.equal(sortable.config.onMove(), false);
+  const before = [...sortable.host.children]; sortable.host.append(before[0]);
+  sortable.config.onEnd({ item: before[0] }); assert.deepEqual([...sortable.host.children], before);
+  assert.equal(h.document.activeElement.dataset.structureSection, h.doc.sections[0].id);
 });

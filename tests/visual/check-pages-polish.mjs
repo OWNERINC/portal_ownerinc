@@ -76,10 +76,8 @@ try {
     const legacyPresentation = toolbar.getByRole('group', { name: 'Apresentação do bloco', exact: true });
     await toolbar.waitFor({ state: 'visible' });
     for (const label of ['Coluna de destino','Alinhamento','Escala','Paleta','Fonte']) {
-      // Legacy presets live under Opções avançadas in the Posição sheet.
-      if (width < 1100) await page.getByRole('button', { name: 'Posição', exact: true }).click();
-      const advanced = page.locator('.pages-inspector-advanced');
-      if (!await advanced.evaluate(node => node.open)) await advanced.locator(':scope > summary').click();
+      // Position commands are flat; legacy presets remain secondary in Style.
+      if (width < 1100) await page.locator(`[data-sheet-tab=${label === 'Coluna de destino' ? 'position' : 'style'}]`).click();
       if (label !== 'Coluna de destino') {
         const presets = page.locator('.pages-legacy-presentation');
         if (!await presets.evaluate(node => node.open)) await presets.locator(':scope > summary').click();

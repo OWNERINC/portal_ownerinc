@@ -48,6 +48,92 @@ por Chrome/PGlite. Aceite final das seis pranchas pertence à Task 18.
 
 ## Revisão editável de Pages (Task 15)
 
+### Regressão final dos controles (melhorias Task 10)
+
+Execute os casos `menus`, `structure`, `save`, `review`, `overlays`, `responsive`,
+`text-video`, `inspector` e `acceptance` serialmente.
+
+Seleção do caso: argumento posicional explícito > `PAGES_CONTROLS_CASE` > `menus`.
+Valores inválidos (inclusive vazios explícitos) falham antes dos imports externos,
+do harness e da criação de evidência; nunca caem silenciosamente em `menus`.
+O caso `text-video` inclui os alvos B/I/U/Link da folha em 320/390/768 px,
+Conteúdo/Estilo e scroll inicial/final/revelado, colisões e comandos reais.
+
+Use `node tests/visual/check-pages-controls.mjs <caso>`, cada um com pasta nova em
+`PAGES_CONTROLS_OUTPUT`. Use as instalações externas existentes via
+`PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e `AXE_MODULE_PATH` (responsive,
+review e acceptance). O último caso prepara SQL sintético **antes** da abertura:
+30 parágrafos longos e 62 cargos, 1366/768/390 px, teclado/clique externo com foco,
+axe A/AA nos estados abertos e três reaberturas da estrutura reutilizada. Registra
+incompletos axe separadamente, não como passes. As suítes amplas afetadas continuam
+um gate separado de `npm run verify`. O inventário A01–A18, referências, capturas e
+limites estão em `docs/reviews/2026-11-16-pages-controls-acceptance.md`; A18 está
+adiado pelo usuário, não entregue. Nenhum teste substitui aceite humano, Safari ou
+touch/teclado virtual/IME físicos.
+
+### Inspector e formulários de mídia (melhorias Task 8)
+
+`node tests/visual/check-pages-controls.mjs inspector` usa `PGLITE_MODULE_PATH`,
+`PLAYWRIGHT_MODULE_PATH` e uma pasta **nova** em `PAGES_CONTROLS_OUTPUT`. Cria páginas
+pela API e edita pela UI real em 1366/390 px, sem substituir o documento aberto.
+Confere Conteúdo/Estilo/Posição, presets legados, hexadecimal, largura, duplicar/
+excluir/undo, três uploads registrados, ordinal/identidade/metadados, miniatura blob
+privada sem GET adicional, grupos ordem/remoção, troca/remoção/undo, campos longos,
+download, SQL/save/reload, PM retido e publicador somente leitura. Não oculta ações
+para passar; tabs/scroll são os controles reais. Use também as suítes existentes
+`check-pages-editor-media.mjs` (`MEDIA_VISUAL_OUTPUT`), `check-pages-style.mjs`
+(`STYLE_VISUAL_OUTPUT`), `check-pages-buttons.mjs` (`BUTTONS_VISUAL_OUTPUT`) e
+`check-pages-history.mjs` (`HISTORY_VISUAL_OUTPUT`). Mídia exige os binários externos
+FFmpeg/ffprobe. Não é aceite visual das seis pranchas nem validação de serviços reais.
+
+### Controles e sobreposições (melhorias Task 5)
+
+`node tests/visual/check-pages-controls.mjs overlays` usa `PGLITE_MODULE_PATH`,
+`PLAYWRIGHT_MODULE_PATH` e um diretório **novo** em `PAGES_CONTROLS_OUTPUT`. Confere
+Link/vídeo/Estilo no workspace real, primeira frame da âncora, 1366×768, campos,
+checkboxes, foco, IME, busy/erro/retry e descarte. O formulário sintético de lifecycle
+usa o módulo de diálogo real sem substituir o documento do editor. Salvar permanece
+explícito; API/SQL descartáveis, identidades sintéticas e tráfego externo bloqueado.
+O check de estilo existente mantém `--strict-reference-geometry` para o alvo
+histórico; o modo funcional exige o novo alvo real de 44 px e classifica a diferença,
+sem sobrescrever referências ou declarar igualdade de capturas antigas.
+
+### Responsividade, contraste e modo (melhorias Task 6)
+
+`node tests/visual/check-pages-controls.mjs responsive` usa as mesmas variáveis e
+`AXE_MODULE_PATH` para axe real. A saída precisa ser nova. Não altera as seis
+referências: registra 18 combinações de largura/altura, canvas 50/100/150%, prévia,
+texto editado, v1/v2/v3, PM retido e nenhum save implícito. Confere geometria local,
+alvos/hit-testing/colisões, linhas do título, toolbar/canvas e contraste do título
+laranja com resultado axe completo. Resultados incompletos são preservados e falham.
+Cria um perfil Chrome descartável dentro da saída para zoom **nativo** 200%, via
+`chrome://settings`/`settingsPrivate.setDefaultZoom(2)`. Verifica DPR/viewport/scale
+em tempo de execução e falha se não conseguir provar esse zoom. Também registra
+a tentativa de atalho headless e a evidência de reflow equivalente, sem confundi-las
+com o zoom nativo. Nenhum perfil pessoal ou serviço existente é usado.
+
+O subcaso `pages-editor-responsive-targets.mjs` executa o mesmo medidor/assertor de
+alvos em **648 combinações únicas**: v1/v2/v3 × edição/prévia × browser 100/200%
+× canvas 50/100/150% × as nove larguras CSS × alturas CSS 640/768. Não infere
+colisões ou hit-testing de uma combinação para outra. Mede os pseudoalvos, seus
+quatro pontos de borda, contenção local, tamanho mínimo e colisões; selects nativos
+também recebem hit-testing. Controles disabled mantêm tamanho/colisões verificados,
+mas não se afirma ativação de seus pontos de borda (os resultados brutos ficam
+registrados). No zoom nativo 200%, o viewport físico é duplicado para produzir
+EXATAMENTE as nove larguras/duas alturas CSS requeridas; cada linha registra ambos,
+DPR 2 e escala pinch 1. `target-matrix.json` guarda todas as medições e o check
+exige 648 chaves distintas. Título v3 exige cor computada `rgb(232, 79, 28)`, strong
+real, peso computado >=700 e tamanho canônico 20 px em cada combinação de ambos
+os modos. Axe continua completo no caso principal, sem repetição por combinação.
+
+O renderer funcional distingue a tipografia canônica dos metadados do Guia
+(14/12 px) da antiga asserção genérica (32/16 px), ainda preservada com
+`node tests/visual/check-pages-renderer-v3.mjs --strict-reference-typography`.
+Nesse modo estrito também se conserva o antigo probe que escreve diretamente a
+largura da superfície; o funcional varia seu viewport autoritativo e exige a largura
+real resultante, pois ResizeObserver é o dono da superfície. A mudança é de teste,
+não de renderer ou de conteúdo persistido. O estrito não representa um PASS visual.
+
 `node tests/visual/check-pages-review.mjs` usa as instalações externas indicadas por
 `PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e `AXE_MODULE_PATH`, além de
 `PAGES_REFERENCE_DIR` com os PNGs originais. Não instala dependências nem inicia
@@ -545,3 +631,16 @@ FAQ e vídeo incorporado: mensagens por bloco/item/campo no tooltip e descriçã
 acessível, ação desabilitada e nenhum POST de publicação. `PREFLIGHT_VISUAL_OUTPUT`
 define o diretório de capturas e `results.json`. Identidade sintética e SQL em
 PGlite serializado não comprovam serviços nativos nem aceite das seis pranchas.
+# Text format and contextual video controls (Task 7)
+
+Run `node tests/visual/check-pages-controls.mjs text-video` with the existing
+`PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` and a **new** `PAGES_CONTROLS_OUTPUT`.
+This local integration uses actual Pages/PM/API in desktop and compact chrome;
+it does not replace an opened document. A separate synthetic surface checks the
+exact `selectionFormat()` API for headings, paragraph, mixed/nested/empty blocks
+and standalone undo/redo. Actual Guide edits cover format/selection/global undo,
+FAQ, selecting text before Link/color, retained PM identities, contextual private
+MP4/YouTube, invalid URL, file-picker cancellation, replacement cancellation,
+no iframe/thumbnail and no autosave. The existing media suite additionally tests
+real local MP4 bytes/upload/replacement/private reader guards. Its evidence variable
+is `MEDIA_VISUAL_OUTPUT`; history uses `HISTORY_VISUAL_OUTPUT`.

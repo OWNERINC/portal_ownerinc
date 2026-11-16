@@ -43,7 +43,26 @@ try{
   const rd=await open(rp);await rp.evaluate(()=>document.fonts.ready);await rp.mouse.move(800,100);
   const geometry={dialog:await rect(rd),title:await rect(rd.getByRole('textbox',{name:'Título',exact:true})),category:await rect(rd.getByRole('combobox',{name:'Categoria',exact:true})),visibility:await rect(rd.getByRole('button',{name:/Visibilidade/})),back:await rect(rd.getByRole('button',{name:'Voltar à edição',exact:true})),publish:await rect(pub(rd))};
   await rp.screenshot({path:join(output,'desktop-review-1600.png')});
-  for(const [name,id] of [['dialog','review-dialog'],['title','title-field'],['category','category-field'],['visibility','visibility-field'],['back','back-to-editor'],['publish','publish-page']])near(geometry[name],manifest.regions.find(r=>r.id===id),name,name==='back'?4:2);
+  const geometryDifferences=[];
+  for(const [name,id] of [['dialog','review-dialog'],['title','title-field'],['category','category-field'],['visibility','visibility-field'],['back','back-to-editor'],['publish','publish-page']]){
+    const source=manifest.regions.find(r=>r.id===id);
+    if(process.argv.includes('--strict-reference-geometry'))near(geometry[name],source,name,name==='back'?4:2);
+    else for(const key of ['x','y','width','height'])if(Math.abs(geometry[name][key]-source[key])>(name==='back'?4:2))geometryDifferences.push({region:name,metric:key,source:source[key],actual:geometry[name][key],classification:'approved-task4: visible issues, 44px controls, centered scroll body and retained footer'});
+  }
+  if(geometryDifferences.length)console.warn('Intentional review reference divergence:',JSON.stringify(geometryDifferences));
+  const dialogBounds=geometry.dialog;assert.ok(dialogBounds.x>=16&&dialogBounds.x+dialogBounds.width<=1600-16&&dialogBounds.y>=16&&dialogBounds.y+dialogBounds.height<=1160-16);
+  near({x:dialogBounds.x,y:0,width:dialogBounds.width,height:0},{x:manifest.regions.find(r=>r.id==='review-dialog').x,y:0,width:580,height:0},'retained horizontal dialog frame');
+  assert.ok(Math.abs(dialogBounds.y-(1160-dialogBounds.height)/2)<=1,'task4 modal remains vertically centered');
+  for(const name of ['title','category','visibility','back','publish'])assert.ok(geometry[name].height>=44,`${name} real 44px target`);
+  for(const name of ['title','category','visibility']){
+    assert.equal(geometry[name].x,dialogBounds.x+24,`${name} task4 content inset`);
+    assert.equal(geometry[name].width,dialogBounds.width-48,`${name} fills content, not viewport`);
+    assert.equal(geometry[name].height,44,`${name} task4 control height`);
+  }
+  assert.equal(geometry.category.y-geometry.title.y,88,'task4 8px label/control and 16px group gap');
+  assert.equal(geometry.visibility.y-geometry.category.y,88);
+  assert.equal(geometry.publish.x+geometry.publish.width,dialogBounds.x+dialogBounds.width-24,'task4 footer right inset');
+  assert.equal(geometry.publish.y+geometry.publish.height,dialogBounds.y+dialogBounds.height-24,'task4 retained footer bottom inset');
   assert.equal(await pub(rd).isDisabled(),true,'actual audio placeholder remains unpublishable');
   const disabledPaint=await pub(rd).evaluate(n=>{const s=getComputedStyle(n);return{background:s.backgroundColor,color:s.color,cursor:s.cursor};});
   assert.notEqual(disabledPaint.background,'rgb(42, 39, 94)','unavailable publish must not paint as the enabled primary action');
@@ -52,7 +71,7 @@ try{
   assert.doesNotMatch(await rd.innerText(),/Protótipo:/);assert.match(await rd.locator('.pages-review-url').innerText(),/^\/conteudos\//);
   await pagesBrowserReflow(rp,AxeBuilder,'review-source-sized');await rd.getByRole('button',{name:'Fechar revisão',exact:true}).click();
   assert.equal(await rp.getByRole('button',{name:'Publicar',exact:true}).evaluate(n=>n===document.activeElement),true);
-  await reference.context.close();results.push({scenario:'unchanged source SHA, 1600x1160 real fixture modal anchors, disabled/hover presentation, placeholder validation and close/focus',geometry,disabledPaint});
+  await reference.context.close();results.push({scenario:'unchanged source SHA, 1600x1160 historical modal anchor comparison (classified, not fidelity), disabled/hover presentation, placeholder validation and close/focus',geometry,geometryDifferences,disabledPaint});
 
   const id=await create(upgradeDocument(pageDocument('Revisão editável'))),v=await visit(id),p=v.page;
   let d=await open(p),w=await api('get',`/${id}/workspace`);const alias=w.slug;

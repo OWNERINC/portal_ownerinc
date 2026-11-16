@@ -75,14 +75,14 @@
 .pages-page h3 { font-size: 1.1rem; line-height: 1.4; }
 .pages-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .pages-actions, .pages-preview-tools, .pages-add-tools, .pages-format-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.pages-page button, .pages-page input:not([type=checkbox]), .pages-page select, .pages-page summary, .pages-dialog button, .pages-dialog input { min-height: 44px; }
+.pages-page button, .pages-page input:not([type=checkbox]), .pages-page select, .pages-page summary, .pages-dialog :is(button,input:not([type=checkbox]),select,textarea,summary) { min-height: 44px; }
 .pages-page a, .pages-dialog a { text-underline-offset: 3px; }
 .pages-page .pages-actions > a { display: inline-flex; align-items: center; min-height: 44px; }
 .pages-page button, .pages-dialog button { border-radius: 8px; }
-.pages-page :is(button,a,input,textarea,summary):focus-visible, .pages-dialog :is(button,input):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.pages-page :is(button,a,input,textarea,summary):focus-visible, .pages-dialog :is(button,input,select,textarea,summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .pages-page button:disabled { cursor: not-allowed; opacity: .55; }
 .pages-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: .875rem; }
-.pages-field input, .pages-field textarea, .pages-dialog input { width: 100%; min-width: 0; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 10px 12px; border-radius: 6px; font: inherit; }
+.pages-field input:not([type=checkbox]), .pages-field textarea, .pages-dialog :is(input:not([type=checkbox]),select,textarea) { width: 100%; min-width: 0; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 10px 12px; border-radius: 6px; font: inherit; }
 .pages-field textarea { min-height: 84px; resize: vertical; }
 .pages-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-bottom: 16px; }
 .pages-filters .pages-field:first-child { flex: 1 1 240px; }
@@ -91,7 +91,7 @@
 .pages-metadata summary { display: flex; align-items: center; cursor: pointer; }
 .pages-audience { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 4px 12px; max-height: 320px; overflow: auto; padding: 12px; border: 1px solid var(--border); }
 .pages-audience label { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: .875rem; }
-.pages-audience input { flex: none; width: 20px; height: 20px; accent-color: var(--primary); }
+.pages-audience input { flex: none; width: 20px; height: 20px; min-height: 20px; padding: 0; accent-color: var(--primary); }
 .pages-preview-tools { margin: 16px 0; }
 .pages-preview-tools [aria-pressed=true] { background: var(--selected); border-color: var(--primary); }
 .pages-context-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
@@ -194,11 +194,20 @@
 .pages-catalog-item { background: var(--surface); border: 1px solid var(--border); padding: 20px; border-radius: 6px; }
 .pages-catalog-item h2 { margin: 0 0 8px; }
 .pages-item-meta { font-size: .875rem; color: var(--text-secondary); }
-.pages-dialog { width: min(580px, calc(100% - 32px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 24px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font-family: var(--font-sans); }
+.pages-dialog { box-sizing: border-box; position: fixed; inset: var(--pages-visible-top,0px) 0 var(--pages-visible-bottom,0px); margin: auto; width: min(580px, calc(100% - 32px)); max-height: calc(var(--pages-visible-height,100dvh) - 32px); overflow: auto; padding: 24px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font-family: var(--font-sans); }
 .pages-dialog::backdrop { background: var(--scrim); }
 .pages-dialog h2 { font-size: 1.4rem; margin: 0 0 16px; }
 .pages-dialog p { margin: 0 0 12px; overflow-wrap: anywhere; }
 .pages-dialog .pages-actions { margin-top: 20px; justify-content: end; }
+.pages-task-dialog[open] { display: flex; flex-direction: column; gap: 16px; overflow: hidden; }
+.pages-task-dialog > :is(.pages-panel-heading,.pages-actions) { flex: 0 0 auto; }
+.pages-task-dialog .pages-panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.pages-task-dialog .pages-panel-heading h2 { margin: 0; }
+.pages-task-dialog .pages-icon-button { flex: 0 0 44px; width: 44px; padding: 0; }
+.pages-dialog-body { min-height: 0; overflow-y: auto; padding: 4px; margin: -4px; scroll-padding-block: 8px; overscroll-behavior: contain; }
+.pages-task-dialog .pages-actions { margin-top: 0; gap: 8px; flex-wrap: wrap; }
+.pages-task-dialog .pages-field { gap: 8px; margin-bottom: 16px; }
+@media (max-width:1099px) { .pages-dialog :is(input:not([type=checkbox]),select,textarea) { font-size: 16px; } }
 /* Editor chrome follows Conecta; block presentation presets only affect content. */
 #page-editor-root { min-width: 0; }
 #page-editor-root :is(button, input, select, textarea, summary) { max-width: 100%; }

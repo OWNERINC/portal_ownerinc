@@ -7,6 +7,7 @@ import { resolveAppearance } from '../../public/pages/appearance.js';
 import { validateDocument } from '../../api/pages/validation.js';
 import { FixtureNode, TestEvent, drain } from '../helpers/frontend-feedback-harness.mjs';
 import { referenceDocument } from '../helpers/pages-reference-document.mjs';
+import { openEditorPanel } from '../../public/pages/editor-panels.js';
 
 function dom(t){
   const previous={document:globalThis.document,window:globalThis.window};
@@ -23,7 +24,11 @@ test('image/GIF/gallery size is explicitly inapplicable in its ordered inspector
     const document=upgradeDocument(pageDocument('Media size')),block=document.sections[0].rows[0].columns[0].blocks[0];block.type=type;
     const before=JSON.stringify(document),changes=[];
     const inspector=createInspector({document,block,onAppearance:patch=>changes.push(patch)});doc.body.append(inspector.node);
-    assert.deepEqual(inspector.node.children.slice(0,4).map(n=>n.firstElementChild.textContent),['Tipografia','Tamanho','Alinhamento','Largura']);
+    const style=inspector.node.children[0],position=inspector.node.children[1];
+    assert.equal(style.dataset.inspectorSection,'style');assert.equal(position.dataset.inspectorSection,'position');
+    assert.deepEqual(style.children.slice(1,4).map(n=>n.firstElementChild.textContent),['Tipografia','Tamanho','Alinhamento']);
+    assert.equal(position.children[1].firstElementChild.textContent,'Largura');
+    assert.equal(style.querySelector('input').getAttribute('aria-label'),'Cor de fundo personalizada');
     const size=inspector.node.querySelectorAll('select').find(n=>n.getAttribute('aria-label')==='Tamanho');
     assert.equal(size.disabled,true,type);assert.equal(size.value,'not-applicable');
     assert.match(size.parentElement.textContent,/14 px/);
@@ -83,6 +88,35 @@ test('local tags reject empty, repeated, oversized and NUL without silently savi
   assert.deepEqual(parseLocalTags(' Cultura , Guia '), ['Cultura','Guia']);
   assert.deepEqual(parseLocalTags(''), []);
   for (const raw of ['a,,b', 'a,a', 'a,', 'x'.repeat(41), 'x\0', Array.from({length:21},(_,i)=>String(i)).join(',')]) assert.equal(parseLocalTags(raw), null);
+});
+
+test('reused panel content has exactly one focus scroller while open and none after close/disposal', t=>{
+  const {doc,page}=dom(t), cleanups=[]; page.cleanup=fn=>cleanups.push(fn);
+  const content=doc.createElement('div'),input=doc.createElement('input');content.append(input);
+  let scrolls=0;input.scrollIntoView=()=>scrolls++;
+  const focus=()=>content.dispatchEvent(new TestEvent('focusin',{target:input}));
+  for(let i=0;i<3;i++){
+    const panel=openEditorPanel({page,title:'Estrutura',content});
+    const before=scrolls;focus();assert.equal(scrolls,before+1,'one listener per reopen');
+    panel.close(false);focus();assert.equal(scrolls,before+1,'closed content releases focus listener');
+  }
+  openEditorPanel({page,title:'Estrutura',content});const before=scrolls;
+  cleanups.forEach(fn=>fn());focus();assert.equal(scrolls,before,'visit disposal releases reused content');
+});
+
+test('inspector hex and tags have independent associated invalid feedback and correction', t=>{
+  const {doc}=dom(t),document=upgradeDocument(pageDocument('Feedback')),block=document.sections[0].rows[0].columns[0].blocks[0],changes=[];
+  const inspector=createInspector({document,block,onAppearance:patch=>changes.push(patch),onTags:tags=>changes.push(tags)});doc.body.append(inspector.node);
+  const [hex,tags]=['Cor de fundo personalizada','Tags do bloco'].map(label=>inspector.node.querySelectorAll('input').find(n=>n.getAttribute('aria-label')===label));
+  const change=(node,value)=>{node.value=value;node.dispatchEvent(new TestEvent('change'));};
+  change(hex,'bad');change(tags,'a,,b');
+  const feedback=node=>inspector.node.querySelector(`#${node.getAttribute('aria-describedby')}`);
+  assert.notEqual(hex.getAttribute('aria-describedby'),tags.getAttribute('aria-describedby'));
+  for(const node of [hex,tags]){assert.equal(node.getAttribute('aria-invalid'),'true');assert.equal(feedback(node).getAttribute('role'),'alert');}
+  assert.match(feedback(hex).textContent,/hexadecimal/);assert.match(feedback(tags).textContent,/tags/);assert.deepEqual(changes,[]);
+  change(hex,'#112233');assert.equal(hex.getAttribute('aria-invalid'),'false');assert.equal(feedback(hex).textContent,'');assert.match(feedback(tags).textContent,/tags/);
+  change(tags,'Cultura, Guia');assert.equal(tags.getAttribute('aria-invalid'),'false');assert.equal(feedback(tags).textContent,'');assert.deepEqual(changes,[{background:'#112233'},['Cultura','Guia']]);
+  inspector.dispose();
 });
 
 test('style candidate is atomic, validated, opt-in and preserves pinned overrides', () => {

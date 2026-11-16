@@ -40,7 +40,7 @@ export function createDestinationFields({ blockId, getDocument, getMedia, v3Enab
   const video = el('select', { 'aria-label': 'Vídeo da página' });
   const message = el('p', { role: 'status', className: 'pages-help' });
   const addressField = field('Endereço',address);
-  const downloadFields = el('div', {}, field('Arquivo da página',media), field('Tipo do arquivo',kind), field('Nome do arquivo para download',filename));
+  const downloadFields = el('div', {className:'pages-destination-download'}, field('Arquivo da página',media), field('Tipo do arquivo',kind), field('Nome do arquivo para download',filename));
   const videoField = field('Vídeo da página',video);
   const advanced = () => ['download','video'].includes(target.value);
   const gate = () => advanced() && !v3Enabled();
