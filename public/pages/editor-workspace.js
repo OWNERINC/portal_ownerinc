@@ -67,9 +67,11 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
   const compact = window.matchMedia?.('(max-width: 1099px)');
   const phone = window.matchMedia?.('(max-width: 599px)');
   const structure = el('nav', { className: 'pages-v2-structure', 'aria-label': 'Estrutura da página' });
+  structure.dataset.organizing = 'false';
   const sectionList = el('div', { className: 'pages-v2-section-list' });
   const organize = button('Organizar estrutura', () => {
-    const next = root.dataset.organizing !== 'true'; root.dataset.organizing = String(next); organize.setAttribute('aria-pressed', String(next));
+    const next = structure.dataset.organizing !== 'true';
+    structure.dataset.organizing = root.dataset.organizing = String(next); organize.setAttribute('aria-pressed', String(next));
   }, { 'aria-pressed': 'false', 'data-edit-only': '' });
   const sectionAdd = editorAction('Adicionar seção', 'plus', onSection, { 'data-edit-only': '' });
   organize.setAttribute('aria-label','Organizar estrutura');organize.textContent='Arraste para organizar';
@@ -327,9 +329,10 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
         const index = doc.sections.indexOf(section), label = section.label || 'Seção sem nome';
         const handle = button('⋮⋮', () => node.focus(), { className: 'btn btn-ghost pages-section-drag-handle', 'aria-label': `Arrastar seção ${label}; Alt+setas para mover`, 'data-edit-only': '', hidden: !isEditable });
         handle.addEventListener('keydown', event => { if (event.altKey && ['ArrowUp','ArrowDown'].includes(event.key)) { event.preventDefault(); move(section.id, event.key === 'ArrowUp' ? -1 : 1); } });
-        const position = el('details', { 'data-edit-only': '', hidden: !isEditable }, el('summary', { text: 'Posição', 'aria-label': `Posição da seção ${label}` }),
-          button('Subir', () => move(section.id, -1), { 'aria-label': `Subir seção ${label}`, disabled: index === 0 }),
-          button('Descer', () => move(section.id, 1), { 'aria-label': `Descer seção ${label}`, disabled: index === doc.sections.length - 1 }));
+        const position = el('details', { className: 'pages-v2-section-position', 'data-edit-only': '', hidden: !isEditable }, el('summary', { text: 'Posição', 'aria-label': `Posição da seção ${label}` }),
+          el('div', { className: 'pages-v2-section-actions' },
+            button('Subir', () => move(section.id, -1), { 'aria-label': `Subir seção ${label}`, disabled: index === 0 }),
+            button('Descer', () => move(section.id, 1), { 'aria-label': `Descer seção ${label}`, disabled: index === doc.sections.length - 1 })));
         return el('div', { className: 'pages-v2-section-entry', 'data-section-sort-id': section.id }, node, handle, position);
       }));
       if (sortableFactory && isEditable) sectionSortable = sortableFactory(sectionList, {

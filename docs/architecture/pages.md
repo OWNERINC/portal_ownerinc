@@ -26,6 +26,14 @@ O caso local `node tests/visual/pages-editor-controls.mjs menus` exige
 `PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e um diretório novo em
 `PAGES_CONTROLS_OUTPUT`; usa apenas identidade e banco sintéticos, sem produção.
 
+A estrutura conserva `onReorderSection({sectionId,beforeSectionId})` e os UUIDs do
+documento. A alça ocupa 44 × 44 px reais; Posição e os botões Subir/Descer têm linha
+própria e estilos compartilhados entre lateral e diálogo. `data-organizing` fica
+sincronizado no root e no próprio nav, sem depender do ancestral após reparenting.
+`node tests/visual/check-pages-controls.mjs structure` usa as mesmas variáveis do
+caso `menus` e confere 320/390/768/1366 px, foco, seleção, limites, Alt+setas, arraste,
+Escape, ordem SQL após save explícito e undo local sem recriar EditorViews.
+
 O desenvolvimento parte de `2cecbe8`, incluindo o aceite obrigatório do Código de
 Ética. Nenhuma rota Pages fica isenta desse gate. A autenticação continua sendo
 Firebase Bearer, validada pelo middleware existente com o perfil atual no banco.

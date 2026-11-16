@@ -32,19 +32,25 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
 #page-editor-root .pages-structure-toggle, #page-editor-root .pages-properties-toggle { display: none; }
 #page-editor-root .pages-feedback:not(:empty) { padding: 12px 24px; margin: 0; background: var(--danger-bg); }
 #page-editor-root .pages-v2-workspace { display: grid; grid-template-columns: 220px minmax(0,1fr) 280px; align-items: start; min-height: calc(100dvh - 128px); }
-#page-editor-root .pages-v2-structure { min-width: 0; background: var(--editor-paper); padding: 20px; border-right: 1px solid var(--border); align-self: stretch; }
-#page-editor-root .pages-v2-structure h2, .pages-structure-panel .pages-v2-structure h2 { font-size: .75rem; text-transform: uppercase; font-weight: 600; color: var(--editor-label); margin: 0 0 16px; }
-#page-editor-root .pages-v2-section-list { display: grid; gap: 12px; margin-bottom: 16px; }
-.pages-v2-section-entry { display: grid; grid-template-columns: minmax(0, 1fr) 32px; align-items: center; }
-.pages-v2-section-entry > details { grid-column: 2; }
-#page-editor-root:not([data-organizing=true]) .pages-v2-section-entry > details { display: none; }
-.pages-v2-section-entry .pages-section-drag-handle { min-width: 44px; padding-inline: 4px; cursor: grab; }
-#page-editor-root .pages-v2-section-link { border-color: transparent; min-height: 52px; justify-content: start; text-align: start; width: 100%; padding-inline: 10px; font-weight: 500; }
-#page-editor-root .pages-v2-section-link [aria-hidden] { width: 16px; height: 16px; }
-#page-editor-root .pages-v2-section-link[aria-pressed=true] { background: var(--selected); }
-#page-editor-root .pages-v2-structure > .btn { margin-bottom: 8px; justify-content: start; text-align: start; font-size: .8rem; }
-#page-editor-root .pages-v2-structure-help { margin-top: 12px; padding: 12px; border-radius: 6px; background: var(--bg); font-size: .75rem; line-height: 1.5; }
-#page-editor-root .pages-v2-structure-help p { margin: 8px 0 0; color: var(--editor-label); }
+.pages-v2-structure { --editor-paper: #fff; --editor-label: #626762; min-width: 0; background: var(--editor-paper); padding: 20px; border-right: 1px solid var(--border); align-self: stretch; }
+.pages-v2-structure h2 { font-size: .75rem; text-transform: uppercase; font-weight: 600; color: var(--editor-label); margin: 0 0 16px; }
+.pages-v2-section-list { display: grid; gap: 16px; margin: 16px 0 20px; }
+.pages-v2-section-entry { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 8px; align-items: start; min-width: 0; }
+.pages-v2-section-position { grid-column: 1 / -1; min-width: 0; }
+.pages-v2-structure[data-organizing=false] .pages-v2-section-position { display: none; }
+.pages-v2-section-position > summary { min-height: 44px; padding: 10px 8px; cursor: pointer; border-radius: 6px; }
+.pages-v2-section-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
+.pages-v2-section-actions > button { flex: 1 1 64px; min-width: 44px; min-height: 44px; }
+.pages-v2-structure :is(button,summary):focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+:is(#page-editor-root,.pages-structure-panel) .pages-section-drag-handle { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 4px; cursor: grab; background: transparent; border: 0; }
+:is(#page-editor-root,.pages-structure-panel) .pages-v2-section-link { display: flex; gap: 8px; border-color: transparent; min-width: 0; min-height: 44px; justify-content: start; text-align: start; width: 100%; padding: 8px; font-size: .8125rem; font-weight: 500; }
+.pages-v2-section-link span { overflow-wrap: anywhere; min-width: 0; }
+.pages-v2-section-link [aria-hidden] { width: 16px; height: 16px; }
+:is(#page-editor-root,.pages-structure-panel) .pages-v2-section-link[aria-pressed=true] { background: var(--selected); }
+:is(#page-editor-root,.pages-structure-panel) .pages-v2-structure > .btn { min-height: 44px; margin-bottom: 8px; justify-content: start; text-align: start; font-size: .8125rem; }
+.pages-v2-structure-help { margin-top: 12px; padding: 12px; border-radius: 6px; background: var(--bg); font-size: .75rem; line-height: 1.5; }
+:is(#page-editor-root,.pages-structure-panel) .pages-v2-structure-help > .btn { min-height: 44px; padding: 4px; font-size: .75rem; border: 0; background: transparent; white-space: normal; }
+.pages-v2-structure-help p { margin: 8px 0 0; color: var(--editor-label); }
 #page-editor-root .pages-v2-center { min-width: 0; padding: 24px 28px 28px; }
 #page-editor-root .pages-v2-canvas-label { display: flex; gap: 12px; justify-content: space-between; margin: 0 0 16px; font-size: .7rem; color: var(--editor-label); }
 #page-editor-root .pages-edit-surface { border: 1px solid var(--border); border-radius: 10px; background: var(--editor-paper); min-height: 940px; }
@@ -224,11 +230,7 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
   .pages-review-fields > .pages-field { gap: 10px; }
   .pages-publication-dialog .pages-review-fields input { height: 44px; min-height: 44px; font-size: 16px; }
 }
-.pages-structure-panel .pages-v2-structure { display: block; }
-.pages-structure-panel .pages-v2-section-list { display: grid; gap: 8px; }
-.pages-structure-panel .pages-v2-section-link { display: flex; align-items: center; justify-content: start; gap: 12px; width: 100%; margin-bottom: 8px; }
-.pages-structure-panel .pages-v2-structure > .btn { margin: 8px 0; }
-.pages-structure-panel .pages-v2-structure-help { font-size: .8rem; background: var(--bg); padding: 12px; margin-top: 12px; }
+.pages-structure-panel .pages-v2-structure { display: block; padding: 4px; border: 0; }
 /* The paper owns reflow; only its inner surface is scaled. Rails, inspector and
    contextual tools are sibling DOM, never scaled with document content. */
 #page-editor-root .pages-v2-viewport { position: relative; overflow: auto; width: 100%; min-width: 0; overscroll-behavior: contain; }
@@ -245,9 +247,8 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
 #page-editor-root .pages-v2-tools .btn-primary { color: #fff; background: var(--primary); }
 #page-editor-root .pages-format-tools .btn { position: relative; }
 #page-editor-root :is(.pages-primary-actions > .btn,.pages-v2-preview-menu > summary,.pages-v2-section-link,.pages-v2-structure > .btn) { position: relative; }
-#page-editor-root :is(.pages-primary-actions > .btn,.pages-v2-structure > .btn)::after { content: ''; position: absolute; inset: -4px 0; }
+#page-editor-root .pages-primary-actions > .btn::after { content: ''; position: absolute; inset: -4px 0; }
 #page-editor-root .pages-v2-section-link::after { content: ''; position: absolute; inset: -2px 0; }
-#page-editor-root .pages-section-drag-handle::after { content: ''; position: absolute; inset: -2px -6px; }
 #page-editor-root .pages-v2-tools > .btn::after, #page-editor-root .pages-v2-view-tools > .btn::after { content: ''; position: absolute; inset: -4px 0; }
 #page-editor-root .pages-v2-select-hit { display: flex; align-items: center; min-height: 44px; flex: none; cursor: pointer; }
 #page-editor-root .pages-v2-model { width: 177px; }
@@ -271,14 +272,6 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
 #page-editor-root .pages-editor-block:is(:hover,:focus-within) > .pages-block-header,
 #page-editor-root[data-organizing=true] .pages-block-header { opacity: 1; pointer-events: auto; }
 #page-editor-root .pages-block-header .pages-select-block { max-width: 180px; }
-#page-editor-root .pages-v2-section-entry { position: relative; }
-#page-editor-root .pages-v2-section-entry > .pages-section-drag-handle { position: absolute; right: -4px; top: 0; width: 32px; min-width: 32px; min-height: 40px; height: 40px; font-size: 14px; background: transparent; border: 0; }
-#page-editor-root .pages-v2-section-link { min-height: 40px; padding: 8px 28px 8px 10px; font-size: 13px; gap: 10px; }
-#page-editor-root .pages-v2-section-entry > .pages-v2-section-link { grid-column: 1 / -1; }
-#page-editor-root .pages-v2-section-list { gap: 17px; margin: 16px 0 20px; }
-#page-editor-root .pages-v2-structure-help > .btn { padding: 0; min-height: 20px; font-size: 12px; border: 0; background: transparent; }
-#page-editor-root .pages-v2-structure > .btn { min-height: 36px; padding: 6px 12px; font-size: 13px; }
-#page-editor-root .pages-v2-structure > .btn[aria-pressed] { margin: 0; font-size: 11px; }
 #page-editor-root .pages-v2-inspector-help { display: block; margin: 0 0 18px; font-size: 12px; color: #626762; }
 #page-editor-root .pages-editor-block[data-guide-block] .ProseMirror { padding: 0; min-height: 0; line-height: 1.6; }
 #page-editor-root .pages-editor-block[data-guide-block] .pages-rich-host :is(h2,h3) { margin: 0 0 14px; }
