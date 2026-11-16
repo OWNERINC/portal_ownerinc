@@ -572,7 +572,7 @@ async function loadRegistrations() {
     const format = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
     const tbody = clear(document.getElementById('registrations-tbody'));
     registrations.forEach(registration => tbody.append(element('tr', {}, [
-      cell(registration.name), cell(registration.email), cell(registration.state_label || 'Cadastro recebido', `badge ${registration.state === 'confirmed' ? 'badge-green' : 'badge-gray'}`), cell(format.format(new Date(registration.created_at))),
+      cell(registration.name), cell(registration.email), cell(registration.state_label || 'Pendente de aprovação', 'badge badge-gray'), cell(format.format(new Date(registration.created_at))),
       actions(
         element('button', { className: 'btn btn-primary btn-sm', type: 'button', text: 'Analisar', 'aria-label': `Analisar cadastro: ${registration.name}`, on: { click: () => openRegistrationReview(registration, 'approve') } }),
         element('button', { className: 'btn btn-danger btn-sm', type: 'button', text: 'Rejeitar', 'aria-label': `Rejeitar cadastro: ${registration.name}`, on: { click: () => openRegistrationReview(registration, 'reject') } }),

@@ -11,7 +11,7 @@ const originalCreateTransport = nodemailer.createTransport;
 nodemailer.createTransport = () => transport;
 const {
   invitationMessage, passwordResetMessage, sendInvitation, sendPasswordReset, smtpAcceptanceAuditDetails, smtpOptions,
-  verificationMessage, portalLoginUrl,
+  verificationMessage, registrationPasswordMessage, portalLoginUrl,
 } = require('../../api/integrations/password-reset-email');
 
 const env = {
@@ -89,6 +89,15 @@ test('verification message is distinct and escapes the recipient and link', () =
   assert.match(message.html, /&lt;Ana&gt;/);
   assert.match(message.html, /a=1&amp;b=2/);
   assert.doesNotMatch(message.html, /<Ana>/);
+});
+
+test('legacy registration password message does not claim email confirmation or admission', () => {
+  const message = registrationPasswordMessage({ to: 'user@example.com', link: 'https://example.com/reset?a=1&b=2', env });
+  assert.match(message.text, /Defina ou recupere/);
+  assert.match(message.text, /acesso depende da aprovação/);
+  assert.doesNotMatch(message.text + message.html, /e-mail foi confirmado|acesso (?:foi|está) liberado/i);
+  assert.match(message.html, /a=1&amp;b=2/);
+  assert.doesNotMatch(JSON.stringify(message), /re_test_secret/);
 });
 
 test('transactional mailers deliver both messages through Nodemailer without network access', async () => {

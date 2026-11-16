@@ -5,8 +5,11 @@
 Todas as contas autorizadas a entrar no Portal devem aceitar o termo vigente:
 usuários comuns, administradores e superadministradores, incluindo contas já
 ativas. Não há bypass por cargo, permissões ou data de criação. Contas desativadas,
-pendentes de aprovação ou sem email verificado continuam sujeitas aos bloqueios
-anteriores; aceitar o termo não concede permissões adicionais.
+pendentes de aprovação ou de habilitação continuam bloqueadas; aceitar o termo
+não concede permissões adicionais. No autocadastro com senha e aprovação, email
+verificado deixou de ser requisito de admissão, mas o aceite do termo continua
+obrigatório após a aprovação administrativa. O login encaminha a conta aprovada
+sem aceite para a tela de Ética antes de abrir as áreas protegidas.
 
 Nesta entrega, `api/ethics/term.json` contém texto demonstrativo, não o Código de
 Ética oficial. O aviso de demonstração é apresentado na tela. A versão inicial é

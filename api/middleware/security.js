@@ -122,7 +122,7 @@ function errorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
   const invalidJson = err.type === 'entity.parse.failed';
   const status = invalidJson ? 400 : err.type === 'entity.too.large' || err.code === 'LIMIT_FILE_SIZE' ? 413 : 500;
-  console.error(JSON.stringify({ service: 'api', event: 'request_error', requestId: req.id, status, error: err.message }));
+  console.error(JSON.stringify({ service: 'api', event: 'request_error', requestId: req.id, status }));
   res.status(status).json({
     error: invalidJson ? 'Invalid JSON.' : status === 413 ? 'Payload too large.' : 'Internal server error.',
     requestId: req.id,

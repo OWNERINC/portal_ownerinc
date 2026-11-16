@@ -86,8 +86,8 @@ function registrationPasswordMessage({ to, link, env = process.env }) {
     from: portalSender(env.MAILER_SENDER_EMAIL),
     to,
     subject: 'Crie sua senha de cadastro — Portal Interno Ownerinc',
-    text: `Seu e-mail foi confirmado. Crie a senha do seu cadastro no Portal Interno Ownerinc: ${link}\n\nDepois, aguarde a aprovação do administrador e entre em ${loginUrl}`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#20242a"><h2>Crie a senha do seu cadastro</h2><p>Seu e-mail foi confirmado no Portal Interno Ownerinc.</p><p><a href="${escapedLink}" style="display:inline-block;background:#1f5d46;color:#fff;padding:12px 20px;text-decoration:none;border-radius:6px">Criar minha senha</a></p><p>Depois, aguarde a aprovação do administrador e entre em <strong>${loginHost}</strong>.</p></div>`,
+    text: `Defina ou recupere a senha do seu cadastro no Portal Interno Ownerinc: ${link}\n\nO acesso depende da aprovação do administrador. Após a liberação, entre em ${loginUrl}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#20242a"><h2>Senha do seu cadastro</h2><p>Defina ou recupere a senha do seu cadastro no Portal Interno Ownerinc.</p><p><a href="${escapedLink}" style="display:inline-block;background:#1f5d46;color:#fff;padding:12px 20px;text-decoration:none;border-radius:6px">Definir minha senha</a></p><p>O acesso depende da aprovação do administrador. Após a liberação, entre em <strong>${loginHost}</strong>.</p></div>`,
   };
 }
 

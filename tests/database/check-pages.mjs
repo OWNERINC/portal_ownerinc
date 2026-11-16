@@ -154,10 +154,15 @@ export async function checkPagesDatabase() {
   const workspace = async id => expectStatus(await h.api('get', `/${id}/workspace`), 200);
   try {
     expectStatus(await h.request.get('/api/pages'), 401);
-    expectStatus(await h.api('get', '', undefined, 'noethics'), 403);
-    expectStatus(await h.api('get', '', undefined, 'disabled'), 403);
-    expectStatus(await h.api('get', '', undefined, 'unverified'), 403);
-    for (const actor of ['reader', 'forged', 'publisher']) expectStatus(await h.api('post', '', { template_id: 'comunicado', ...mutation() }, actor), 403);
+    assert.equal(expectStatus(await h.api('get', '', undefined, 'noethics'), 403).reason, 'ethics-required');
+    assert.equal(expectStatus(await h.api('get', '', undefined, 'disabled'), 403).reason, 'account-disabled');
+    // Approved, enabled accounts may enter without email verification; Ethics
+    // and Pages capabilities still apply to this same synthetic viewer.
+    assert.deepEqual(expectStatus(await h.api('get', '', undefined, 'unverified'), 200), []);
+    await h.db.query('DELETE FROM ethics_acceptances WHERE user_uid=$1', ['unverified']);
+    assert.equal(expectStatus(await h.api('get', '', undefined, 'unverified'), 403).reason, 'ethics-required');
+    await acceptTerm(h.db, 'unverified');
+    for (const actor of ['reader', 'forged', 'publisher', 'unverified']) expectStatus(await h.api('post', '', { template_id: 'comunicado', ...mutation() }, actor), 403);
     const createInput = { template_id: 'comunicado', ...mutation() };
     const auditBeforeCreate = (await h.db.query('SELECT count(*)::int AS count FROM audit_log')).rows[0].count;
     const createResponses = await Promise.all([h.api('post', '', createInput), h.api('post', '', createInput)]);
@@ -170,7 +175,8 @@ export async function checkPagesDatabase() {
     assert.equal((await h.db.query('SELECT count(*)::int AS count FROM pages')).rows[0].count, 1);
     assert.equal((await h.db.query('SELECT count(*)::int AS count FROM audit_log')).rows[0].count, auditBeforeCreate + 1, 'replayed create must not duplicate audit');
     expectStatus(await h.api('get', `/${id}`, undefined, 'reader'), 404);
-    for (const actor of ['other', 'reader', 'forged']) expectStatus(await h.api('get', `/${id}/workspace`, undefined, actor), 403);
+    expectStatus(await h.api('get', `/${id}`, undefined, 'unverified'), 404);
+    for (const actor of ['other', 'reader', 'forged', 'unverified']) expectStatus(await h.api('get', `/${id}/workspace`, undefined, actor), 403);
     expectStatus(await h.api('get', `/${id}/workspace`, undefined, 'publisher'), 200);
     let current = await workspace(id);
     expectStatus(await h.api('post', `/${id}/publish`, { ...mutation(), expected_version: current.version, revision_id: current.draft_revision_id }, 'publisher'), 400);
@@ -190,6 +196,7 @@ export async function checkPagesDatabase() {
     assert.equal((await h.db.query('SELECT count(*)::int AS count FROM audit_log')).rows[0].count, auditBeforePublish + 1, 'replayed publish must not duplicate audit');
     const published = expectStatus(await h.api('get', `/${id}`, undefined, 'reader'), 200);
     assert.equal(published.document.metadata.title, document.metadata.title);
+    assert.deepEqual(expectStatus(await h.api('get', `/${id}`, undefined, 'unverified'), 200), published);
     expectStatus(await h.api('get', `/${id}`, undefined, 'outsider'), 404);
     expectStatus(await h.api('get', `/${id}`, undefined, 'publisher'), 404);
     const hiddenCatalog = expectStatus(await h.api('get', '', undefined, 'outsider'), 200);
@@ -249,6 +256,7 @@ export async function checkPagesDatabase() {
     expectStatus(await h.api('get', `/${id}/media/${mediaId}?revision_id=${imageRevision}`, undefined, 'reader'), 403);
     await h.db.query('UPDATE job_titles SET active = FALSE WHERE id = $1', [cargoA]);
     expectStatus(await h.api('get', `/${id}`, undefined, 'reader'), 404);
+    expectStatus(await h.api('get', `/${id}`, undefined, 'unverified'), 404);
     expectStatus(await h.api('get', `/${id}/media/${mediaId}`, undefined, 'reader'), 404);
     await h.db.query('UPDATE job_titles SET active = TRUE WHERE id = $1', [cargoA]);
     current = await workspace(id);

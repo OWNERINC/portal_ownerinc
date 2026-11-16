@@ -231,9 +231,17 @@ export async function checkPagesV3Database() {
     try { assert.equal(status(await h.api('get', downloadPath, undefined, 'reader'), 404).reason, 'media_unavailable'); }
     finally { await rename(`${storagePath}.test-held`, storagePath); }
     status(await h.request.get(`/api/pages${downloadPath}`), 401);
-    for (const actor of ['noethics','disabled','unverified']) status(await h.api('get', downloadPath, undefined, actor), 403);
+    assert.equal(status(await h.api('get', downloadPath, undefined, 'noethics'), 403).reason, 'ethics-required');
+    assert.equal(status(await h.api('get', downloadPath, undefined, 'disabled'), 403).reason, 'account-disabled');
+    const unverifiedDownload = await h.api('get', downloadPath, undefined, 'unverified');
+    status(unverifiedDownload, 200);
+    assert.ok(Buffer.isBuffer(unverifiedDownload.body), 'admitted unverified viewer receives actual published private bytes');
+    assert.deepEqual(unverifiedDownload.body, status(await h.api('get', downloadPath, undefined, 'reader'), 200));
+    assert.equal(unverifiedDownload.headers['cache-control'], 'private, no-store');
+    status(await h.api('get', `${downloadPath}?revision_id=${published.published_revision_id}`, undefined, 'unverified'), 403);
     await h.db.query('UPDATE job_titles SET active=FALSE WHERE id=$1', [cargoA]);
     status(await h.api('get', downloadPath, undefined, 'reader'), 404);
+    status(await h.api('get', downloadPath, undefined, 'unverified'), 404);
     await h.db.query('UPDATE job_titles SET active=TRUE WHERE id=$1', [cargoA]);
     assert.deepEqual(status(await disabled('post', `/${id}/publish`, publishInput, 'publisher'), 200), published);
     await h.db.query("UPDATE users SET permissions='{}'::jsonb WHERE uid='publisher'");
@@ -269,6 +277,7 @@ export async function checkPagesV3Database() {
     for (const section of noMedia.sections) for (const row of section.rows) for (const column of row.columns) column.blocks = column.blocks.filter(block => !['image','gallery','audio','video','button'].includes(block.type));
     status(await h.api('put', `/${id}/draft`, await saveBody(id, noMedia)), 200);
     status(await disabled('post', `/${id}/publish`, await publishBody(id), 'publisher'), 200);
+    status(await h.api('get', downloadPath, undefined, 'unverified'), 404);
     for (const item of Object.values(media)) {
       status(await disabled('get', `/${id}/media/${item.media_id}`, undefined, 'reader'), 404);
       status(await disabled('get', `/${id}/media/${item.media_id}/download`, undefined, 'reader'), 404);
@@ -379,8 +388,14 @@ async function checkPagesAliasesDatabase() {
     const slugPath = `/by-slug/${saved.slug}`;
     for (const path of ['/categories', slugPath, '/by-slug/INVALID']) {
       status(await h.request.get(`/api/pages${path}`), 401);
-      for (const actor of ['noethics','disabled','unverified']) status(await h.api('get', path, undefined, actor), 403);
+      assert.equal(status(await h.api('get', path, undefined, 'noethics'), 403).reason, 'ethics-required');
+      assert.equal(status(await h.api('get', path, undefined, 'disabled'), 403).reason, 'account-disabled');
     }
+    // Email verification no longer gates admitted accounts. This viewer still
+    // lacks category-management capabilities and cannot read an unpublished alias.
+    assert.equal(status(await h.api('get', '/categories', undefined, 'unverified'), 403).reason, 'permission_denied');
+    assert.equal(status(await h.api('get', slugPath, undefined, 'unverified'), 404).reason, 'not_visible');
+    assert.equal(status(await h.api('get', '/by-slug/INVALID', undefined, 'unverified'), 400).reason, 'invalid_slug');
     const hidden = status(await h.api('get', slugPath, undefined, 'reader'), 404);
     assert.equal(hidden.reason, 'not_visible');
     for (const slug of ['UPPER', 'a--b', '-a', 'a-', 'á', 'a'.repeat(121), 'a%2Fb', 'a%0A']) status(await h.api('get', `/by-slug/${slug}`, undefined, 'reader'), 400);
@@ -389,6 +404,7 @@ async function checkPagesAliasesDatabase() {
     const read = await h.api('get', slugPath, undefined, 'reader'); status(read, 200);
     assert.match(read.headers['cache-control'], /private.*no-store/);
     assert.deepEqual(read.body, status(await h.api('get', `/${id}`, undefined, 'reader'), 200));
+    assert.deepEqual(status(await h.api('get', slugPath, undefined, 'unverified'), 200), read.body);
     assert.equal(read.body.slug, saved.slug);
     await h.db.query("UPDATE users SET job_title_id=NULL WHERE uid='super'");
     for (const actor of ['outsider','publisher','super']) {
@@ -397,6 +413,7 @@ async function checkPagesAliasesDatabase() {
     }
     await h.db.query('UPDATE job_titles SET active=FALSE WHERE id=$1', [cargoA]);
     status(await h.api('get', slugPath, undefined, 'reader'), 404);
+    status(await h.api('get', slugPath, undefined, 'unverified'), 404);
     await h.db.query('UPDATE job_titles SET active=TRUE WHERE id=$1', [cargoA]);
     await h.db.query("UPDATE users SET job_title_id=NULL WHERE uid='reader'");
     status(await h.api('get', slugPath, undefined, 'reader'), 404);
@@ -404,6 +421,7 @@ async function checkPagesAliasesDatabase() {
     const newDraft = doc('Título posterior à publicação', 'Cultura');
     await save(id, newDraft);
     assert.deepEqual(status(await h.api('get', slugPath, undefined, 'reader'), 200).document, read.body.document);
+    assert.deepEqual(status(await h.api('get', slugPath, undefined, 'unverified'), 200).document, read.body.document);
     const catalog = status(await h.api('get', '', undefined, 'reader'), 200);
     assert.equal(catalog.find(page => page.id === id).title, read.body.document.metadata.title, 'catalog exposes published title, never newer draft');
     assert.equal(status(await h.api('get', '', undefined, 'outsider'), 200).some(page => page.id === id), false);
