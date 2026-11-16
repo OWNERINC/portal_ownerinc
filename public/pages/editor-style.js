@@ -102,7 +102,8 @@ export function openStylePanel({ page, anchor, document: doc, onApply, canAct = 
   let scope = 'accent';
   const scopeControl = selectControl('Propriedade da cor', { foreground:'Texto',background:'Fundo',accent:'Destaque' }, scope, value => { if (!current()) return; scope=value; hex.value=draft[scope]; refresh(); });
   const hex = el('input', { value:draft.accent, maxlength:32, 'aria-label':'Cor personalizada de destaque', spellcheck:'false' });
-  const warning = el('p',{className:'pages-style-contrast',role:'status'}), invalid=el('p',{className:'pages-style-invalid',role:'alert'});
+  const warning = el('p',{className:'pages-style-contrast',role:'status'}), invalid=el('p',{id:`${prefix}-invalid`,className:'pages-style-invalid',role:'alert'});
+  hex.setAttribute('aria-describedby',`${prefix}-invalid`);
   const apply = button('✓ Aplicar estilo', () => {
     if (!current() || !available || !normalizeHex(hex.value)) return;
     const value = normalizeDefaults({...draft,[scope]:normalizeHex(hex.value)}); if (!value) return;
@@ -120,10 +121,12 @@ export function openStylePanel({ page, anchor, document: doc, onApply, canAct = 
     sample.style.fontSize={small:'14px',standard:'16px',large:'19.2px'}[draft.scale];
     for (const pick of palettes.children) pick.setAttribute('aria-pressed',String(pick.dataset.themePalette===draft.palette));
     const valid=!!normalizeHex(hex.value); hex.setAttribute('aria-invalid',String(!valid));
-    invalid.textContent=valid?'':'Use uma cor hexadecimal #RRGGBB.'; apply.disabled=!valid || !canAct() || !available;
+    const message=valid?'':'Use uma cor hexadecimal #RRGGBB.';
+    if(invalid.textContent!==message)invalid.textContent=message;
+    apply.disabled=!valid || !canAct() || !available;
     controls.forEach(control=>{control.disabled=!available||!canAct();});
     const preview=upgradeDocument(doc); preview.presentation={theme:'conecta',defaults:{...draft}};
-    warning.textContent=contrastText(preview);
+    const contrast=contrastText(preview); if(warning.textContent!==contrast)warning.textContent=contrast;
   }
   function show(tab, focus = false) {
     selected=tab; scope=tab==='colors'?scopeControl.value:'accent'; hex.value=draft[scope];
@@ -136,13 +139,13 @@ export function openStylePanel({ page, anchor, document: doc, onApply, canAct = 
   }
   for (const [key,text] of [['theme','Tema'],['typography','Tipografia'],['colors','Cores']]) tabs.append(button(text,()=>show(key),{id:`${prefix}-${key}`,role:'tab','aria-controls':`${prefix}-body`,'data-style-tab':key}));
   tabs.addEventListener('keydown',event=>{const keys=['theme','typography','colors'],i=keys.indexOf(selected);let next;if(event.key==='ArrowRight')next=keys[(i+1)%3];if(event.key==='ArrowLeft')next=keys[(i+2)%3];if(event.key==='Home')next=keys[0];if(event.key==='End')next=keys[2];if(next){event.preventDefault();show(next,true);}});
-  content.append(note,tabs,body,invalid,warning,apply);
+  content.append(note,tabs,body,invalid,warning);
+  const actions=el('div',{className:'pages-panel-actions'},apply);
   if(!available)content.append(el('p',{role:'status',text:'O servidor não permite escrita v3. Os presets legados continuam disponíveis abaixo.'}));
   if (onLegacy) content.append(el('details',{className:'pages-style-legacy'},el('summary',{text:'Estilo legado dos blocos existentes'}),el('p',{text:'Altera somente os blocos existentes, sem criar herança.'}),button('Abrir presets legados',()=>{if(!current())return;close(false);onLegacy();})));
-  panel=openEditorPanel({page,anchor,title:'Estilo da página',content,className:'pages-page-style-panel'});
+  panel=openEditorPanel({page,anchor,anchorOffset:10,title:'Estilo da página',content,actions,className:'pages-page-style-panel'});
   // Native close/Escape also retires callbacks, even when a detached control is held.
   panel.dialog.addEventListener('close',()=>{closed=true;});
-  if (anchor && window.innerWidth>=1100) { const box=anchor.getBoundingClientRect(); panel.dialog.style.setProperty('--panel-left',`${Math.max(16,Math.min(box.left+10,window.innerWidth-416))}px`); panel.dialog.style.setProperty('--panel-top',`${Math.max(16,Math.min(box.bottom,window.innerHeight-100))}px`); }
   for (const control of controls) bindNative?.(control,()=>{if(control===hex)hex.value=draft[scope];else if(control===scopeControl)scopeControl.value=scope;else control.value=draft[control===font?'font':control===scale?'scale':'align'];},()=>!available,()=>!closed&&panel.dialog.isConnected);
   show('theme'); return {close,dialog:panel.dialog};
 }

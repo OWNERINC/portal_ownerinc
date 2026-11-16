@@ -53,6 +53,33 @@ com 320/390/768/1366 px, painel aberto, busy/ACK/503, perda de ACK após COMMIT 
 replay sem revisão duplicada, edição durante save, Mod+S, conflito e permissões.
 PGlite serializado não representa concorrência nativa PostgreSQL ou produção.
 
+Modais de tarefa (`openPagesDialog`, com o mesmo retorno `dialog`) têm scrim,
+centralização e margem mínima de 16 px na área visual disponível. Cabeçalho com X
+nomeado e ações ficam fora do corpo rolável; os controles de conteúdo são retidos,
+não clonados. Cancelar recebe foco inicial. Escape, X, Cancelar e histórico respeitam
+busy/composição; erro libera retry/cancelamento. Cleanup da visita força descarte,
+sem restauração de foco nem atualização tardia de controles removidos. Clique fora
+não descarta formulário. O opener opcional permite retornar ao Link da toolbar sem
+depender de pointerdown mover o foco do editor.
+
+Inserir, Estilo e cor conservam `openEditorPanel` e sua semântica nativa de foco:
+âncora no desktop e área segura central no compacto. A âncora de Estilo inclui seu
+deslocamento de 10 px em um único cálculo **antes** de `showModal`, sem reposicionar
+depois da abertura. Resize/viewport, scroll e ResizeObserver do acionador/container
+acompanham reflow; fechar libera esses listeners. Estilo mantém rascunho local,
+Aplicar explícito e rodapé fora do scroller; clique fora não descarta. Inputs/selects
+textuais têm 44 px e fonte de 16 px no compacto; checkboxes mantêm indicadores de
+18–20 px em linhas de 44 px, sem herdar padding/altura de campo textual. Dispositivo
+e Zoom usam suas classes próprias também quando movidos para Mais ações.
+
+`node tests/visual/check-pages-controls.mjs overlays` usa o mesmo harness local e
+variáveis do caso `menus`, em 1366×768 e 320/390/768×768. Mede primeira frame e frames
+seguintes da âncora em aberturas repetidas, reflow, foco/IME/busy/erro/cleanup, campos,
+checkboxes e rodapé, sem substituir o documento aberto nem recriar EditorViews.
+`check-pages-style.mjs --strict-reference-geometry` preserva as asserções históricas
+do botão 36 px + pseudoalvo; o modo funcional registra a divergência intencional e
+exige alvo real de 44 px sem extensão sobre vizinhos. Não é aceite das pranchas.
+
 O desenvolvimento parte de `2cecbe8`, incluindo o aceite obrigatório do Código de
 Ética. Nenhuma rota Pages fica isenta desse gate. A autenticação continua sendo
 Firebase Bearer, validada pelo middleware existente com o perfil atual no banco.

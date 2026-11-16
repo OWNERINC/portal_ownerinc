@@ -14,6 +14,7 @@ const {chromium}=await import(pathToFileURL(resolve(process.env.PLAYWRIGHT_MODUL
 const require=createRequire(new URL('../../api/package.json',import.meta.url)),express=require('express');
 const h=await createPagesDatabaseHarness({v3WritesEnabled:true}),errors=[],outbound=[],results=[];
 const output=resolve(process.env.STYLE_VISUAL_OUTPUT||join(tmpdir(),'opencode','pages-style'));await mkdir(output,{recursive:true});
+const strictReferenceGeometry=process.argv.includes('--strict-reference-geometry');
 let browser;
 const blocks=doc=>doc.sections.flatMap(s=>s.rows.flatMap(r=>r.columns.flatMap(c=>c.blocks)));
 async function api(method,path,body){const r=await h.api(method,path,body,'super');assert.ok(r.status>=200&&r.status<300,`${method} ${path}: ${r.status} ${JSON.stringify(r.body)}`);return r.body;}
@@ -30,8 +31,14 @@ async function style(page){
       above:document.elementFromPoint(r.x+r.width/2,r.y-3.5)===n,
       below:document.elementFromPoint(r.x+r.width/2,r.bottom+3.5)===n};
   });
-  if(!hit.above||!hit.below)console.log('Apply hit diagnostic',await panel.locator('[data-apply-style]').evaluate(n=>{const r=n.getBoundingClientRect(),d=n.closest('dialog');return{button:r.toJSON(),dialog:d.getBoundingClientRect().toJSON(),scroll:d.scrollTop,above:document.elementFromPoint(r.x+r.width/2,r.y-3.5)?.outerHTML,below:document.elementFromPoint(r.x+r.width/2,r.bottom+3.5)?.outerHTML};}));
-  assert.deepEqual(hit,{width:129,height:36,top:'-4px',bottom:'-4px',above:true,below:true},'source paint and genuine 44px hit region');
+   if(strictReferenceGeometry&&(!hit.above||!hit.below))console.log('Apply hit diagnostic',await panel.locator('[data-apply-style]').evaluate(n=>{const r=n.getBoundingClientRect(),d=n.closest('dialog');return{button:r.toJSON(),dialog:d.getBoundingClientRect().toJSON(),scroll:d.scrollTop,above:document.elementFromPoint(r.x+r.width/2,r.y-3.5)?.outerHTML,below:document.elementFromPoint(r.x+r.width/2,r.bottom+3.5)?.outerHTML};}));
+   if(strictReferenceGeometry)assert.deepEqual(hit,{width:129,height:36,top:'-4px',bottom:'-4px',above:true,below:true},'source paint and genuine 44px hit region');
+   else {
+     results.push({intentionalGeometryDifference:'Apply is now an actual 44px control in a persistent footer, not the historical 36px paint + overlapping pseudo-target',actual:hit});
+     assert.equal(hit.width,129);assert.ok(hit.height>=44);assert.equal(hit.above,false);assert.equal(hit.below,false);
+     const geometry=await panel.evaluate(n=>{const d=n.getBoundingClientRect(),a=n.querySelector('[data-apply-style]').getBoundingClientRect();return{dialog:d.toJSON(),apply:a.toJSON()};});
+     assert.ok(geometry.apply.y>=geometry.dialog.y&&geometry.apply.bottom<=geometry.dialog.bottom,'retained Apply footer');
+   }
   await panel.getByRole('tab',{name:'Tema',exact:true}).scrollIntoViewIfNeeded();
   return panel;
 }
@@ -100,8 +107,9 @@ try{
   await panel.getByRole('combobox',{name:'Fonte da página',exact:true}).selectOption('oswald');await panel.getByRole('combobox',{name:'Tamanho da página',exact:true}).selectOption('large');
   await panel.getByRole('tab',{name:'Cores',exact:true}).click();await panel.getByRole('textbox',{name:'Cor personalizada',exact:true}).fill('url(https://invalid.test)');assert.equal(await panel.getByRole('button',{name:'✓ Aplicar estilo',exact:true}).isDisabled(),true);
   await panel.getByRole('textbox',{name:'Cor personalizada',exact:true}).fill(' #123abc ');
-  const applyBox=await panel.locator('[data-apply-style]').boundingBox();
-  await page.mouse.click(applyBox.x+applyBox.width/2,applyBox.y-3.5);
+   const applyBox=await panel.locator('[data-apply-style]').boundingBox();
+   await page.mouse.click(applyBox.x+applyBox.width/2,applyBox.y-3.5);
+   if(!strictReferenceGeometry){assert.equal(await panel.count(),1,'outside the actual target does not apply');await panel.locator('[data-apply-style]').click();}
   await page.getByRole('dialog',{name:'Estilo da página',exact:true}).waitFor({state:'detached'});
   assert.equal(await rich.evaluate(n=>n===styleIdentity.node&&n.pmViewDesc===styleIdentity.view),true);
   await page.getByRole('button',{name:'Desfazer exclusão',exact:true}).click();assert.equal(await page.locator('#page-editor-root').getAttribute('data-save-state'),'saved','one undo restores exact pre-upgrade document');

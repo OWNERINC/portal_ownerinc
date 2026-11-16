@@ -48,6 +48,18 @@ por Chrome/PGlite. Aceite final das seis pranchas pertence à Task 18.
 
 ## Revisão editável de Pages (Task 15)
 
+### Controles e sobreposições (melhorias Task 5)
+
+`node tests/visual/check-pages-controls.mjs overlays` usa `PGLITE_MODULE_PATH`,
+`PLAYWRIGHT_MODULE_PATH` e um diretório **novo** em `PAGES_CONTROLS_OUTPUT`. Confere
+Link/vídeo/Estilo no workspace real, primeira frame da âncora, 1366×768, campos,
+checkboxes, foco, IME, busy/erro/retry e descarte. O formulário sintético de lifecycle
+usa o módulo de diálogo real sem substituir o documento do editor. Salvar permanece
+explícito; API/SQL descartáveis, identidades sintéticas e tráfego externo bloqueado.
+O check de estilo existente mantém `--strict-reference-geometry` para o alvo
+histórico; o modo funcional exige o novo alvo real de 44 px e classifica a diferença,
+sem sobrescrever referências ou declarar igualdade de capturas antigas.
+
 `node tests/visual/check-pages-review.mjs` usa as instalações externas indicadas por
 `PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e `AXE_MODULE_PATH`, além de
 `PAGES_REFERENCE_DIR` com os PNGs originais. Não instala dependências nem inicia

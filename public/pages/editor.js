@@ -285,9 +285,9 @@ export function mountPageEditor(page) {
       kind.addEventListener('change', () => { const applied = kind.value === 'paragraph' ? editor.paragraph() : editor.heading(Number(kind.value)); if (applied) textFormat = kind.value; else kind.value = textFormat; });
       const structure = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Parágrafos e títulos' }, kind);
       const lists = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Listas' }, toolbarCommand('Lista', () => editor.list(false)), toolbarCommand('Lista numerada', () => editor.list(true)), toolbarCommand('Remover lista', () => editor.unlist()));
-      const links = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Links' }, toolbarCommand('Link', () => {
+      const links = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Links' }, toolbarCommand('Link', event => {
           const input = el('input', { type: 'text', maxlength: 2048, placeholder: 'https://… ou /caminho' });
-          openPagesDialog({ page, title: 'Link no texto selecionado', content: field('Endereço HTTPS ou caminho do Portal', input), confirmText: 'Aplicar link', action: async () => {
+          openPagesDialog({ page, opener: event.currentTarget, title: 'Link no texto selecionado', content: field('Endereço HTTPS ou caminho do Portal', input), confirmText: 'Aplicar link', action: async () => {
             if (!safeLink(input.value)) throw new Error('Informe um endereço HTTPS sem credenciais ou um caminho iniciado por /.');
             editor.link(input.value);
           } });
