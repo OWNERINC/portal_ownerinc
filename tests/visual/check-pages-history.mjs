@@ -42,6 +42,11 @@ async function visit(path, origin = h.origin, uid = 'super') {
 const blocks = doc => doc.sections.flatMap(s => s.rows.flatMap(r => r.columns.flatMap(c => c.blocks)));
 const richDoc = text => ({type:'doc',content:[{type:'paragraph',content:[{type:'text',text}]}]});
 async function key(page, key = 'Control+z') { await page.keyboard.press(key); }
+async function advancedPosition(page) {
+  await pagesEditorOrganize(page);
+  const details = page.locator('.pages-inspector-advanced');
+  if (!await details.evaluate(n => n.open)) await details.locator('summary').first().click();
+}
 async function saved(page, id) {
   const r = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/pages/${id}/draft`);
   await page.getByRole('button', {name:/Salvar rascunho/}).click(); assert.equal((await r).status(), 200);
@@ -161,9 +166,12 @@ try {
     assert.equal(await page.evaluate(()=>!!identity.av&&!!identity.bv),true,'real PM root view descriptors exist');
     await pmA.click(); await pmA.press('Control+End'); await pmA.pressSequentially(' typed');
     await page.locator(`[data-block-id="${b.id}"] .pages-select-block`).click();
+    await advancedPosition(page);
+    await page.locator('.pages-legacy-presentation > summary').click();
     await page.getByRole('combobox',{name:'Fonte',exact:true}).selectOption('oswald');
     await pagesEditorOrganize(page);
     await page.locator(`[data-block-id="${a.id}"] .pages-select-block`).click();
+    await advancedPosition(page);
     await page.getByRole('button',{name:'Mover bloco para baixo',exact:true}).click();
     assert.deepEqual(await page.locator('.pages-editor-block').evaluateAll(ns=>ns.map(n=>n.dataset.blockId)),[b.id,a.id]);
     await pmA.focus(); await key(page);
@@ -185,9 +193,9 @@ try {
     assert.equal(await page.getByRole('button',{name:'Publicar',exact:true}).isDisabled(),true);
     await key(page,'Control+y'); assert.equal(await page.locator('#page-editor-root').getAttribute('data-save-state'),'saved');
     // Structural history shares delete recovery and restores valid selection.
-    await page.locator(`[data-block-id="${a.id}"] .pages-select-block`).click(); await page.getByRole('button',{name:'Duplicar',exact:true}).click();
+    await page.locator(`[data-block-id="${a.id}"] .pages-select-block`).click(); await advancedPosition(page); await page.getByRole('button',{name:'Duplicar',exact:true}).click();
     assert.equal(await page.locator('.ProseMirror').count(),3);
-    await page.getByRole('button',{name:'Excluir',exact:true}).click(); assert.equal(await page.locator('.ProseMirror').count(),2);
+    await advancedPosition(page); await page.getByRole('button',{name:'Excluir',exact:true}).click(); assert.equal(await page.locator('.ProseMirror').count(),2);
     await page.getByRole('button',{name:'Desfazer exclusão',exact:true}).click(); assert.equal(await page.locator('.ProseMirror').count(),3);
     await key(page); assert.equal(await page.locator('.ProseMirror').count(),2);
     await pagesEditorPageProperties(page);
@@ -269,7 +277,10 @@ try {
       const origin=`http://127.0.0.1:${server.address().port}`;
       for(const uid of ['super','publisher']) {
         const {page,context}=await visit(`/page-editor.html?id=${id}`,origin,uid);await pagesBrowserReady(page);await page.locator('.pages-document').waitFor();
-        assert.equal(await page.locator('.ProseMirror').count(),0);assert.equal(await page.getByRole('button',{name:/Salvar rascunho/}).count(),0);
+        assert.equal(await page.locator('.ProseMirror').count(),0);
+        const save=page.getByRole('button',{name:/Salvar rascunho/});
+        assert.equal(await save.count(),uid==='super'?1:0,'stable Save retained for author without v3 writer support; nonauthor cannot edit');
+        if(uid==='super')assert.equal(await save.isDisabled(),true,'read-only Save cannot write');
         await pagesEditorPageProperties(page);assert.equal(await page.getByRole('textbox',{name:'Título',exact:true}).isDisabled(),true);
         await key(page);await context.close();
       }

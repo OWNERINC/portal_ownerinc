@@ -126,6 +126,16 @@ export function createRichEditor({ host, content, onChange, onFocus, onSelection
     undo() { return composing || view.composing ? false : historyCommands ? historyCommands.undo() : command(undo); },
     redo() { return composing || view.composing ? false : historyCommands ? historyCommands.redo() : command(redo); },
     bookmark() { return bookmark(view.state); },
+    selectionFormat() {
+      const { doc, selection } = view.state;
+      const formats = new Set();
+      const collect = node => {
+        if (node.isTextblock) formats.add(node.type === schema.nodes.heading ? String(node.attrs.level) : 'paragraph');
+      };
+      if (selection.empty) collect(selection.$from.parent);
+      else doc.nodesBetween(selection.from, selection.to, node => { collect(node); return !node.isTextblock; });
+      return formats.size > 1 ? 'mixed' : formats.values().next().value || 'paragraph';
+    },
     get composing() { return composing || view.composing; },
     sync(content, selection) {
       if (composing || view.composing) return false;

@@ -593,3 +593,16 @@ FAQ e vídeo incorporado: mensagens por bloco/item/campo no tooltip e descriçã
 acessível, ação desabilitada e nenhum POST de publicação. `PREFLIGHT_VISUAL_OUTPUT`
 define o diretório de capturas e `results.json`. Identidade sintética e SQL em
 PGlite serializado não comprovam serviços nativos nem aceite das seis pranchas.
+# Text format and contextual video controls (Task 7)
+
+Run `node tests/visual/check-pages-controls.mjs text-video` with the existing
+`PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` and a **new** `PAGES_CONTROLS_OUTPUT`.
+This local integration uses actual Pages/PM/API in desktop and compact chrome;
+it does not replace an opened document. A separate synthetic surface checks the
+exact `selectionFormat()` API for headings, paragraph, mixed/nested/empty blocks
+and standalone undo/redo. Actual Guide edits cover format/selection/global undo,
+FAQ, selecting text before Link/color, retained PM identities, contextual private
+MP4/YouTube, invalid URL, file-picker cancellation, replacement cancellation,
+no iframe/thumbnail and no autosave. The existing media suite additionally tests
+real local MP4 bytes/upload/replacement/private reader guards. Its evidence variable
+is `MEDIA_VISUAL_OUTPUT`; history uses `HISTORY_VISUAL_OUTPUT`.

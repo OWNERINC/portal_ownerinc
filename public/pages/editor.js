@@ -118,6 +118,14 @@ export function mountPageEditor(page) {
   const editorKey = (blockId, itemId) => itemId ? `${blockId}:${itemId}` : blockId;
   const activeEditor = () => richEditors.get(editorKey(activeId, activeItemId));
   const bookmark = () => activeEditor()?.bookmark?.() || null;
+  function refreshTextSelection() {
+    const editor = activeEditor();
+    if (!contextTools || !editor) return;
+    // Compact chrome relocates the toolbar's groups into the inspector.
+    const kind = root.querySelector('[data-text-format]');
+    if (kind) kind.value = editor.selectionFormat();
+    root.querySelectorAll('[data-mark]').forEach(control => control.setAttribute('aria-pressed', String(editor.active(control.dataset.mark))));
+  }
   function historyBlocked() { return writePending || publishUncertain() || !!uploadRetry || nativeCompositions.size > 0 || [...richEditors.values()].some(editor => editor.composing); }
   function historyAction(direction) {
     if (historyBlocked() || !state[direction]()) return false;
@@ -275,23 +283,30 @@ export function mountPageEditor(page) {
     toolbar.append(inspectorUI.node);
     if(disclosures){inspectorUI.node.querySelector('.pages-inspector-advanced').open=disclosures.advanced;inspectorUI.node.querySelector('.pages-legacy-presentation').open=disclosures.legacy;}
     if (['rich_text','callout','faq'].includes(block.type)) {
-      const editor = activeEditor();
-      if (!editor) return;
+      if (!activeEditor()) return;
       const formats = el('div', { className: 'pages-format-tools', role: 'toolbar', 'aria-label': 'Formatação do texto selecionado' });
       const marks = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Estilo do texto' });
-      for (const [label, mark] of [['Negrito','strong'],['Itálico','em'],['Sublinhado','underline']]) marks.append(toolbarCommand(label, () => editor.mark(mark), { 'aria-pressed': String(editor.active(mark)), 'data-mark': mark }));
-      const kind = el('select', { 'aria-label': 'Formato do texto' }, el('option', { value: 'paragraph', text: 'Texto' }), el('option', { value: '2', text: 'Título 2' }), el('option', { value: '3', text: 'Título 3' }));
-      let textFormat = 'paragraph'; nativeField(kind, () => { kind.value = textFormat; });
-      kind.addEventListener('change', () => { const applied = kind.value === 'paragraph' ? editor.paragraph() : editor.heading(Number(kind.value)); if (applied) textFormat = kind.value; else kind.value = textFormat; });
+      for (const [label, mark] of [['Negrito','strong'],['Itálico','em'],['Sublinhado','underline']]) marks.append(toolbarCommand(label, () => activeEditor()?.mark(mark), { 'aria-pressed': String(activeEditor().active(mark)), 'data-mark': mark }));
+      const kind = el('select', { 'aria-label': 'Formato do texto', 'data-text-format': '' }, el('option', { value: 'paragraph', text: 'Texto' }), el('option', { value: '2', text: 'Título 2' }), el('option', { value: '3', text: 'Título 3' }), el('option', { value: 'mixed', text: 'Formatos mistos', disabled: true }));
+      const syncFormat = () => { kind.value = activeEditor()?.selectionFormat() || 'paragraph'; };
+      syncFormat(); nativeField(kind, syncFormat);
+      kind.addEventListener('change', () => {
+        const editor = activeEditor();
+        if (kind.value === 'paragraph') editor?.paragraph();
+        else if (['2','3'].includes(kind.value)) editor?.heading(Number(kind.value));
+        syncFormat();
+      });
       const structure = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Parágrafos e títulos' }, kind);
-      const lists = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Listas' }, toolbarCommand('Lista', () => editor.list(false)), toolbarCommand('Lista numerada', () => editor.list(true)), toolbarCommand('Remover lista', () => editor.unlist()));
+      const lists = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Listas' }, toolbarCommand('Lista', () => activeEditor()?.list(false)), toolbarCommand('Lista numerada', () => activeEditor()?.list(true)), toolbarCommand('Remover lista', () => activeEditor()?.unlist()));
       const links = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Links' }, toolbarCommand('Link', event => {
+          const editor = activeEditor(), selection = editor?.bookmark(), origin = state;
           const input = el('input', { type: 'text', maxlength: 2048, placeholder: 'https://… ou /caminho' });
           openPagesDialog({ page, opener: event.currentTarget, title: 'Link no texto selecionado', content: field('Endereço HTTPS ou caminho do Portal', input), confirmText: 'Aplicar link', action: async () => {
             if (!safeLink(input.value)) throw new Error('Informe um endereço HTTPS sem credenciais ou um caminho iniciado por /.');
+            if (state !== origin || activeEditor() !== editor || JSON.stringify(editor?.bookmark()) !== JSON.stringify(selection)) throw new Error('A seleção do texto mudou. Selecione o texto novamente.');
             editor.link(input.value);
           } });
-        }), toolbarCommand('Remover link', () => { if (editor.active('link')) editor.link(''); }));
+        }), toolbarCommand('Remover link', () => { const editor = activeEditor(); if (editor?.active('link')) editor.link(''); }));
       const history = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Histórico do texto' }, toolbarCommand('Desfazer texto', () => historyAction('undo'), { 'data-history': 'undo', disabled: !state.canUndo || historyBlocked() }), toolbarCommand('Refazer texto', () => historyAction('redo'), { 'data-history': 'redo', disabled: !state.canRedo || historyBlocked() }));
       const more = el('details', { className: 'pages-format-more' }, el('summary', { text: '•••', 'aria-label': 'Mais opções de texto' }), el('div', { className: 'pages-format-overflow' }, lists, history));
       unregisterTextMenu = menus.register(more);
@@ -351,8 +366,8 @@ export function mountPageEditor(page) {
             historyCommands: { undo: () => historyAction('undo'), redo: () => historyAction('redo') },
             canEdit: canEditContent, allowV3Marks: () => state.document.schema_version === 3 && v3Available(),
             onHistoryBoundary: () => state.closeHistoryGroup(), onComposition: () => update(),
-            onChange(content, meta = {}) { edit({ ...meta, group: `${block.id}:content` }, doc => { const value = findBlock(doc, block.id)?.block; if (!value) return false; value.content = content; }); }, onFocus() { if (activeId !== block.id) select(block.id); workspaceUI?.focusText(); },
-            onSelection() { if (activeId === block.id) contextTools?.querySelectorAll('[data-mark]').forEach(control => control.setAttribute('aria-pressed', String(richEditors.get(block.id)?.active(control.dataset.mark) || false))); }, onLimit() { page.toast('Limite: 100 mil caracteres e dois níveis de listas.'); } });
+            onChange(content, meta = {}) { edit({ ...meta, group: `${block.id}:content` }, doc => { const value = findBlock(doc, block.id)?.block; if (!value) return false; value.content = content; }); }, onFocus() { if (activeId !== block.id) select(block.id); refreshTextSelection(); workspaceUI?.focusText(); },
+            onSelection() { if (activeId === block.id) refreshTextSelection(); }, onLimit() { page.toast('Limite: 100 mil caracteres e dois níveis de listas.'); } });
           richEditors.set(block.id, editor);
         }
       } else if (['image','gif','audio','video','gallery','faq','video_embed'].includes(block.type)) {
@@ -369,13 +384,13 @@ export function mountPageEditor(page) {
           transact(meta, change) { return edit(meta, doc => { if (change(doc) === false) return false; const found = findBlock(doc, block.id); if (!found) return false; const candidate = clone(doc); findBlock(candidate, block.id).column.blocks.splice(found.index,1); return !!insertAt(candidate, { columnId: found.column.id, index: found.index, block: found.block }); }); },
           upload: (files,target) => { void upload(files[0], newId(), target, files.slice(1)); },
           onSource: id => openVideoSource(null, id),
-          onFocus(itemId) { const changed = activeId !== block.id || activeItemId !== itemId; if (changed) state.closeHistoryGroup(); activeItemId = itemId; if (activeId !== block.id) { activeId = block.id; select(block.id); } else if (changed) renderToolbar(); if (itemId && block.type === 'faq') workspaceUI?.focusText(); },
+          onFocus(itemId) { const changed = activeId !== block.id || activeItemId !== itemId; if (changed) state.closeHistoryGroup(); activeItemId = itemId; if (activeId !== block.id) { activeId = block.id; select(block.id); } else if (changed) renderToolbar(); refreshTextSelection(); if (itemId && block.type === 'faq') workspaceUI?.focusText(); },
           registerEditor: (itemId, editor) => richEditors.set(editorKey(block.id,itemId),editor),
           unregisterEditor: itemId => { richEditors.delete(editorKey(block.id,itemId)); if (activeId === block.id && activeItemId === itemId) { activeItemId = null; renderToolbar(); } },
           richOptions: { canEdit: canEditContent, allowV3Marks: () => state.document.schema_version === 3 && v3Available(), isLayoutDragging: () => layoutDragging,
             historyCommands: { undo: () => historyAction('undo'), redo: () => historyAction('redo') },
             onHistoryBoundary: () => state.closeHistoryGroup(), onComposition: () => update(),
-            onSelection(itemId) { if (activeId === block.id && activeItemId === itemId) contextTools?.querySelectorAll('[data-mark]').forEach(control => control.setAttribute('aria-pressed', String(activeEditor()?.active(control.dataset.mark) || false))); },
+            onSelection(itemId) { if (activeId === block.id && activeItemId === itemId) refreshTextSelection(); },
             onLimit: () => page.toast('Limite: 100 mil caracteres e dois níveis de listas.') },
           onChange: () => { figure?.refresh?.(); refreshNativeFields(); },
         });
@@ -545,8 +560,10 @@ export function mountPageEditor(page) {
     const source = el('select', { 'aria-label': 'Fonte do vídeo' }, el('option', { value: 'private', text: 'Upload MP4 privado' }), el('option', { value: 'youtube', text: 'Link incorporado do YouTube', disabled: !v3Available() }));
     const address = el('input', { type: 'url', maxlength: 2048, 'aria-label': 'URL do YouTube', placeholder: 'https://www.youtube.com/watch?v=…' });
     const warning = el('p', { text: 'YouTube é um serviço de terceiros. O vídeo externo não é privado pelo login do Portal. A leitura só conecta após consentimento no próprio aviso; não carregamos miniaturas ou player agora.' });
-    openPagesDialog({ page, title: blockId ? 'Trocar fonte do vídeo' : 'Adicionar vídeo', content: el('div', {}, field('Fonte', source), field('Link incorporado', address), warning,
-      el('p', { text: blockId ? 'Confirmar substitui a fonte deste bloco. Cancelar mantém o conteúdo anterior. Os arquivos históricos não são excluídos.' : 'Escolha um arquivo MP4 privado ou informe um link válido. Cancelar não cria bloco.' })), confirmText: 'Confirmar fonte', action: async () => {
+    const external = el('div', {}, field('URL do YouTube', address), warning);
+    const privateHelp = el('p', { text: 'Escolha um arquivo MP4 privado. O acesso ao arquivo permanece protegido pelo login e pelas permissões do Portal.' });
+    const dialog = openPagesDialog({ page, title: blockId ? 'Trocar fonte do vídeo' : 'Adicionar vídeo', content: el('div', {}, field('Fonte', source), privateHelp, external,
+      el('p', { text: blockId ? 'Confirmar substitui a fonte deste bloco. Cancelar mantém o conteúdo anterior. Os arquivos históricos não são excluídos.' : 'Cancelar não cria bloco.' })), confirmText: 'Escolher MP4', action: async feedback => {
       if (!live() || state !== origin || sequence !== loadSequence || !canEditContent()) throw Error('Edição indisponível.');
       const previous = blockId && findBlock(state.document, blockId)?.block;
       if (blockId && !['video','video_embed'].includes(previous?.type)) throw Error('O vídeo de destino não está mais disponível.');
@@ -555,7 +572,12 @@ export function mountPageEditor(page) {
         uploadInput.accept = mediaAccept('video'); uploadInput.value = ''; uploadInput.click(); return;
       }
       if (!v3Available()) throw Error('O servidor não permite escrita v3.');
-      const identity = parseYouTubeURL(address.value); if (!identity) throw Error('Informe uma URL HTTPS válida do YouTube (watch, shorts, embed ou youtu.be).');
+      const identity = parseYouTubeURL(address.value);
+      if (!identity) {
+        feedback.id = feedback.id || `pages-video-error-${newId()}`;
+        address.setAttribute('aria-describedby', feedback.id); address.setAttribute('aria-invalid', 'true');
+        throw Error('Informe uma URL HTTPS válida do YouTube (watch, shorts, embed ou youtu.be).');
+      }
       const value = { id: blockId || newId(), type: 'video_embed', ...identity, title: previous?.title || '', transcript: previous?.transcript || '' };
       for (const key of ['style','appearance','tags']) if (previous?.[key] !== undefined) value[key] = clone(previous[key]);
       const next = editV3(state.document, doc => {
@@ -567,6 +589,16 @@ export function mountPageEditor(page) {
       if (!applyComposition(next)) throw Error('Destino ou limites do documento indisponíveis.');
       activeId = value.id; activeItemId = null; select(value.id);
     } });
+    const syncSource = () => {
+      const youtube = source.value === 'youtube';
+      external.hidden = !youtube; privateHelp.hidden = youtube; address.disabled = !youtube;
+      address.removeAttribute('aria-invalid'); address.removeAttribute('aria-describedby');
+      dialog.querySelector('[role="alert"]').textContent = '';
+      dialog.querySelector('.pages-actions .btn-primary').textContent = youtube ? (blockId ? 'Aplicar fonte' : 'Inserir vídeo') : 'Escolher MP4';
+    };
+    source.addEventListener('change', syncSource);
+    address.addEventListener('input', () => { address.removeAttribute('aria-invalid'); });
+    syncSource();
   }
   function openInsertion(anchor, point = insertionPoint(state.document, { blockId: activeId })) {
     if (!state.editable || state.blocked || writePending || uploadRetry || state.status === 'conflict') return;

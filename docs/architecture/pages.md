@@ -370,6 +370,28 @@ o mecanismo de layout da página. Dependências do editor são locais, fixadas p
 lockfile, com bundle gerado reproduzível e avisos de licença; sem CDN ou migração
 de framework. SortableJS entra no lote de composição, fixado e incluído no mesmo bundle local.
 
+`createRichEditor.selectionFormat()` lê os textblocks da seleção ProseMirror e
+retorna exatamente `paragraph`, `2`, `3` ou `mixed` (também para respostas de FAQ).
+O select acompanha foco, seleção e histórico global, inclusive quando os grupos
+do toolbar mudam para o inspector compacto. `mixed` é informativo/disabled; não
+é comando. A atualização não reconstrói EditorViews nem deriva do último comando.
+Os comandos resolvem o editor ativo ao acionar; Link captura sua seleção somente
+ao abrir a tarefa e rejeita uma identidade/seleção que tenha mudado.
+
+Fonte de vídeo mantém o fluxo de upload existente: MP4 mostra explicação privada
+e `Escolher MP4`, sem campo/aviso do YouTube. YouTube mostra URL e aviso externo,
+com `Inserir vídeo` ou `Aplicar fonte` na substituição. URL inválida mantém o modal
+aberto com erro associado ao campo. Trocar o select não altera o documento;
+cancelar o modal/seletor mantém a fonte anterior. Edição não busca iframe nem
+miniatura externa; o consentimento de leitura permanece obrigatório.
+
+`node tests/visual/check-pages-controls.mjs text-video` usa o harness local com
+PGlite/Chrome e um novo `PAGES_CONTROLS_OUTPUT`. Exercita API real (incluindo listas
+e parágrafo vazio numa superfície sintética separada), H2→H3→texto, seleção mista,
+troca de blocos/FAQ, undo, Link/cor com seleção prévia e vídeo contextual em 1366/390.
+Confere identidade PM e ausência de autosave. Complementar com os runners de mídia
+e histórico e `npm run build:pages && npm run check:pages-build` após tocar o source.
+
 Salvamento inicial é explícito. A baseline só avança após confirmação do servidor
 e somente para a fotografia enviada. Digitação posterior continua dirty. Falha,
 conflito e operação com resposta incerta não anunciam publicação ou salvamento.

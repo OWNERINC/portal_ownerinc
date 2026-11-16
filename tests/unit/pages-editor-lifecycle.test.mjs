@@ -41,11 +41,17 @@ async function harness(t, { dialogs, support, document: initialDocument, mobile 
     AbortController, DOMException, setTimeout, clearTimeout, cancelAnimationFrame() {}, createPagesAPI: () => api,
     createSortable: (host, options) => { const sortable = { host, options, destroy() {} }; sortables.push(sortable); return sortable; }, applyBlockStyle() {}, richNode() {},
     createRichEditor({ content, blockId, itemId, onChange, onFocus, onSelection, isLayoutDragging, historyCommands }) {
-      const editor = { content, itemId, historyCommands, bookmark: () => ({blockId,...(itemId ? {itemId} : {}),from:1,to:1}), sync(content) { this.content = content; }, destroyed: 0, destroy() { this.destroyed++; }, onChange, onFocus, onSelection, isLayoutDragging, marks: new Set(), active(mark) { return this.marks.has(mark); }, focus() {} }; editors.push(editor); return editor;
+      const editor = { content, itemId, historyCommands, format: 'paragraph', selectionFormat() { return this.format; }, bookmark: () => ({blockId,...(itemId ? {itemId} : {}),from:1,to:1}), sync(content) { this.content = content; }, destroyed: 0, destroy() { this.destroyed++; }, onChange, onFocus, onSelection, isLayoutDragging, marks: new Set(), active(mark) { return this.marks.has(mark); }, focus() {} }; editors.push(editor); return editor;
     },
     imageFigure() { const figure = { node: doc.createElement('figure'), destroyed: 0, dispose() { figure.destroyed++; } }; figures.push(figure); return figure; },
     mediaFigure(block, options) { const figure = { node: doc.createElement('figure'), block, options, refreshed: 0, destroyed: 0, refresh() { figure.refreshed++; }, dispose() { figure.destroyed++; } }; figures.push(figure); return figure; },
-    renderDocument: () => () => {}, openPagesDialog(options) { if (dialogs) { dialogs.push(options); return {}; } assert.fail('This test does not open dialogs'); },
+    renderDocument: () => () => {}, openPagesDialog(options) {
+      if (!dialogs) assert.fail('This test does not open dialogs');
+      const dialog=doc.createElement('dialog'),feedback=doc.createElement('p'),actions=doc.createElement('div'),confirm=doc.createElement('button');
+      feedback.setAttribute('role','alert'); actions.className='pages-actions'; confirm.className='btn btn-primary';
+      actions.append(confirm); dialog.append(options.content,feedback,actions);
+      dialogs.push({...options,action:()=>options.action(feedback)}); return dialog;
+    },
   });
   async function load(file, names, transform = source => source) {
     const source = transform((await readFile(file, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, ''));
@@ -632,6 +638,18 @@ test('V2 moved formatting controls reflect caret marks without rebuilding the to
   assert.equal(italic.getAttribute('aria-pressed'), 'true');
   assert.equal(h.root.querySelector('[data-mark="strong"]'), bold);
   assert.equal(pm.destroyed, 0);
+});
+
+for (const mobile of [false,true]) test(`selection format reflects focus/selection without recreating controls (compact=${mobile})`, async t => {
+  const h=await harness(t,{mobile}),pm=h.editors[0];
+  const kind=h.root.querySelector('[data-text-format]');
+  for(const format of ['2','3','paragraph','mixed']) {
+    pm.format=format; pm.onSelection(); assert.equal(kind.value,format);
+    assert.equal(h.root.querySelector('[data-text-format]'),kind);
+  }
+  pm.format='2'; pm.onFocus(); assert.equal(kind.value,'2');
+  assert.equal(kind.querySelector('[value="mixed"]').disabled,true);
+  assert.equal(pm.destroyed,0);
 });
 
 test('localized presentation options retain enum values and keyed editors; selection-only updates preserve toolbar controls', async t => {
