@@ -106,6 +106,15 @@ históricas com `--strict-reference-typography`; o funcional distingue metadados
 Guia 14/12 px de títulos genéricos 32/16 px e redimensiona o viewport autoritativo
 em vez de disputar a largura da superfície com seu ResizeObserver.
 
+O mesmo assertor de alvos do caso responsivo é repetido por combinação em uma
+matriz de 648 chaves distintas (três esquemas, dois modos, dois zooms de browser,
+três zooms de canvas, nove larguras CSS e duas alturas CSS). Para browser 200%,
+viewport físico 2× produz cada largura/altura CSS exata, confirmada com DPR 2 e
+pinch 1. Cada linha verifica geometria/pseudoalvos, contenção, colisão e hit-testing
+das quatro bordas; selects nativos não são isentos. Disabled conserva verificações
+de geometria/colisão sem afirmar ativação. A cor laranja computada, a presença de
+strong e seu peso >=700 são exigidos também em prévia, sem depender apenas de axe.
+
 O desenvolvimento parte de `2cecbe8`, incluindo o aceite obrigatório do Código de
 Ética. Nenhuma rota Pages fica isenta desse gate. A autenticação continua sendo
 Firebase Bearer, validada pelo middleware existente com o perfil atual no banco.

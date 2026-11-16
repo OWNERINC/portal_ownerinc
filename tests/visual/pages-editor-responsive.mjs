@@ -5,6 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { pagesBrowserContext, pagesBrowserReady } from '../helpers/pages-browser.mjs';
 import { pageDocument } from '../database/check-pages.mjs';
+import { measureResponsiveTargets, assertResponsiveTargets, checkResponsiveTargetMatrix } from './pages-editor-responsive-targets.mjs';
 
 export async function checkResponsive({ h, browser, output, results, errors }) {
   const { default: AxeBuilder } = await import(pathToFileURL(process.env.AXE_MODULE_PATH));
@@ -21,37 +22,15 @@ export async function checkResponsive({ h, browser, output, results, errors }) {
     for (const width of [320,390,599,600,768,1099,1100,1366,1600]) for (const height of [640,768]) {
       await p.setViewportSize({ width, height });
       await p.evaluate(() => new Promise(requestAnimationFrame));
-      const geometry = await p.evaluate(() => {
-        const tools = document.querySelector('.pages-v2-tools'), viewport = document.querySelector('.pages-v2-viewport');
-        const rect = n => { const r = n.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right }; };
-        const controls = [...tools.querySelectorAll('button,select,summary')].filter(n => n.checkVisibility());
-        return { tools:rect(tools), viewport:rect(viewport), controls:controls.map(n => {
-          const r=rect(n), s=getComputedStyle(n,'::after');
-          const inset = key => s.content === '""' ? Math.min(0,parseFloat(s[key]) || 0) : 0;
-          const target={ x:r.x+inset('left'), y:r.y+inset('top'), right:r.right-inset('right'), bottom:r.bottom-inset('bottom'), width:r.width-inset('left')-inset('right'), height:r.height-inset('top')-inset('bottom') };
-          // Native selects and disabled history controls cannot activate here;
-          // Test edge midpoints, not the deliberately rounded outer corners.
-          const hit=n.disabled || n.tagName==='SELECT' || [[(target.x+target.right)/2,target.y+2],[(target.x+target.right)/2,target.bottom-2],[target.x+2,(target.y+target.bottom)/2],[target.right-2,(target.y+target.bottom)/2]].every(([x,y]) => n.contains(document.elementFromPoint(x,y)));
-          return { name:n.getAttribute('aria-label') || n.textContent, ...r, target, hit };
-        }), overflow:document.documentElement.scrollWidth > innerWidth };
-      });
+      const geometry = await measureResponsiveTargets(p);
       const label = `${width}x${height}`;
-      check(geometry.viewport.y >= geometry.tools.bottom, `${label}: viewport below toolbar`);
-      for (const c of geometry.controls) {
-        check(c.bottom <= geometry.tools.bottom + .5 && c.y >= geometry.tools.y, `${label}: local toolbar containment ${c.name}`);
-        check(c.x >= 0 && c.right <= width, `${label}: horizontal control clipping ${c.name}`);
-        check(c.target.width >= 44 && c.target.height >= 44, `${label}: 44px target ${c.name}`);
-        check(c.hit, `${label}: target hit testing ${c.name}`);
-      }
-      for (let i=0;i<geometry.controls.length;i++) for(let j=i+1;j<geometry.controls.length;j++) {
-        const a=geometry.controls[i].target,b=geometry.controls[j].target;
-        check(Math.min(a.right,b.right)-Math.max(a.x,b.x)<=.5 || Math.min(a.bottom,b.bottom)-Math.max(a.y,b.y)<=.5, `${label}: adjacent toolbar targets overlap`);
-      }
-      check(!geometry.overflow, `${label}: document horizontal overflow`);
+      assertResponsiveTargets(geometry,check,label);
       check(await p.getByText('Prévia · conteúdo ilustrativo', { exact:true }).count() === 0, `${label}: honest mode message`);
       check(await p.locator('.pages-v2-mobile-notice').textContent() === 'Edição', `${label}: editing message`);
       const typography = await p.locator('[data-guide-block] .ProseMirror h2').evaluateAll(nodes => nodes.map(n => ({ size:parseFloat(getComputedStyle(n).fontSize), canonical:parseFloat(getComputedStyle(n.closest('[data-guide-block]')).getPropertyValue('--pages-h2-size')), weight:getComputedStyle(n.querySelector('strong') || n).fontWeight, color:getComputedStyle(n.querySelector('[data-pages-text_color]') || n).color })));
       for(const t of typography) check(t.size === t.canonical, `${label}: canonical title size ${JSON.stringify(t)}`);
+      const orange=typography.find(t=>t.color==='rgb(232, 79, 28)');
+      check(!!orange && Number(orange.weight)>=700,`${label}: persisted orange and canonical strong weight ${JSON.stringify(orange)}`);
       const textClipping=await p.locator('[data-guide-block] .ProseMirror h2').evaluateAll(nodes=>nodes.map(n=>{const range=document.createRange();range.selectNodeContents(n);const b=n.closest('.pages-editor-block').getBoundingClientRect();const lines=[...range.getClientRects()].map(r=>({left:r.left,right:r.right,top:r.top,bottom:r.bottom}));return{block:{left:b.left,right:b.right,top:b.top,bottom:b.bottom},lines,contained:lines.every(r=>r.left>=b.left-.5&&r.right<=b.right+.5&&r.top>=b.top-.5&&r.bottom<=b.bottom+.5)};}));
       check(textClipping.every(t=>t.contained),`${label}: heading line ranges stay within their local blocks ${JSON.stringify(textClipping.filter(t=>!t.contained))}`);
       const axe = await new AxeBuilder({ page:p }).include('[data-guide-block=rich_text] .ProseMirror h2').withRules(['color-contrast']).analyze();
@@ -196,5 +175,8 @@ export async function checkResponsive({ h, browser, output, results, errors }) {
     await writeFile(join(output,'responsive-failures.json'), JSON.stringify(failures,null,2));
     await context.close();
   }
+  try {await checkResponsiveTargetMatrix({h,browser,output,results,errors,check,guideId:created.body.id});}
+  finally {await writeFile(join(output,'responsive-failures.json'),JSON.stringify(failures,null,2));}
+  assert.equal(results.filter(r=>r.targetMatrix).length,648,'review contract: full schema/mode/browser/canvas/width/height target matrix is measured, not inferred');
   assert.deepEqual(failures, []);
 }

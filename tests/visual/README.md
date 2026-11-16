@@ -74,6 +74,20 @@ em tempo de execução e falha se não conseguir provar esse zoom. Também regis
 a tentativa de atalho headless e a evidência de reflow equivalente, sem confundi-las
 com o zoom nativo. Nenhum perfil pessoal ou serviço existente é usado.
 
+O subcaso `pages-editor-responsive-targets.mjs` executa o mesmo medidor/assertor de
+alvos em **648 combinações únicas**: v1/v2/v3 × edição/prévia × browser 100/200%
+× canvas 50/100/150% × as nove larguras CSS × alturas CSS 640/768. Não infere
+colisões ou hit-testing de uma combinação para outra. Mede os pseudoalvos, seus
+quatro pontos de borda, contenção local, tamanho mínimo e colisões; selects nativos
+também recebem hit-testing. Controles disabled mantêm tamanho/colisões verificados,
+mas não se afirma ativação de seus pontos de borda (os resultados brutos ficam
+registrados). No zoom nativo 200%, o viewport físico é duplicado para produzir
+EXATAMENTE as nove larguras/duas alturas CSS requeridas; cada linha registra ambos,
+DPR 2 e escala pinch 1. `target-matrix.json` guarda todas as medições e o check
+exige 648 chaves distintas. Título v3 exige cor computada `rgb(232, 79, 28)`, strong
+real, peso computado >=700 e tamanho canônico 20 px em cada combinação de ambos
+os modos. Axe continua completo no caso principal, sem repetição por combinação.
+
 O renderer funcional distingue a tipografia canônica dos metadados do Guia
 (14/12 px) da antiga asserção genérica (32/16 px), ainda preservada com
 `node tests/visual/check-pages-renderer-v3.mjs --strict-reference-typography`.
