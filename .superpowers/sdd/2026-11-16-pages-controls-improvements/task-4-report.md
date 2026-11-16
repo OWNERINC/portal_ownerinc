@@ -208,3 +208,62 @@ were preserved; this report lives alongside the current Task 1–3 reports.
 
 Commit subject: `fix(pages): expose actionable publication issues`.
 Base: `ec87971`; resulting hash is supplied in the completion response.
+
+## Review follow-up — FAQ correction toolbar identity
+
+Parent review identified an Important issue in `onIssue`: `select(blockId)` built
+formatting controls before `activeItemId` changed. Because these controls capture
+`activeEditor()`, switching from answer A to Correct B could leave the controls
+bound to A; the subsequent focus handler saw the already-assigned B identity and
+did not rebuild. Entering FAQ from another block could omit its formatting controls.
+
+Fixed locally in the correction callback, without changing shared controllers:
+close the history group when block/item identity changes, establish both
+`activeId` and `activeItemId`, then call the existing `select()` once. Toolbar
+creation now sees the complete intended identity. No PM view is recreated and no
+publication/session/retry/permission logic changes.
+
+`pages-editor-review-controls.mjs` now runs an independent real-template regression
+at 320/390/768/1366px before each existing scenario. A small helper reuses the
+existing source-observation hook; it does not replace the document or inject edits.
+The browser focuses answer A, opens review, corrects empty answer B, immediately
+clicks Negrito (without another caret interaction), and types. It then selects an
+unrelated rich-text block, corrects empty answer A, immediately clicks Itálico and
+types. Both paths assert the focused editor, compare the entire schema JSON to an
+independently constructed expected document, preserve all original PM view
+identities, explicitly Save, and compare actual SQL JSON. Thus the other answer,
+all unrelated blocks/metadata and schema version must remain unchanged. Existing
+issue/race/axe/geometry coverage is unchanged. Per-width evidence includes
+`*-correction-formatting.png`; `review.json` records both regression and original
+scenario results.
+
+Using the environment variables documented above and fresh output directories:
+
+- **Red**, before product fix:
+  `PAGES_CONTROLS_OUTPUT=.../pages-task4-format-red-20261116a`;
+  `node tests/visual/check-pages-controls.mjs review` exited 1 at 320px:
+  `A→Correct B→immediate bold edits only B, including schema JSON`.
+  The diff showed the strong-marked “Resposta B 320” in **A**, with **B still empty**.
+  This is the reported product failure, not a harness/setup failure.
+- **Green**, after the localized fix:
+  `PAGES_CONTROLS_OUTPUT=.../pages-task4-format-green-20261116a`;
+  same command exited 0, both formatting routes and original issue coverage at all
+  four widths, zero page errors. No assertions or historical source checks weakened.
+- `node tests/visual/check-pages-review.mjs`,
+  `REVIEW_VISUAL_OUTPUT=.../pages-task4-format-review-20261116a`: **PASS 6 groups**.
+  Output log: `pages-task4-format-review-20261116a.log`; intentional geometry
+  differences remain classified and strict source assertions remain available.
+- `node tests/visual/check-pages-publication-preflight.mjs`,
+  `PREFLIGHT_VISUAL_OUTPUT=.../pages-task4-format-preflight-20261116a`:
+  **PASS 2 groups**.
+- Same five-file focused unit command from step 6 above: **99 passed, 0 failed,
+  0 skipped**; `pages-task4-format-units-20261116a.log`.
+- `npm run verify`: **verify: ok; 1210 tests, 1207 passed, 0 failed, 3 existing
+  skips**, plus syntax/security/Compose;
+  `pages-task4-format-verify-20261116a.log`.
+- Localized follow-up diff reviewed inline; `git diff --check` passed before commit.
+  No additional agents, backend, dependencies, production or broad controller work.
+
+Follow-up base: `8ececf9`. Follow-up commit hash is supplied in the completion
+response. No remaining blocker found for this review item; prior evidence limits
+still apply.

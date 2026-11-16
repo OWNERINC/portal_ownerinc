@@ -5,21 +5,73 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { pagesBrowserContext, pagesBrowserReady } from '../helpers/pages-browser.mjs';
 
+async function observeEditor(context) {
+  await context.route('**/pages/editor.js',async route=>{
+    const source=await readFile(new URL('../../public/pages/editor.js',import.meta.url),'utf8');
+    await route.fulfill({contentType:'text/javascript',body:source.replace('  void load();\n}', '  globalThis.__issueTest=()=>({state,update});\n  void load();\n}')});
+  });
+}
+
+async function checkCorrectionFormatting({h,browser,output,results,errors,width,ready}) {
+  const created=await h.api('post','',{template_id:'guia-interno',client_mutation_id:randomUUID()},'super');
+  assert.equal(created.status,201);
+  const sql=async()=>(await h.db.query('SELECT r.document FROM pages p JOIN page_revisions r ON r.id=p.draft_revision_id WHERE p.id=$1',[created.body.id])).rows[0].document;
+  const expected=await sql(), blocks=expected.sections.flatMap(s=>s.rows.flatMap(r=>r.columns.flatMap(c=>c.blocks)));
+  const faq=blocks.find(b=>b.type==='faq'),[a,b]=faq.items;
+  const {page:p,context}=await pagesBrowserContext(browser,{width,errors,touch:width<1100});
+  p.setDefaultTimeout(5000);
+  try {
+    await observeEditor(context);
+    await p.goto(`${h.origin}/page-editor.html?id=${created.body.id}`);await pagesBrowserReady(p);
+    await p.locator('.ProseMirror').first().waitFor();
+    await p.evaluate(()=>{globalThis.__formatViews=[...document.querySelectorAll('.ProseMirror')].map(node=>({node,view:node.pmViewDesc}));});
+    const answerA=p.locator(`[data-media-item-id="${a.id}"]`);
+    await answerA.locator('summary').click();await answerA.locator('.ProseMirror').click();
+    const dialog=p.locator('.pages-publication-dialog');
+    const open=async()=>{await p.getByRole('button',{name:'Publicar',exact:true}).click();await ready(p);};
+    const correction=async index=>{await dialog.locator('[data-publication-issue="faq_answer_required"]').nth(index).getByRole('button').click();};
+    const retained=async()=>assert.equal(await p.evaluate(()=>__formatViews.every(x=>x.node.isConnected&&x.node.pmViewDesc===x.view)),true,'correction/formatting retain every original PM view');
+    const snapshot=()=>p.evaluate(()=>JSON.parse(JSON.stringify(__issueTest().state.document)));
+    const save=async()=>{await p.getByRole('button',{name:'Salvar rascunho',exact:true}).click();await p.locator('#page-editor-root[data-save-state=saved]').waitFor();};
+    const prose=(text,mark)=>({type:'doc',content:[{type:'paragraph',content:[{type:'text',marks:[{type:mark}],text}]}]});
+
+    // Starting in answer A, correct B and use the toolbar before any new caret
+    // interaction can accidentally repair the captured activeEditor identity.
+    await open();await correction(1);
+    assert.equal(await p.locator(`[data-faq-answer="${b.id}"] .ProseMirror`).evaluate(n=>n===document.activeElement),true);
+    await p.locator('[data-mark="strong"]:visible').click();await p.keyboard.type(`Resposta B ${width}`);
+    b.answer=prose(`Resposta B ${width}`,'strong');
+    assert.deepEqual(await snapshot(),expected,'A→Correct B→immediate bold edits only B, including schema JSON');
+    await retained();await save();assert.deepEqual(await sql(),expected,'bold B persists through actual Save/SQL');
+
+    // Enter the FAQ from an unrelated rich-text block: toolbar must exist and
+    // bind answer A immediately, not the old block or answer B.
+    const other=blocks.find(block=>block.type==='rich_text');
+    await p.locator(`[data-block-id="${other.id}"] .ProseMirror`).click();
+    await open();await correction(0);
+    assert.equal(await p.locator(`[data-faq-answer="${a.id}"] .ProseMirror`).evaluate(n=>n===document.activeElement),true);
+    await p.locator('[data-mark="em"]:visible').click();await p.keyboard.type(`Resposta A ${width}`);
+    a.answer=prose(`Resposta A ${width}`,'em');
+    assert.deepEqual(await snapshot(),expected,'other block→Correct A→immediate italic edits only A, preserving B and all other schema');
+    await retained();await save();assert.deepEqual(await sql(),expected);
+    await p.screenshot({path:join(output,`${width}-correction-formatting.png`)});
+    results.push({width,scenario:'correction-formatting',answerA:a.id,answerB:b.id,passed:true});
+  } finally {await context.close();}
+}
+
 export async function checkReview({ h, browser, output, results, errors }) {
   assert.ok(process.env.AXE_MODULE_PATH,'Set external AXE_MODULE_PATH for review accessibility checks');
   const {default:AxeBuilder}=await import(pathToFileURL(process.env.AXE_MODULE_PATH));
   const ready=p=>p.waitForFunction(()=>document.querySelector('.pages-review-checks input')?.disabled===false);
   for(let i=0;i<24;i++)await h.db.query('INSERT INTO job_titles (id,name) VALUES ($1,$2)',[randomUUID(),`Cargo adicional sintético ${i+1}`]);
   for (const width of [320, 390, 768, 1366]) {
+    await checkCorrectionFormatting({h,browser,output,results,errors,width,ready});
     const created = await h.api('post', '', { template_id: 'guia-interno', client_mutation_id: randomUUID() }, 'super');
     assert.equal(created.status, 201);
     const { page: p, context } = await pagesBrowserContext(browser, { width, errors, touch: width < 1100 });
     p.setDefaultTimeout(5000);
     try {
-      await context.route('**/pages/editor.js',async route=>{
-        const source=await readFile(new URL('../../public/pages/editor.js',import.meta.url),'utf8');
-        await route.fulfill({contentType:'text/javascript',body:source.replace('  void load();\n}', '  globalThis.__issueTest=()=>({state,update});\n  void load();\n}')});
-      });
+      await observeEditor(context);
       await p.goto(`${h.origin}/page-editor.html?id=${created.body.id}`); await pagesBrowserReady(p);
       await p.locator('.ProseMirror').first().waitFor();
       await p.evaluate(()=>{globalThis.__issueViews=[...document.querySelectorAll('.ProseMirror')].map(node=>({node,view:node.pmViewDesc}));});

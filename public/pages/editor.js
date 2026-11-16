@@ -672,7 +672,11 @@ export function mountPageEditor(page) {
             control=root.querySelector('.pages-audience input:not(:disabled)')||summary;
           }else control=root.querySelector('.pages-metadata-title input');
         }else{
-          select(target.blockId);activeItemId=target.itemId||null;
+          // Toolbar handlers capture activeEditor: establish the complete target
+          // identity before select renders them (focus may not change it again).
+          if(activeId!==target.blockId||activeItemId!==(target.itemId||null))state.closeHistoryGroup();
+          activeId=target.blockId;activeItemId=target.itemId||null;
+          select(target.blockId);
           const entry=blockNodes.get(target.blockId);
           let host=entry?.fields||entry?.node.querySelector('.pages-block-fields')||entry?.node;
           if(target.itemId){
