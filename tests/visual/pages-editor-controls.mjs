@@ -5,20 +5,22 @@ import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { createPagesDatabaseHarness } from '../database/check-pages.mjs';
-import { pagesBrowserContext, pagesBrowserReady } from '../helpers/pages-browser.mjs';
-import { checkStructure } from './pages-editor-structure.mjs';
-import { checkSave } from './pages-editor-save.mjs';
-import { checkReview } from './pages-editor-review-controls.mjs';
-import { checkOverlays } from './pages-editor-overlays.mjs';
-import { checkResponsive } from './pages-editor-responsive.mjs';
-import { checkTextVideo } from './pages-editor-text-video.mjs';
-import { checkInspector } from './pages-editor-inspector.mjs';
-import { checkAcceptance } from './pages-editor-acceptance.mjs';
+import { selectControlsCase } from '../helpers/pages-controls-case.mjs';
 
-const scenario = process.argv[2] || 'menus';
-assert.ok(['menus', 'structure', 'save', 'review', 'overlays', 'responsive', 'text-video', 'inspector', 'acceptance'].includes(scenario));
+const scenario = selectControlsCase();
 assert.ok(process.env.PAGES_CONTROLS_OUTPUT, 'Set a new evidence directory');
+const { pagesBrowserContext, pagesBrowserReady } = await import('../helpers/pages-browser.mjs');
+const { createPagesDatabaseHarness } = await import('../database/check-pages.mjs');
+const scenarios = {
+  structure: ['./pages-editor-structure.mjs', 'checkStructure'],
+  save: ['./pages-editor-save.mjs', 'checkSave'],
+  review: ['./pages-editor-review-controls.mjs', 'checkReview'],
+  overlays: ['./pages-editor-overlays.mjs', 'checkOverlays'],
+  responsive: ['./pages-editor-responsive.mjs', 'checkResponsive'],
+  'text-video': ['./pages-editor-text-video.mjs', 'checkTextVideo'],
+  inspector: ['./pages-editor-inspector.mjs', 'checkInspector'],
+  acceptance: ['./pages-editor-acceptance.mjs', 'checkAcceptance']
+};
 const output = resolve(process.env.PAGES_CONTROLS_OUTPUT);
 await mkdir(output, { recursive: false });
 const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE_PATH));
@@ -29,14 +31,11 @@ let browser;
 try {
   h.app.use(require('express').static(resolve('public')));
   browser = await chromium.launch({ headless: true, channel: 'chrome' });
-  if (scenario === 'structure') await checkStructure({ h, browser, output, results, errors });
-  if (scenario === 'save') await checkSave({ h, browser, output, results, errors });
-  if (scenario === 'review') await checkReview({ h, browser, output, results, errors });
-  if (scenario === 'overlays') await checkOverlays({ h, browser, output, results, errors });
-  if (scenario === 'responsive') await checkResponsive({ h, browser, output, results, errors });
-  if (scenario === 'text-video') await checkTextVideo({ h, browser, output, results, errors });
-  if (scenario === 'inspector') await checkInspector({ h, browser, output, results, errors });
-  if (scenario === 'acceptance') await checkAcceptance({ h, browser, output, results, errors });
+  if (scenarios[scenario]) {
+    const [modulePath, exportName] = scenarios[scenario];
+    const check = (await import(modulePath))[exportName];
+    await check({ h, browser, output, results, errors });
+  }
   for (const width of scenario === 'menus' ? [1366, 390, 320, 768] : []) {
     const created = await h.api('post', '', { template_id: 'comunicado', client_mutation_id: randomUUID() }, 'super');
     assert.equal(created.status, 201);

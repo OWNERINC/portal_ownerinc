@@ -451,7 +451,7 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
   #page-editor-root .pages-v2-mobile-format { margin: 0 0 12px; }
   #page-editor-root .pages-v2-mobile-format .pages-format-tools { border: 0; box-shadow: none; padding: 0; gap: 8px; margin: 0; }
   #page-editor-root .pages-v2-mobile-format .pages-toolbar-group { gap: 8px; border: 0; padding: 0; }
-  #page-editor-root .pages-v2-mobile-format .btn { border: 1px solid var(--border); border-radius: 6px; height: 37px; min-height: 37px; min-width: 30px; padding: 0 11px; font: 400 13px/1.4 var(--font-sans); }
+  #page-editor-root .pages-v2-mobile-format .btn { border: 1px solid var(--border); border-radius: 6px; height: 44px; min-height: 44px; min-width: 44px; padding: 0 11px; font: 400 13px/1.4 var(--font-sans); }
   #page-editor-root .pages-v2-extra-format { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
   #page-editor-root .pages-v2-extra-format[hidden] { display: none; }
   #page-editor-root .pages-compact-typography { display: grid; }

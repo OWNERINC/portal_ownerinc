@@ -51,8 +51,15 @@ por Chrome/PGlite. Aceite final das seis pranchas pertence à Task 18.
 ### Regressão final dos controles (melhorias Task 10)
 
 Execute os casos `menus`, `structure`, `save`, `review`, `overlays`, `responsive`,
-`text-video`, `inspector` e `acceptance` serialmente pelo comando
-`node tests/visual/check-pages-controls.mjs <caso>`, cada um com pasta nova em
+`text-video`, `inspector` e `acceptance` serialmente.
+
+Seleção do caso: argumento posicional explícito > `PAGES_CONTROLS_CASE` > `menus`.
+Valores inválidos (inclusive vazios explícitos) falham antes dos imports externos,
+do harness e da criação de evidência; nunca caem silenciosamente em `menus`.
+O caso `text-video` inclui os alvos B/I/U/Link da folha em 320/390/768 px,
+Conteúdo/Estilo e scroll inicial/final/revelado, colisões e comandos reais.
+
+Use `node tests/visual/check-pages-controls.mjs <caso>`, cada um com pasta nova em
 `PAGES_CONTROLS_OUTPUT`. Use as instalações externas existentes via
 `PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e `AXE_MODULE_PATH` (responsive,
 review e acceptance). O último caso prepara SQL sintético **antes** da abertura:

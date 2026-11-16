@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { pagesBrowserContext, pagesBrowserReady, pagesEditorInsert } from '../helpers/pages-browser.mjs';
+import { checkCompactTargets } from './pages-editor-compact-targets.mjs';
 
 export async function checkTextVideo({ h, browser, output, results, errors }) {
+  await checkCompactTargets({ h, browser, output, results, errors });
   const failures = [];
   // Separate synthetic surface: never replaces an opened user document.
   h.app.get('/__task7-format', (_req, res) => res.type('html').send(`<!doctype html><div id="rich"></div><script type="module">

@@ -751,11 +751,12 @@ As demais âncoras de referência e asserções funcionais continuam ativas nos 
 ### Conteúdo compacto e ciclo mobile (Task 16)
 
 Até 1099 px, o inspetor é um diálogo **não modal**: o mesmo texto/EditorView continua
-editável no canvas. Conteúdo reúne B/I/U/Link, fonte/escala combinadas e o campo de
-fundo compartilhado. Estilo recebe os controles adicionais reais da toolbar;
+editável no canvas. Conteúdo reúne B/I/U/Link, com alvos reais não sobrepostos de
+44×44 px no mínimo. Estilo reúne fonte/escala combinadas, o campo de fundo
+compartilhado e os controles adicionais reais da toolbar;
 Posição mantém organização avançada. Nenhum documento ou editor paralelo é criado.
 O combinado “Manrope · 16 px” descreve a **escala base**, com essa distinção no title
-e aria-description; a receita adapta capa/introdução no telefone (28/19 px nos
+e aria-description; a receita adapta capa/introdução no telefone (36/20 px nos
 títulos, 14 px no corpo). O controle completo preserva os labels prospectivos.
 Alterar fonte/escala combinadas usa uma só transação guardada de aparência.
 Os parágrafos mobile herdam o foreground canônico, incluindo o padrão da página

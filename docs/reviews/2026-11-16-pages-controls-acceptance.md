@@ -168,6 +168,22 @@ Repetição sobre o runtime/CSS final em `pages-task10-tail-a/six-reference/` ma
 Todos os caminhos abaixo são relativos ao diretório externo de evidências citado
 acima. São capturas novas, não montagens nem referências alteradas.
 
+**Correção final da revisão (base `188cabc`):** os botões B/I/U/Link da folha
+compacta agora têm caixas reais mínimas de 44×44 px (antes 37 px de altura).
+O caso `text-video` acrescenta medidas em 320/390/768, Conteúdo/Estilo,
+scroll inicial/final/revelado, bordas sem colisão e comandos reais sobre a seleção
+retida, sem recriar EditorView ou salvar implicitamente. Capturas finais desses
+alvos: `pages-final-fix-final-a/controls-text-video/{320,390,768}-compact-text-targets.png`.
+Essas capturas substituem somente a seleção de preview desses alvos; não substituem
+as seis referências originais nem constituem aceite humano. Os resultados anteriores
+de **NOT_ACCEPTED** e os **13 incompletos axe** continuam registrados.
+
+O runner resolve argumento posicional > `PAGES_CONTROLS_CASE` > `menus`; seleção
+inválida falha antes de imports externos/harness. A rodada final usa `save` somente
+pela variável de ambiente e os demais casos por argumento com variável conflitante,
+para comprovar a precedência no próprio browser. O controlador ainda deve apresentar
+as capturas finais após a revisão, sem atribuir aceite a este executor.
+
 - **Desktop 1366:** `pages-task10-final-b/controls-overlays/1366-style.png`,
   `controls-save/1366-busy.png`, `controls-save/1366-lost-ack.png` e
   `controls-review/1366-issues.png` dentro da mesma rodada final.
