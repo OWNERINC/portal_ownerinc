@@ -59,7 +59,7 @@ export function createModelDraftController({ newId, create, beforeCreate, canAct
   };
 }
 
-export function createEditorWorkspace({ root, page, header, actions, metadata, modes, toolbar, editorHost, previewHost, add, feedback, onInsert, onStyle, onSection, onSelect,
+export function createEditorWorkspace({ root, page, menus, header, actions, metadata, modes, toolbar, editorHost, previewHost, add, feedback, onInsert, onStyle, onSection, onSelect,
   onUndo, onRedo, onModel, onDevice, onZoom, templates = [],
   sortableFactory, onReorderSection, canReorder = () => false, onLayoutDragging = () => {} }) {
   let disposed = false, activeSection, currentDocument, overlay, sheetOpener, textTools, textBlockNode, isEditable = false, restoringFocus = false, sectionSortable, sectionDragging = false, dragCancelled = false, stopViewport;
@@ -196,6 +196,7 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
   const preview = primary?.querySelector('.pages-v2-preview-menu');
   const overflowContent = el('div', { className: 'pages-v2-overflow-content' });
   const overflow = el('details', { className: 'pages-v2-overflow' }, el('summary', { text: '•••', 'aria-label': 'Mais ações do editor' }), overflowContent);
+  const unregisterOverflow = menus?.register(overflow);
   preview?.addEventListener('click', event => {
     if (!phone?.matches) return;
     overflow.open = false;
@@ -210,7 +211,7 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
   header.append(overflow);
   root.replaceChildren(header, topTools, feedback, workspace);
   root.dataset.inspectorOpen = 'false'; root.dataset.inspectorSection = 'content'; root.dataset.organizing = 'false';
-  const onKey = event => { if (event.key === 'Escape' && sectionDragging) { dragCancelled = true; event.preventDefault(); return; } if (event.key === 'Escape' && !document.querySelector('dialog[open]')) { if (overflow.open) { overflow.open = false; overflow.querySelector('summary').focus(); } else closeInspector(); } };
+  const onKey = event => { if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return; if (event.key === 'Escape' && sectionDragging) { dragCancelled = true; event.preventDefault(); return; } if (event.key === 'Escape' && !document.querySelector('dialog[open]')) closeInspector(); };
   window.addEventListener('keydown', onKey);
   const onHistory = () => { if (!document.querySelector('dialog[open]')) closeInspector(false); };
   window.addEventListener('popstate', onHistory);
@@ -359,6 +360,7 @@ export function createEditorWorkspace({ root, page, header, actions, metadata, m
     },
     showMode(editing) { root.dataset.editorMode = editing ? 'edit' : 'preview'; add.hidden=!editing||!isEditable; if(textTools)textTools.hidden=!editing; if (!editing) closeInspector(false); measureViewport(); },
     dispose() {
+      unregisterOverflow?.();
       if (disposed) return; disposed = true; overlay?.close(false); observer?.disconnect(); viewportObserver?.disconnect(); sectionSortable?.destroy(); onLayoutDragging(false);
       syncSheetViewport(); window.removeEventListener('popstate', onHistory);
       compact?.removeEventListener('change', onResize); window.removeEventListener('keydown', onKey);

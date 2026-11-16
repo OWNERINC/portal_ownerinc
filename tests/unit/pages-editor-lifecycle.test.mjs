@@ -63,6 +63,7 @@ async function harness(t, { dialogs, support, document: initialDocument, mobile 
   await load('public/pages/dialog.js', 'mountPagesDialog');
   await load('public/pages/editor-review.js', 'openReview, reviewSession');
   await load('public/pages/editor-panels.js', 'openEditorPanel, watchVisualViewport, visibleFocusTarget, restoreVisibleFocus');
+  await load('public/pages/editor-menus.js', 'createEditorMenus');
   await load('public/pages/editor-workspace.js', 'createEditorWorkspace, createModelDraftController, editorAction, editorIcon');
   await load('public/pages/button.js', 'createPageButton');
   await load('public/pages/editor-insert.js', 'openInsertPanel, insertionPoint, resolveInsertionPoint');

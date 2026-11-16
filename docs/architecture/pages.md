@@ -16,6 +16,16 @@ O exemplo de vestimenta é ilustrativo, não uma política oficial.
 
 ## Base e compatibilidade
 
+Os menus transitórios do editor (Prévia, Mais ações e Mais opções de texto)
+compartilham `createEditorMenus({page})`: `register(details)` devolve unregister,
+`closeAll({restoreFocus = false})` fecha sem salvar e `dispose()` libera listeners.
+Escape fecha apenas o menu superior e retorna ao summary; composição IME e dialogs
+abertos mantêm prioridade. Pointerdown fora fecha sem cancelar o clique nem mover
+foco. FAQ, público e opções avançadas não participam desse controlador.
+O caso local `node tests/visual/pages-editor-controls.mjs menus` exige
+`PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH` e um diretório novo em
+`PAGES_CONTROLS_OUTPUT`; usa apenas identidade e banco sintéticos, sem produção.
+
 O desenvolvimento parte de `2cecbe8`, incluindo o aceite obrigatório do Código de
 Ética. Nenhuma rota Pages fica isenta desse gate. A autenticação continua sendo
 Firebase Bearer, validada pelo middleware existente com o perfil atual no banco.

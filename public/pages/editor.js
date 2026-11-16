@@ -13,6 +13,7 @@ import { createBlockFields, mediaAccept, mediaKind } from './editor-media.js';
 import { createDestinationFields } from './editor-destinations.js';
 import { openInsertPanel, insertionPoint, resolveInsertionPoint } from './editor-insert.js';
 import { createEditorWorkspace, createModelDraftController, editorAction, editorIcon } from './editor-workspace.js';
+import { createEditorMenus } from './editor-menus.js';
 import { createPageButton } from './button.js';
 import { navigate } from '../js/router.js';
 import { openEditorPanel } from './editor-panels.js';
@@ -26,6 +27,8 @@ const optionLabels = { start: 'À esquerda', center: 'Centralizado', end: 'À di
 export function mountPageEditor(page) {
   const root = document.getElementById('page-editor-root'); if (!root) return;
   const api = createPagesAPI(page);
+  const menus = createEditorMenus({ page });
+  let unregisterTextMenu, unregisterPreviewMenu;
   let state, cargos = [], activeId, activeItemId, mode = 'edit', disposed = false, writePending = false, uploadRetry = null;
   let richEditors = new Map(), blockDisposers = [], previewDispose, editorHost, previewHost, toolbar, status, saveButton, publishButton, feedback, uploadStatus, retryUploadButton, cancelUploadButton, undoDeleteButton, loadSequence = 0;
   let metadataSync = [];
@@ -190,6 +193,7 @@ export function mountPageEditor(page) {
     const block = allBlocks(state.document).find(item => item.id === activeId);
     const disclosures=inspectorUI&&inspectorUI.blockId===block?.id?{advanced:inspectorUI.node.querySelector('.pages-inspector-advanced')?.open,legacy:inspectorUI.node.querySelector('.pages-legacy-presentation')?.open}:null;
     inspectorUI?.dispose(); inspectorUI = null;
+    unregisterTextMenu?.(); unregisterTextMenu = null;
     contextTools?.remove(); contextTools = null;
     workspaceUI?.placeContextTools(null, null);
     toolbar.replaceChildren(); if (!block) { toolbar.append(el('span', { className: 'pages-toolbar-empty', text: 'Selecione um bloco para editar.' })); workspaceUI?.select(null, null, false); return; }
@@ -283,12 +287,14 @@ export function mountPageEditor(page) {
         }), toolbarCommand('Remover link', () => { if (editor.active('link')) editor.link(''); }));
       const history = el('div', { className: 'pages-toolbar-group', role: 'group', 'aria-label': 'Histórico do texto' }, toolbarCommand('Desfazer texto', () => historyAction('undo'), { 'data-history': 'undo', disabled: !state.canUndo || historyBlocked() }), toolbarCommand('Refazer texto', () => historyAction('redo'), { 'data-history': 'redo', disabled: !state.canRedo || historyBlocked() }));
       const more = el('details', { className: 'pages-format-more' }, el('summary', { text: '•••', 'aria-label': 'Mais opções de texto' }), el('div', { className: 'pages-format-overflow' }, lists, history));
+      unregisterTextMenu = menus.register(more);
       more.querySelector('.pages-format-overflow').append(links.children[links.children.length-1]);
       const inlineColors=el('div',{className:'pages-toolbar-group',role:'group','aria-label':'Cores do texto selecionado'},
         toolbarCommand('Realce do texto selecionado',event=>openInlineColor('highlight',event.currentTarget),{disabled:!v3Available(),'aria-label':'Realce do texto selecionado'}),
         toolbarCommand('Cor do texto selecionado',event=>openInlineColor('text_color',event.currentTarget),{disabled:!v3Available(),'aria-label':'Cor do texto selecionado'}));
       inlineColors.children[0].replaceChildren(editorIcon('marker'));inlineColors.children[1].replaceChildren(editorIcon('palette'));
       formats.append(structure, marks, links, inlineColors, more);
+      for (const control of [...marks.children, ...links.children, ...inlineColors.children]) control.classList.add('pages-format-compact');
       for (const [mark, glyph] of [['strong','B'], ['em','I'], ['underline','U']]) {
         const control = marks.querySelector(`[data-mark="${mark}"]`); control.setAttribute('aria-label', control.textContent); control.title = control.textContent; control.textContent = glyph;
       }
@@ -678,6 +684,7 @@ export function mountPageEditor(page) {
       action:async()=>{await modelController.choose(template.id);}});
   }
   function build(workspace) {
+    menus.closeAll(); unregisterPreviewMenu?.(); unregisterPreviewMenu = null;
     workspaceUI?.dispose(); workspaceUI = null; editorPanel?.close(false);
     previewDispose?.(); destroyBlocks(); metadataSync = []; nativeFields.clear(); nativeCompositions.clear(); activeId = null; activeItemId = null; uploadPoint = null; pendingPlacement = null;
     const sequence = loadSequence;
@@ -744,6 +751,7 @@ export function mountPageEditor(page) {
     if (editable) modes.append(button('Editar', () => showMode('edit'), { 'data-preview-mode': 'edit', 'aria-pressed': 'true' }));
     modes.append(button('Prévia desktop', () => showMode('desktop'), { 'data-preview-mode': 'desktop' }), button('Prévia mobile · 390 px', () => showMode('mobile'), { 'data-preview-mode': 'mobile' }));
     const previewMenu = el('details',{className:'pages-v2-preview-menu'},el('summary',{},editorIcon('eye'),el('span',{text:'Prévia'})),modes);
+    unregisterPreviewMenu = menus.register(previewMenu);
     primaryActions.insertBefore(previewMenu,primaryActions.firstElementChild);
     modes.addEventListener('click',()=>{previewMenu.open=false;});
     toolbar = el('div', { className: 'pages-context-toolbar', role: 'toolbar', 'aria-label': 'Ações do bloco selecionado', hidden: !editable });
@@ -761,7 +769,7 @@ export function mountPageEditor(page) {
     add.append(editorAction('Adicionar bloco', 'plus', event => openInsertion(event.currentTarget)), file,
       el('div', { className: 'pages-recovery-actions' }, undoDeleteButton, retryUploadButton, cancelUploadButton, placeUploadButton), compositionStatus, uploadStatus);
     inlineAdd=state.document.template.id==='guia-interno'?el('div',{className:'pages-inline-insert'},add.firstElementChild):null;
-    workspaceUI = createEditorWorkspace({ root, page, header, actions: secondaryActions, metadata, modes, toolbar, editorHost, previewHost, add, feedback,
+    workspaceUI = createEditorWorkspace({ root, page, menus, header, actions: secondaryActions, metadata, modes, toolbar, editorHost, previewHost, add, feedback,
       templates:availableTemplates,onUndo:()=>historyAction('undo'),onRedo:()=>historyAction('redo'),onModel:openModel,
       onInsert: openInsertion, onStyle: openStyle, onSelect: select, onSection: () => composition({ type: 'section' }),
       sortableFactory: createSortable, canReorder: () => canEditContent() && !historyBlocked() && !state.blocked,
@@ -784,6 +792,7 @@ export function mountPageEditor(page) {
     update();
   }
   async function load() {
+    menus.closeAll(); unregisterTextMenu?.(); unregisterTextMenu = null; unregisterPreviewMenu?.(); unregisterPreviewMenu = null;
     reviewUI?.close(); reviewUI=null;
     const sequence = ++loadSequence;
     document.body.classList.add('pages-editor-active');
