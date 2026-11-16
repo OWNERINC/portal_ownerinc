@@ -20,7 +20,7 @@ import { openEditorPanel } from './editor-panels.js';
 import { openStylePanel, createInspector, openInlineColorPanel, styleCandidate } from './editor-style.js';
 import { resolveAppearance, appearanceIssues, typographyMetrics } from './appearance.js';
 
-const statusLabels = { saved: 'Rascunho salvo', saving: 'Salvando…', dirty: 'Alterações não salvas', failure: 'Falha ao salvar — tente novamente', conflict: 'Conflito — recarregue a página' };
+const statusLabels = { saved: 'Rascunho salvo', saving: 'Salvando…', dirty: 'Alterações não salvas', failure: 'Falha ao salvar — tente novamente', conflict: 'Conflito — alterações locais preservadas. Recarregue para continuar.' };
 const blockLabels = { rich_text: 'Texto', image: 'Imagem', gif: 'GIF', audio: 'Áudio', video: 'Vídeo', callout: 'Destaque', button: 'Botão', divider: 'Separador', gallery: 'Galeria', faq: 'FAQ', video_embed: 'Vídeo incorporado' };
 const optionLabels = { start: 'À esquerda', center: 'Centralizado', end: 'À direita', small: 'Pequena', standard: 'Padrão', large: 'Grande', neutral: 'Neutra', brand: 'Marca', warm: 'Quente', manrope: 'Manrope', 'source-serif-4': 'Source Serif 4', oswald: 'Oswald', info: 'Informação', attention: 'Atenção', success: 'Sucesso', none: 'Sem ícone', alert: 'Alerta', check: 'Confirmação', primary: 'Primário', secondary: 'Secundário', text: 'Texto' };
 
@@ -58,12 +58,17 @@ export function mountPageEditor(page) {
   page.cleanup(() => { disposed = true; modelController?.dispose(); saveControl?.dispose(); inspectorUI?.dispose(); nativeFields.clear(); nativeCompositions.clear(); workspaceUI?.dispose(); editorPanel?.close(false); previewDispose?.(); destroyBlocks(); uploadRetry = null; document.body.classList.remove('pages-editor-active'); });
   function update() {
     if (!live() || !state || !status) return;
-    status.textContent = statusLabels[state.status];
+    const label = state.status === 'failure' && state.pending ? 'Salvamento não confirmado — tente novamente para reconciliar a revisão enviada. Alterações posteriores ainda não foram salvas.' : statusLabels[state.status];
+    if (status.textContent !== label) status.textContent = label;
     saveControl.setDisabled(!state.workspace.capabilities.edit || (!state.writable && !state.pending) || state.blocked || writePending || publishUncertain() || state.status === 'conflict' || (!state.dirty && !state.pending));
     if (state.dirty || state.pending) saveControl.resetConfirmation();
-    if(state.workspace.capabilities.edit){const host=root.querySelector(state.dirty||state.pending?'.pages-primary-actions':'.pages-secondary-actions');if(host&&saveButton.parentElement!==host)host.insertBefore(saveButton,host.firstElementChild);}
     // Only a confirmed clean revision can enter the publication dialog.
     publishButton.disabled = !state.publishable || writePending || !!uploadRetry || !!pendingPlacement;
+    const publishReason = root.querySelector('.pages-publish-reason');
+    if (publishReason) {
+      const reason = !publishButton.disabled ? '' : state.status === 'conflict' ? 'Resolva o conflito antes de revisar.' : state.dirty || state.pending || state.status === 'saving' ? 'Salve o rascunho para revisar.' : 'Conclua a operação pendente para revisar.';
+      if (publishReason.textContent !== reason) publishReason.textContent = reason;
+    }
     uploadStatus.textContent = state.uploads ? 'Enviando mídia…' : uploadRetry ? uploadRetry.uncertain ? 'Upload não confirmado. Tente novamente com a mesma chave ou cancele.' : 'Falha no upload. Itens anteriores conservados. Tente novamente ou cancele.' : '';
     if (retryUploadButton) { retryUploadButton.hidden = !uploadRetry; retryUploadButton.disabled = state.blocked; }
     if (cancelUploadButton) { cancelUploadButton.hidden = !uploadRetry; cancelUploadButton.disabled = state.blocked; }
@@ -706,9 +711,12 @@ export function mountPageEditor(page) {
     saveButton = saveControl.node;
     publishButton = editorAction('Publicar', 'publish', publish, { className: 'btn btn-primary' });
     const primaryActions = el('div', { className: 'pages-primary-actions' });
+    if (workspace.capabilities.edit) primaryActions.append(saveButton);
     if (workspace.capabilities.publish) primaryActions.append(publishButton);
+    publishButton.setAttribute('aria-describedby', 'pages-publish-reason');
+    const operations = el('div', { className: 'pages-operation-bar' }, status, primaryActions);
+    if (workspace.capabilities.publish) operations.append(el('p', { id: 'pages-publish-reason', className: 'pages-publish-reason' }));
     const secondaryActions = el('div', { className: 'pages-secondary-actions' });
-    if (workspace.capabilities.edit) secondaryActions.append(saveButton);
     if (workspace.capabilities.archive) secondaryActions.append(button(workspace.archived_at ? 'Restaurar' : 'Arquivar', archiveOrRestore));
     secondaryActions.append(button('Recarregar versão salva', () => {
       const message = pendingPlacement ? 'Descartar as alterações locais e a colocação do arquivo já enviado, carregando a versão salva? O envio do arquivo não será desfeito.' : 'Descartar as alterações locais e carregar a versão salva?';
@@ -718,7 +726,7 @@ export function mountPageEditor(page) {
     const back = link('', './pages.html?manage=1'); back.className = 'pages-v2-back'; back.setAttribute('aria-label', 'Voltar à gestão de Pages'); back.append(editorIcon('back'));
     const brand = link('', './dashboard.html'); brand.className = 'pages-v2-brand'; brand.setAttribute('aria-label', 'Conecta Ownerinc — início'); brand.append(el('span', { className: 'pages-v2-wordmark' }, el('img', { src: './assets/conecta/logo.svg', alt: 'Conecta', width: 104, height: 32 })));
     const header = el('header', { className: 'pages-heading pages-v2-header' }, back, brand, el('div', { className: 'pages-heading-copy' },
-      el('h1', { className: 'pages-visually-hidden', text: editable ? 'Editar Page' : 'Revisar Page' }), el('strong', { 'data-document-name': '', text: state.document.metadata.title }), el('span', { className: 'pages-v2-header-subtitle', text: editable ? 'Conteúdos / Edição de página' : 'Conteúdos / Somente revisão' })), status, primaryActions);
+      el('h1', { className: 'pages-visually-hidden', text: editable ? 'Editar Page' : 'Revisar Page' }), el('strong', { 'data-document-name': '', text: state.document.metadata.title }), el('span', { className: 'pages-v2-header-subtitle', text: editable ? 'Conteúdos / Edição de página' : 'Conteúdos / Somente revisão' })), operations);
     const metadata = el('div', { className: 'pages-metadata' });
     for (const [key, label, max, multiline] of [['title','Título',200,false],['summary','Resumo',1000,true]]) {
       const control = el(multiline ? 'textarea' : 'input', { maxlength: max, disabled: !editable }); control.value = state.document.metadata[key];

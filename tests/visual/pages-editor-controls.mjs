@@ -8,9 +8,10 @@ import { randomUUID } from 'node:crypto';
 import { createPagesDatabaseHarness } from '../database/check-pages.mjs';
 import { pagesBrowserContext, pagesBrowserReady } from '../helpers/pages-browser.mjs';
 import { checkStructure } from './pages-editor-structure.mjs';
+import { checkSave } from './pages-editor-save.mjs';
 
 const scenario = process.argv[2] || 'menus';
-assert.ok(['menus', 'structure'].includes(scenario));
+assert.ok(['menus', 'structure', 'save'].includes(scenario));
 assert.ok(process.env.PAGES_CONTROLS_OUTPUT, 'Set a new evidence directory');
 const output = resolve(process.env.PAGES_CONTROLS_OUTPUT);
 await mkdir(output, { recursive: false });
@@ -23,6 +24,7 @@ try {
   h.app.use(require('express').static(resolve('public')));
   browser = await chromium.launch({ headless: true, channel: 'chrome' });
   if (scenario === 'structure') await checkStructure({ h, browser, output, results, errors });
+  if (scenario === 'save') await checkSave({ h, browser, output, results, errors });
   for (const width of scenario === 'menus' ? [1366, 390, 320, 768] : []) {
     const created = await h.api('post', '', { template_id: 'comunicado', client_mutation_id: randomUUID() }, 'super');
     assert.equal(created.status, 201);

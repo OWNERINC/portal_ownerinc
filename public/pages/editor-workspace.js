@@ -197,7 +197,6 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
   const properties = topTools.querySelector('.pages-properties-toggle');
   const viewTools = topTools.querySelector('.pages-v2-view-tools');
   const primary = header.querySelector('.pages-primary-actions');
-  const publish = [...(primary?.querySelectorAll('button') || [])].find(node => node.textContent === 'Publicar');
   const preview = primary?.querySelector('.pages-v2-preview-menu');
   const overflowContent = el('div', { className: 'pages-v2-overflow-content' });
   const overflow = el('details', { className: 'pages-v2-overflow' }, el('summary', { text: '•••', 'aria-label': 'Mais ações do editor' }), overflowContent);
@@ -206,12 +205,6 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
     if (!phone?.matches) return;
     overflow.open = false;
     if (event.target.closest('[data-preview-mode]')) preview.querySelector('summary').focus();
-  });
-  primary?.addEventListener('click', event => {
-    // Opening the nested preview chooser is not a completed action. Keep its
-    // containing mobile menu open until an actual preview mode is selected.
-    if (event.target.closest('.pages-v2-preview-menu > summary')) return;
-    overflow.open = false; if (phone?.matches) overflow.querySelector('summary').focus();
   });
   header.append(overflow);
   root.replaceChildren(header, topTools, feedback, workspace);
@@ -224,12 +217,11 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
     overlay?.close(false);
     if (structure.parentElement !== workspace) workspace.insertBefore(structure, center);
     if (phone?.matches) {
-      overflowContent.append(primary, insert, modelHit, style, properties);
+      overflowContent.append(insert, modelHit, style, properties);
       if (preview) topTools.insertBefore(preview, topTools.children[1]);
-      if (publish) topTools.append(publish);
       overflowContent.append(viewTools);
     } else {
-      header.insertBefore(primary, overflow); if (preview) primary.append(preview); if (publish) primary.append(publish);
+      if (preview) primary.append(preview);
       topTools.append(viewTools);
       topTools.insertBefore(modelHit, style.parentElement===topTools?style:topTools.querySelector('.pages-v2-view-tools'));topTools.insertBefore(insert, modelHit); topTools.insertBefore(style, topTools.querySelector('.pages-v2-view-tools'));
       topTools.querySelector('.pages-v2-view-tools').append(properties);
@@ -263,8 +255,10 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
   onResize();
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
     root.style.setProperty('--inspector-height', `${inspector.getBoundingClientRect().height}px`);
+    root.style.setProperty('--pages-chrome-height', `${header.getBoundingClientRect().height}px`);
   }) : null;
   observer?.observe(inspector);
+  observer?.observe(header);
   const viewportObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(measureViewport) : null;
   viewportObserver?.observe(viewport); viewportObserver?.observe(surface);
   setViewport(view);

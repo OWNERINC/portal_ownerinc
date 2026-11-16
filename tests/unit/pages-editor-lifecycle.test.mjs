@@ -14,7 +14,7 @@ import { resolveAppearance } from '../../public/pages/appearance.js';
 
 // Execute the real editor, model, state, DOM helpers and lifecycle. Only the
 // browser rendering engine (PM/media) and network are controlled seams.
-async function harness(t, { dialogs, support, document: initialDocument, mobile = false, registered = [] } = {}) {
+async function harness(t, { dialogs, support, document: initialDocument, mobile = false, registered = [], capabilities = { edit: true, publish: true, archive: true } } = {}) {
   const doc = new FixtureNode('document'); doc.ownerDocument = doc; doc.documentElement = doc;
   doc.createElement = tag => new FixtureNode(tag, doc);
   doc.createElementNS = (_, tag) => doc.createElement(tag);
@@ -32,7 +32,7 @@ async function harness(t, { dialogs, support, document: initialDocument, mobile 
   const workspaces = [], uploads = [], editors = [], figures = [], sortables = [];
   const api = {
     async workspace(id) { workspaces.push(id); return { id, version: 0, draft_revision_id: `revision-${id}`, published_revision_id: null,
-      draft: { document: initialDocument ? structuredClone(initialDocument) : createTemplate() }, media:structuredClone(registered), document_support: support, capabilities: { edit: true, publish: true, archive: true } }; },
+      draft: { document: initialDocument ? structuredClone(initialDocument) : createTemplate() }, media:structuredClone(registered), document_support: support, capabilities: { ...capabilities } }; },
     async cargos() { return []; },
     async templates() { return []; },
     upload(id, file, key) { const pending = { id, file, key, ...deferred() }; uploads.push(pending); return pending.promise; },
@@ -428,9 +428,9 @@ test('editor chrome groups header, metadata, structure and block controls withou
   const h = await harness(t), before = JSON.stringify(h.state.document);
   assert.equal(h.root.querySelector('h1').textContent, 'Editar Page');
   assert.ok(h.root.querySelector('.pages-v2-header').contains(h.root.querySelector('.pages-save-status')));
-  assert.equal(h.root.querySelector('.pages-primary-actions').querySelectorAll('button').length, 4, 'preview menu has the three real modes plus Publish');
-  assert.equal(h.root.querySelector('.pages-secondary-actions').querySelectorAll('button').length, 3, 'explicit Save is retained with reload/archive in Page properties');
-  assert.ok(h.root.querySelector('.pages-secondary-actions').contains(h.root.querySelector('.pages-action-button')));
+  assert.equal(h.root.querySelector('.pages-primary-actions').querySelectorAll('button').length, 5, 'three preview modes, Save and Publish');
+  assert.equal(h.root.querySelector('.pages-secondary-actions').querySelectorAll('button').length, 2, 'reload/archive remain in Page properties');
+  assert.ok(h.root.querySelector('.pages-operation-bar').contains(h.root.querySelector('.pages-action-button')));
   for (const key of ['title', 'summary']) assert.ok(h.root.querySelector(`.pages-metadata-${key}`));
   for (const header of ['pages-section-header', 'pages-row-header']) {
     const node = h.root.querySelector(`.${header}`);
@@ -444,6 +444,56 @@ test('editor chrome groups header, metadata, structure and block controls withou
   assert.equal(header.querySelector('.pages-select-block').textContent, 'Selecionar texto 1');
   assert.equal(h.root.querySelector('input[type="file"]').getAttribute('accept'), 'image/jpeg,image/png,image/webp,image/gif,audio/mpeg,video/mp4');
   assert.equal(JSON.stringify(h.state.document), before); assert.equal(h.state.dirty, false);
+});
+
+test('Save stays in one chrome parent through dirty, busy, old ACK, uncertain retry and conflict without rebuilding views', async t => {
+  const h = await harness(t, { mobile: true }), state = h.state;
+  const save = h.root.querySelector('.pages-action-button'), parent = save.parentElement;
+  const status = h.root.querySelector('.pages-save-status'), publish = h.root.querySelectorAll('button').find(n => n.textContent === 'Publicar');
+  const title = h.root.querySelector('.pages-metadata-title').querySelector('input');
+  const edit = value => { title.value = value; title.dispatchEvent(new TestEvent('input')); };
+  const retained = [...h.editors];
+  assert.equal(save.disabled, true); assert.equal(status.textContent, 'Rascunho salvo');
+  edit('Submitted'); assert.equal(save.parentElement, parent); assert.equal(save.disabled, false);
+  assert.equal(publish.disabled, true); assert.equal(h.root.querySelector('.pages-publish-reason').textContent, 'Salve o rascunho para revisar.');
+  const held = deferred(); let calls = 0, payload;
+  h.api.save = (_id, body) => { calls++; payload = body; return held.promise; };
+  save.click(); save.click(); await drain();
+  assert.equal(calls, 1); assert.equal(state.status, 'saving'); assert.equal(save.disabled, true); assert.equal(save.parentElement, parent);
+  edit('Newer'); held.resolve({ version: 1, draft_revision_id: 'r1' }); await drain();
+  assert.equal(payload.document.metadata.title, 'Submitted'); assert.equal(state.status, 'dirty');
+  assert.equal(save.getAttribute('data-preset'), 'secondary'); assert.equal(status.textContent, 'Alterações não salvas');
+  h.api.save = async () => { throw Object.assign(Error('503'), { status: 503 }); };
+  save.click(); await drain(); const bytes = JSON.stringify(state.pending);
+  assert.match(status.textContent, /não confirmado/); edit('After failure');
+  h.api.save = async (_id, body) => { assert.equal(JSON.stringify(body), bytes); return { version: 2, draft_revision_id: 'r2' }; };
+  save.click(); await drain(); assert.equal(state.status, 'dirty'); assert.equal(save.parentElement, parent);
+  h.api.save = async () => ({ version: 3, draft_revision_id: 'r3' }); save.click(); await drain();
+  assert.equal(state.status, 'saved'); assert.equal(save.getAttribute('data-preset'), 'confirmed');
+  edit('Conflict'); h.api.save = async () => { throw Object.assign(Error('CAS'), { status: 409 }); };
+  save.click(); await drain(); assert.match(status.textContent, /Conflito/); assert.equal(save.disabled, true); assert.equal(publish.disabled, true);
+  assert.equal(save.parentElement, parent); assert.deepEqual(h.editors, retained); assert.ok(retained.every(e => e.destroyed === 0));
+});
+
+test('Save chrome honors review-only and disabled writer capabilities without exposing an active command', async t => {
+  const review = await harness(t, { capabilities: { edit: false, publish: true, archive: true }, mobile: true });
+  assert.equal(review.root.querySelector('.pages-action-button'), null);
+  assert.equal(review.root.querySelector('.pages-metadata-title').querySelector('input').disabled, true);
+  const disabled = await harness(t, { document: upgradeDocument(createTemplate()), support: { read_versions: [1,2,3], write_versions: [1,2] } });
+  const save = disabled.root.querySelector('.pages-action-button');
+  assert.equal(save.disabled, true); assert.equal(save.getAttribute('aria-disabled'), 'true');
+  save.click(); await drain(); assert.equal(disabled.state.pending, null); assert.equal(disabled.state.status, 'saved');
+});
+
+test('a late save ACK updates only its originating state, never a replacement visit chrome', async t => {
+  const h = await harness(t), origin = h.state, held = deferred();
+  const title = h.root.querySelector('.pages-metadata-title').querySelector('input'); title.value = 'Origin'; title.dispatchEvent(new TestEvent('input'));
+  h.api.save = () => held.promise; const retired = h.root.querySelector('.pages-action-button'); retired.click(); await drain();
+  await h.replaceWithoutGuard('?id=second'); const current = h.state, currentSave = h.root.querySelector('.pages-action-button');
+  held.resolve({ version: 1, draft_revision_id: 'origin-saved' }); await drain();
+  assert.equal(origin.status, 'saved'); assert.equal(current.workspace.draft_revision_id, 'revision-second');
+  assert.equal(currentSave.getAttribute('data-preset'), 'secondary'); assert.equal(currentSave.disabled, true);
+  assert.equal(h.root.querySelector('.pages-save-status').textContent, 'Rascunho salvo'); assert.equal(retired.getAttribute('data-preset'), 'secondary');
 });
 
 test('V2 mounts a dedicated workspace without changing the document and restores the Portal shell on disposal', async t => {

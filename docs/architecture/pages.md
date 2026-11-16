@@ -39,6 +39,20 @@ sincronizado no root e no próprio nav, sem depender do ancestral após reparent
 caso `menus` e confere 320/390/768/1366 px, foco, seleção, limites, Alt+setas, arraste,
 Escape, ordem SQL após save explícito e undo local sem recriar EditorViews.
 
+Salvar permanece em um único slot no chrome em todas as larguras, sem relocação
+por dirty/pending ou duplicação de acionadores no painel inferior. O header sticky
+reserva espaço no fluxo; sua altura medida limita o painel compacto para manter
+ação e status acessíveis. `update()` apenas sincroniza disponibilidade/status;
+`createPageButton` continua aguardando o ACK de `state.save(api)`. Confirmação de
+uma revisão anterior não confirma edições posteriores. Falha com pending anuncia
+salvamento não confirmado e o retry conserva payload/key; conflito preserva o local.
+Publicar disabled mantém aparência inativa inclusive em hover e motivo associado
+visível. Status só muda no DOM quando a mensagem muda, não a cada tecla.
+`node tests/visual/check-pages-controls.mjs save` usa a mesma configuração local,
+com 320/390/768/1366 px, painel aberto, busy/ACK/503, perda de ACK após COMMIT real,
+replay sem revisão duplicada, edição durante save, Mod+S, conflito e permissões.
+PGlite serializado não representa concorrência nativa PostgreSQL ou produção.
+
 O desenvolvimento parte de `2cecbe8`, incluindo o aceite obrigatório do Código de
 Ética. Nenhuma rota Pages fica isenta desse gate. A autenticação continua sendo
 Firebase Bearer, validada pelo middleware existente com o perfil atual no banco.

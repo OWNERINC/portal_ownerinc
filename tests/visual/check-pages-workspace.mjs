@@ -41,10 +41,8 @@ try{
   geometry.push({header,tools,paper});assert.equal(header.height,72);assert.equal(tools.height,56);assert.deepEqual(paper,{x:248,y:188,width:1044,height:944});
   assert.equal(await p.locator('.pages-v2-structure').evaluate(n=>n.clientWidth),219);
   assert.equal((await box(p.locator('.pages-v2-brand'))).height,44,'original wordmark crop retains a full link target');
-  // Preview (Task 1) and add-section (Task 2) now own real targets. Publish
-  // retains its existing extension contract until its separately scoped task.
-  assert.equal(await p.locator('.pages-primary-actions > .btn').evaluate(n=>{const r=n.getBoundingClientRect();return n.contains(document.elementFromPoint(r.x+r.width/2,r.y-3));}),true,'compact publish control retains its invisible hit extension');
-  for(const selector of ['.pages-v2-preview-menu > summary','.pages-v2-structure > .btn']){
+   // Tasks 1–3 use real targets, not overlapping invisible extensions.
+   for(const selector of ['.pages-primary-actions > .btn','.pages-primary-actions > .pages-action-button','.pages-v2-preview-menu > summary','.pages-v2-structure > .btn']){
     const control=p.locator(selector),target=await box(control);geometry.push({targetSelector:selector,target});
     assert.ok(target.width>=44&&target.height>=44,`${selector}: real 44px target, not an overlapping extension`);
     assert.equal(await control.evaluate(n=>{const r=n.getBoundingClientRect();return [[.5,.5],[.05,.05],[.95,.05],[.05,.95],[.95,.95]].every(([x,y])=>n.contains(document.elementFromPoint(r.x+r.width*x,r.y+r.height*y)));}),true,`${selector}: center and inset corners receive pointer hits`);
