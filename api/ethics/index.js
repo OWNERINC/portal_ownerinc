@@ -1,16 +1,18 @@
 const { createHash } = require('node:crypto');
 const content = require('./term.json');
 
-// The exact document is part of the acceptance identity. Changing even the mock
-// text invalidates the prior acceptance; an official term must use a new version.
+// The exact document, including tables/lists, is part of the acceptance identity.
+// Historical mock acceptances never match the official version and content.
 const term = JSON.parse(JSON.stringify(content));
 term.contentHash = createHash('sha256').update(JSON.stringify(content)).digest('hex');
-for (const section of term.sections) {
-  Object.freeze(section.paragraphs);
-  Object.freeze(section);
+function freezeDocument(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeDocument(child);
+    Object.freeze(value);
+  }
+  return value;
 }
-Object.freeze(term.sections);
-Object.freeze(term);
+freezeDocument(term);
 
 function isEthicsBootstrapRequest(method, originalUrl) {
   const path = originalUrl.split('?')[0];

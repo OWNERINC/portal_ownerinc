@@ -6,11 +6,14 @@ import { ethicsHarness, term } from '../helpers/ethics-api.mjs';
 
 const require = createRequire(import.meta.url);
 const { isEthicsBootstrapRequest } = require('../../api/ethics');
+const legacyMock = require('../fixtures/ethics-mock-v1.json');
 const payload = { version: term.version, contentHash: term.contentHash, accepted: true };
 
 for (const account of ['viewer', 'admin', 'super']) {
-  test(`${account}: existing accounts start pending and all protected methods require their own acceptance`, async () => {
+  test(`${account}: historical mock acceptance cannot release the official code; a new acceptance preserves history`, async () => {
     const { request, state } = await ethicsHarness();
+    const historicalKey = `${account}:${legacyMock.version}:${legacyMock.contentHash}`;
+    state.acceptances.set(historicalKey, { accepted_at: '2026-11-10T10:00:00.000Z', is_mock: true });
     const me = await request.get('/api/users/me').auth(account, { type: 'bearer' }).expect(200);
     assert.equal(me.body.ethics_accepted, false);
     for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
@@ -19,15 +22,16 @@ for (const account of ['viewer', 'admin', 'super']) {
     }
     const document = await request.get('/api/ethics').auth(account, { type: 'bearer' }).expect(200);
     assert.deepEqual(document.body, { term, accepted: false });
-    assert.equal(term.mock, true);
-    assert.match(term.notice, /não é o Código de Ética oficial/);
+    assert.equal(term.mock, false);
+    assert.equal(term.version, '1.0');
     const accepted = await request.post('/api/ethics/accept').auth(account, { type: 'bearer' }).send(payload).expect(200);
     assert.equal(accepted.body.accepted, true);
-    assert.equal(state.acceptances.size, 1);
-    assert.equal([...state.acceptances.values()][0].is_mock, true);
+    assert.equal(state.acceptances.size, 2);
+    assert.equal(state.acceptances.get(`${account}:${term.version}:${term.contentHash}`).is_mock, false);
+    assert.deepEqual(state.acceptances.get(historicalKey), { accepted_at: '2026-11-10T10:00:00.000Z', is_mock: true });
     const retried = await request.post('/api/ethics/accept').auth(account, { type: 'bearer' }).send(payload).expect(200);
     assert.deepEqual(retried.body, accepted.body);
-    assert.equal(state.acceptances.size, 1);
+    assert.equal(state.acceptances.size, 2);
     await request.get('/api/protected').auth(account, { type: 'bearer' }).expect(200);
     const after = await request.get('/api/users/me').auth(account, { type: 'bearer' }).expect(200);
     assert.equal(after.body.ethics_accepted, true);
@@ -49,7 +53,8 @@ test('acceptance rejects unchecked, malformed, stale and client-attributed paylo
     { ...payload, uid: 'super' }, { ...payload, acceptedAt: '2000-01-01' }, { ...payload, version: 1 }]) {
     await request.post('/api/ethics/accept').auth('viewer', { type: 'bearer' }).send(body).expect(400);
   }
-  for (const body of [{ ...payload, version: 'official-v1' }, { ...payload, contentHash: '0'.repeat(64) }]) {
+  for (const body of [{ ...payload, version: 'official-v1' }, { ...payload, contentHash: '0'.repeat(64) },
+    { version: legacyMock.version, contentHash: legacyMock.contentHash, accepted: true }]) {
     const response = await request.post('/api/ethics/accept').auth('super', { type: 'bearer' }).send(body).expect(409);
     assert.equal(response.body.reason, 'ethics-version-changed');
   }

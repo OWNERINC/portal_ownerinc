@@ -1,56 +1,299 @@
 {
-  "version": "mock-2026-11-v1",
-  "title": "Código de Ética",
-  "mock": true,
-  "notice": "Conteúdo de demonstração. Este texto não é o Código de Ética oficial da Ownerinc. O documento definitivo exigirá um novo aceite.",
+  "version": "1.0",
+  "title": "Código de Ética e Conduta",
+  "mock": false,
+  "notice": "",
+  "preamble": [
+    "OWNERINC",
+    "CÓDIGO DE ÉTICA E CONDUTA",
+    "Como fazemos negócios. Como cuidamos das pessoas. Como representamos nossa marca.",
+    "Documento institucional | Versão 1.0 | 2026",
+    "Aprovação: Diretoria / Conselho"
+  ],
   "sections": [
     {
-      "title": "1. Nosso compromisso",
-      "paragraphs": [
-        "Este termo demonstrativo apresenta exemplos de compromissos de conduta no ambiente de trabalho. Ele permite conhecer e testar o fluxo de leitura e aceite do Conecta antes da publicação do documento oficial.",
-        "Esperamos relações profissionais orientadas pela integridade, pelo respeito e pela responsabilidade. Cada pessoa contribui para um ambiente em que decisões e atitudes sejam coerentes com esses princípios."
+      "title": "Mensagem da Ownerinc",
+      "blocks": [
+        { "type": "paragraph", "text": "Na Ownerinc, excelência não está apenas no produto que entregamos, mas na forma como nos relacionamos, decidimos, vendemos, construímos e cuidamos de cada pessoa que confia em nossa marca. Este Código traduz os princípios que devem orientar nossas escolhas e nossos comportamentos." },
+        { "type": "paragraph", "text": "Trabalhamos com propriedades compartilhadas de alto padrão e com uma proposta que envolve patrimônio, experiência, hospitalidade e relacionamento de longo prazo. Por isso, nossa responsabilidade vai além de realizar uma venda: devemos construir confiança e entregar uma experiência coerente com aquilo que prometemos." },
+        { "type": "paragraph", "text": "Este documento é um compromisso coletivo. Ele orienta todos os profissionais, independentemente de cargo, área ou nível hierárquico, e também serve como referência para nossas relações com clientes, proprietários, fornecedores, parceiros e demais públicos." }
       ]
     },
     {
-      "title": "2. Respeito e inclusão",
-      "paragraphs": [
-        "Trate colegas, parceiros, fornecedores e clientes com dignidade. Respeite diferenças de origem, identidade, crenças, condições pessoais e experiências de vida.",
-        "Não são compatíveis com um ambiente respeitoso práticas de discriminação, assédio, intimidação, humilhação ou violência. A comunicação deve ser cuidadosa tanto nas conversas presenciais quanto nos canais digitais."
+      "title": "1. Objetivo",
+      "blocks": [
+        { "type": "paragraph", "text": "Estabelecer princípios e padrões de comportamento para orientar decisões e relações profissionais, fortalecer a cultura de integridade, proteger pessoas e patrimônio, preservar a reputação da Ownerinc e assegurar que nossos negócios sejam conduzidos com ética, transparência, respeito e responsabilidade." }
       ]
     },
     {
-      "title": "3. Integridade nas relações profissionais",
-      "paragraphs": [
-        "Atue com honestidade e transparência. Não ofereça, solicite ou aceite vantagens indevidas para influenciar decisões profissionais ou obter favorecimento.",
-        "Situações em que interesses pessoais possam interferir nas responsabilidades profissionais devem ser informadas aos responsáveis indicados pela empresa. Em caso de dúvida, procure orientação antes de decidir."
+      "title": "2. A quem se aplica",
+      "blocks": [
+        { "type": "paragraph", "text": "Este Código se aplica a todos os colaboradores, gestores, diretores, conselheiros, estagiários, aprendizes, e demais pessoas que atuem em nome da Ownerinc. Espera-se também que fornecedores, prestadores de serviços, parceiros e demais terceiros conheçam e respeitem os princípios aqui estabelecidos quando se relacionarem com a empresa." }
       ]
     },
     {
-      "title": "4. Proteção de informações e dados pessoais",
-      "paragraphs": [
-        "Acesse informações apenas quando necessário para suas atividades. Preserve a confidencialidade de dados de colegas, clientes, parceiros e da organização.",
-        "Não compartilhe senhas nem disponibilize documentos internos em canais não autorizados. Verifique os destinatários antes de enviar informações e comunique possíveis incidentes pelos canais internos apropriados."
+      "title": "3. Nossos princípios",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "Inovação: Para atender e surpreender o mercado imobiliário de luxo, oferencendo soluções inteligentes de segunda moradia com infraestrutura e serviços de hospitalidade.",
+            "Valorização: Pessoas como ativo de maior importância e investimento.",
+            "Responsabilidade: Na execução de todos os nossos processos e no relacionamento com nossos parceiros.",
+            "Legado positivo: Trabalhamos com amor, carinho, criatividade, entusiasmo e dedicação. São atitudes que deixam um legado positivo para clientes e sociedade."
+          ]
+        }
       ]
     },
     {
-      "title": "5. Uso responsável dos recursos",
-      "paragraphs": [
-        "Utilize equipamentos, sistemas, materiais e demais recursos de trabalho com zelo e para as finalidades autorizadas. Respeite as regras de segurança e os direitos de propriedade intelectual.",
-        "Mantenha registros profissionais corretos. Não altere, oculte ou elimine informações para induzir pessoas a erro ou encobrir condutas inadequadas."
+      "title": "4. Como esperamos que as pessoas decidam",
+      "blocks": [
+        { "type": "paragraph", "text": "Quando houver dúvida sobre uma decisão ou comportamento, utilize estas perguntas:" },
+        {
+          "type": "list",
+          "items": [
+            "É legal e está de acordo com as regras da empresa?",
+            "É coerente com nossos valores e com este Código?",
+            "Eu me sentiria confortável se essa decisão fosse conhecida por um cliente, colega, liderança ou Conselho?",
+            "Estou sendo transparente ou estou omitindo algo relevante?",
+            "A decisão protege o cliente, a empresa e as pessoas envolvidas?",
+            "Se eu não souber a resposta, procurei orientação antes de agir?"
+          ]
+        }
       ]
     },
     {
-      "title": "6. Comunicação e responsabilidade",
-      "paragraphs": [
-        "Busque esclarecimentos sempre que uma orientação não estiver clara. O diálogo responsável ajuda a prevenir conflitos e a identificar riscos antes que se tornem problemas.",
-        "Relatos de possíveis irregularidades devem ser tratados com cuidado e encaminhados aos canais oficiais definidos pela empresa. Não pratique retaliação contra pessoas que apresentem preocupações de boa-fé."
+      "title": "5. Respeito, inclusão e ambiente de trabalho",
+      "blocks": [
+        { "type": "paragraph", "text": "A Ownerinc não tolera discriminação, humilhação, intimidação, violência, assédio moral ou sexual, retaliação ou qualquer comportamento que viole a dignidade das pessoas." },
+        { "type": "paragraph", "text": "Lideranças têm responsabilidade adicional de prevenir comportamentos inadequados, acolher relatos, agir de forma imparcial e buscar apoio das áreas responsáveis quando necessário." }
       ]
     },
     {
-      "title": "7. Ciência e aceite desta demonstração",
-      "paragraphs": [
-        "Ao marcar a confirmação e selecionar “Aceitar e entrar no portal”, você registra que leu e aceita este termo de demonstração. O Conecta armazena a identificação da sua conta, a versão e o identificador do conteúdo apresentado, além da data e hora do aceite.",
-        "Este registro se refere somente ao conteúdo mock acima. Ele não substitui o aceite do Código de Ética oficial. Quando o documento definitivo for disponibilizado, será solicitada uma nova leitura e confirmação."
+      "title": "6. Liderança e responsabilidade",
+      "blocks": [
+        { "type": "paragraph", "text": "Liderar na Ownerinc significa dar exemplo. Gestores devem cumprir este Código, comunicar expectativas com clareza, não tolerar desvios para atingir resultados e criar ambiente no qual as pessoas possam fazer perguntas e relatar preocupações sem medo de retaliação." },
+        { "type": "paragraph", "text": "Nenhuma meta, venda, resultado financeiro ou posição hierárquica justifica comportamento antiético." }
+      ]
+    },
+    {
+      "title": "7. Relacionamento com clientes",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "Apresentar informações verdadeiras, claras, completas e compatíveis com os materiais e condições autorizados.",
+            "Respeitar o tempo, as necessidades e as decisões do cliente.",
+            "Não criar expectativas que a empresa não possa cumprir.",
+            "Não ocultar custos, condições, limitações ou informações relevantes para a decisão.",
+            "Não utilizar pressão indevida, constrangimento, manipulação ou informações falsas para induzir uma contratação.",
+            "Não prometer valorização, rentabilidade, retorno financeiro ou benefício futuro sem respaldo formal e autorização.",
+            "Registrar e encaminhar corretamente informações relevantes para as áreas responsáveis.",
+            "Preservar a confidencialidade dos dados e informações do cliente."
+          ]
+        }
+      ]
+    },
+    {
+      "title": "8. Conduta comercial e vendas",
+      "blocks": [
+        { "type": "paragraph", "text": "No mercado de propriedades compartilhadas de alto padrão, a experiência comercial deve ser coerente com o posicionamento da Ownerinc. O profissional deve gerar confiança, esclarecer e orientar, jamais induzir ou enganar." },
+        {
+          "type": "table",
+          "header": "column",
+          "rows": [
+            ["Esperamos", "Não aceitamos"],
+            ["Discurso baseado em informações oficiais", "Informação inventada ou não autorizada"],
+            ["Venda consultiva e escuta ativa", "Pressão indevida ou constrangimento"],
+            ["Transparência sobre condições", "Omissão deliberada de informação relevante"],
+            ["Promessas compatíveis com o produto", "Promessas de retorno, valorização ou benefícios sem respaldo"],
+            ["Uso correto de materiais comerciais", "Alteração, adulteração ou criação de materiais não autorizados"],
+            ["Registro correto da negociação", "Manipulação de informações para atingir metas"]
+          ]
+        }
+      ]
+    },
+    {
+      "title": "9. Conflitos de interesses",
+      "blocks": [
+        { "type": "paragraph", "text": "Devemos agir no melhor interesse da Ownerinc, evitando situações em que interesses pessoais, familiares ou financeiros possam influenciar — ou parecer influenciar — uma decisão profissional." },
+        { "type": "paragraph", "text": "Exemplos que devem ser comunicados à liderança e/ou área responsável:" },
+        {
+          "type": "list",
+          "items": [
+            "participação pessoal ou familiar em fornecedor ou parceiro em processo de contratação;",
+            "recebimento de benefício pessoal relacionado a uma decisão profissional;",
+            "relação pessoal que possa comprometer a imparcialidade em contratação, promoção ou avaliação;",
+            "atividade externa que concorra com a Ownerinc ou utilize informações, recursos ou oportunidades da empresa."
+          ]
+        }
+      ]
+    },
+    {
+      "title": "10. Presentes, brindes, hospitalidade e benefícios",
+      "blocks": [
+        { "type": "paragraph", "text": "Presentes, brindes ou hospitalidade não podem ser utilizados para influenciar decisões, obter vantagem indevida ou criar obrigação. Benefícios que possam gerar conflito de interesses, constrangimento ou aparência de favorecimento devem ser recusados ou previamente submetidos à orientação da empresa." }
+      ]
+    },
+    {
+      "title": "11. Relação com fornecedores e parceiros",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "Selecionar parceiros com critérios objetivos, técnicos, comerciais e de integridade.",
+            "Evitar favorecimento pessoal.",
+            "Cumprir as alçadas e aprovações internas.",
+            "Não solicitar ou aceitar vantagens pessoais em razão de decisões profissionais.",
+            "Respeitar contratos, confidencialidade e propriedade intelectual.",
+            "Comunicar potenciais conflitos de interesses."
+          ]
+        }
+      ]
+    },
+    {
+      "title": "12. Anticorrupção e integridade",
+      "blocks": [
+        { "type": "paragraph", "text": "É proibido oferecer, prometer, autorizar, solicitar ou receber vantagem indevida para influenciar decisões ou obter benefício impróprio. A mesma responsabilidade se aplica quando a conduta ocorre por meio de terceiros." },
+        { "type": "paragraph", "text": "Situações envolvendo agentes públicos ou outras relações de maior risco devem ser encaminhadas previamente à área responsável pela orientação jurídica/compliance da empresa." }
+      ]
+    },
+    {
+      "title": "13. Informações confidenciais e propriedade intelectual",
+      "blocks": [
+        { "type": "paragraph", "text": "Informações estratégicas, comerciais, financeiras, contratuais, técnicas, de clientes, proprietários, colaboradores e parceiros devem ser utilizadas somente para finalidades profissionais autorizadas. O dever de confidencialidade permanece após o encerramento do vínculo, conforme as obrigações aplicáveis." }
+      ]
+    },
+    {
+      "title": "14. Privacidade e proteção de dados",
+      "blocks": [
+        { "type": "paragraph", "text": "Dados pessoais devem ser tratados de forma responsável, segura e somente para finalidades legítimas e autorizadas. Não se deve compartilhar dados de clientes, leads, proprietários ou colaboradores com pessoas não autorizadas." },
+        { "type": "paragraph", "text": "Incidentes, perda de dispositivos, envio indevido de informações ou suspeita de acesso não autorizado devem ser comunicados imediatamente pelos canais internos definidos pela empresa." }
+      ]
+    },
+    {
+      "title": "15. Uso de recursos, sistemas e inteligência artificial",
+      "blocks": [
+        { "type": "paragraph", "text": "Recursos físicos e digitais da Ownerinc devem ser utilizados de maneira responsável e segura. Ferramentas de inteligência artificial podem ser utilizadas somente de acordo com as regras internas, sem inserir informações confidenciais, dados pessoais ou documentos restritos em ferramentas não autorizadas." }
+      ]
+    },
+    {
+      "title": "16. Redes sociais e representação da marca",
+      "blocks": [
+        { "type": "paragraph", "text": "Quem representa a Ownerinc publicamente deve preservar a reputação da marca, respeitar a confidencialidade e utilizar informações e imagens somente quando autorizadas. Opiniões pessoais não devem ser apresentadas como posicionamentos oficiais da empresa." }
+      ]
+    },
+    {
+      "title": "17. Registros, documentos e informações",
+      "blocks": [
+        { "type": "paragraph", "text": "Registros corporativos devem ser completos, verdadeiros, rastreáveis e mantidos conforme os procedimentos aplicáveis. É proibido falsificar, alterar, ocultar ou destruir registros para mascarar fatos, resultados ou decisões." }
+      ]
+    },
+    {
+      "title": "18. Canal de Ética e Denúncias",
+      "blocks": [
+        { "type": "paragraph", "text": "A Ownerinc disponibiliza um Canal de Ética para que colaboradores e demais públicos possam relatar, de forma segura, situações que possam violar este Código, políticas internas ou a legislação aplicável." },
+        {
+          "type": "list",
+          "items": [
+            "O canal deve ser utilizado de boa-fé.",
+            "Relatos podem envolver assédio, discriminação, fraude, conflito de interesses, corrupção, desvio de conduta, irregularidades comerciais ou outras violações.",
+            "A empresa deve preservar a confidencialidade das informações e limitar o acesso aos responsáveis pela análise.",
+            "Retaliação contra quem fizer um relato de boa-fé ou colaborar com uma apuração não é aceitável.",
+            "Relatos serão avaliados conforme procedimentos internos, com imparcialidade e respeito ao direito de defesa das pessoas envolvidas."
+          ]
+        },
+        { "type": "paragraph", "text": "Canal oficial: app.denouncefy.com" },
+        { "type": "paragraph", "text": "Responsável pela governança do canal: DHO" }
+      ]
+    },
+    {
+      "title": "19. Apuração e medidas decorrentes",
+      "blocks": [
+        { "type": "paragraph", "text": "Relatos e suspeitas de violação serão tratados por meio de processo definido pela empresa, considerando a natureza do caso, as evidências disponíveis, os conflitos de interesse e a necessidade de confidencialidade. Quando confirmada uma violação, poderão ser adotadas medidas educativas, corretivas, disciplinares, contratuais ou outras providências cabíveis, conforme a legislação, os contratos e as políticas internas." }
+      ]
+    },
+    {
+      "title": "20. Responsabilidades de todos",
+      "blocks": [
+        {
+          "type": "table",
+          "header": "column",
+          "rows": [
+            ["Público", "Responsabilidade"],
+            ["Todos os profissionais", "Conhecer, cumprir e buscar orientação sobre este Código; comunicar situações de risco ou violação."],
+            ["Lideranças", "Dar exemplo, orientar equipes, não tolerar desvios e encaminhar relatos de forma adequada."],
+            ["DHO", "Apoiar cultura, comunicação, treinamento e processos relacionados a pessoas e conduta, respeitando as competências do Comitê e do Jurídico."],
+            ["Jurídico", "Orientar sobre riscos legais e de integridade e apoiar processos de apuração, conforme a estrutura definida."],
+            ["Comitê de Pessoas e Ética", "Supervisionar e deliberar sobre casos dentro de suas competências, preservando independência e confidencialidade."],
+            ["Diretoria/Conselho", "Patrocinar a cultura de integridade, aprovar diretrizes e acompanhar riscos e indicadores relevantes."]
+          ]
+        }
+      ]
+    },
+    {
+      "title": "21. Descumprimento do Código",
+      "blocks": [
+        { "type": "paragraph", "text": "O descumprimento deste Código poderá resultar em medidas proporcionais à gravidade e às circunstâncias do caso, observadas a legislação aplicável, as normas internas e os direitos das pessoas envolvidas. A alegação de desconhecimento não elimina a responsabilidade de buscar orientação quando houver dúvida." }
+      ]
+    },
+    {
+      "title": "22. Dúvidas e orientação",
+      "blocks": [
+        { "type": "paragraph", "text": "Nenhum profissional deve se sentir obrigado a tomar uma decisão ética relevante sem orientação. Em caso de dúvida, procure sua liderança, DHO, Jurídico ou os canais oficiais definidos pela Ownerinc." }
+      ]
+    },
+    {
+      "title": "23. Compromisso",
+      "blocks": [
+        { "type": "paragraph", "text": "Ao integrar a Ownerinc, cada profissional assume o compromisso de conhecer e respeitar este Código e de contribuir para uma cultura na qual excelência, resultado e ética caminhem juntos." },
+        { "type": "paragraph", "text": "O Código não substitui leis, contratos, políticas ou procedimentos específicos. Quando houver requisitos mais rigorosos, estes deverão ser observados." }
+      ]
+    },
+    {
+      "title": "ANEXO I — Termo de Ciência e Compromisso",
+      "blocks": [
+        { "type": "paragraph", "text": "Declaro que recebi acesso ao Código de Ética e Conduta da Ownerinc, compreendi sua finalidade e me comprometo a conhecer e respeitar seus princípios e diretrizes, buscando orientação sempre que tiver dúvidas." },
+        { "type": "paragraph", "text": "Nome: ______________________________________________________________________" },
+        { "type": "paragraph", "text": "Cargo: ______________________________________________________________________" },
+        { "type": "paragraph", "text": "Área: ______________________________________________________________________" },
+        { "type": "paragraph", "text": "Data: ______________________________________________________________________" },
+        { "type": "paragraph", "text": "Assinatura: ______________________________________________________________________" }
+      ]
+    },
+    {
+      "title": "ANEXO II — Perguntas práticas para o dia a dia",
+      "blocks": [
+        { "type": "paragraph", "text": "Antes de agir, pare e pergunte:" },
+        {
+          "type": "list",
+          "items": [
+            "Estou fazendo o que é correto ou apenas o que é conveniente?",
+            "Tenho autorização para fazer isso?",
+            "Estou sendo transparente com o cliente e com a empresa?",
+            "Minha decisão poderia prejudicar alguém ou a reputação da Ownerinc?",
+            "Estou tratando dados e informações de forma adequada?",
+            "Existe conflito de interesses?",
+            "Eu recomendaria que um colega fizesse exatamente o mesmo?",
+            "Preciso pedir orientação antes de seguir?"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "CONTROLE DO DOCUMENTO",
+      "blocks": [
+        {
+          "type": "table",
+          "header": "row",
+          "rows": [
+            ["Documento", "Código de Ética e Conduta Ownerinc"],
+            ["Versão", "1.0"],
+            ["Ano", "2026"],
+            ["Responsável pela elaboração", "DHO"],
+            ["Aprovação", "Diretoria / Conselho"]
+          ]
+        }
       ]
     }
   ]

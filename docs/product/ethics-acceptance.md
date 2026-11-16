@@ -11,11 +11,21 @@ verificado deixou de ser requisito de admissão, mas o aceite do termo continua
 obrigatório após a aprovação administrativa. O login encaminha a conta aprovada
 sem aceite para a tela de Ética antes de abrir as áreas protegidas.
 
-Nesta entrega, `api/ethics/term.json` contém texto demonstrativo, não o Código de
-Ética oficial. O aviso de demonstração é apresentado na tela. A versão inicial é
-`mock-2026-11-v1`; o servidor calcula SHA-256 de todo o documento JSON. Alterar o
-conteúdo ou a versão exige novo aceite. O documento oficial deverá ter nova versão
-e `mock: false`, com texto e aviso previamente aprovados pelos responsáveis.
+`api/ethics/term.json` contém o **Código de Ética e Conduta Ownerinc, versão 1.0,
+2026**, com `mock: false`. O texto foi transcrito integralmente do DOCX fornecido:
+mensagem institucional, 23 seções, dois anexos, controle do documento e três
+tabelas. A única substituição textual aprovada foi o responsável pela governança
+do canal na seção 18: o marcador `xxxxxxxxxxx` foi substituído por **DHO**.
+
+O servidor calcula SHA-256 de todo o documento JSON, incluindo listas e tabelas.
+Alterar o conteúdo ou a versão exige novo aceite. A versão demonstrativa anterior,
+`mock-2026-11-v1`, não libera o documento oficial, mesmo quando o titular já usava o
+Portal. Seus registros são preservados: um novo aceite acrescenta a versão 1.0,
+sem atualizar ou excluir os anteriores. Isso vale também para admins e superadmins.
+
+O texto mantém inclusive os campos impressos do Anexo I como conteúdo estático:
+eles não são novos inputs, não recebem preenchimento automático e não afirmam
+assinatura eletrônica. A confirmação continua vinculada à conta autenticada.
 
 ## Experiência
 
@@ -60,6 +70,12 @@ servidor e nunca reutiliza uma resposta de outra conta.
 API tem somente SELECT/INSERT; o cron não recebe acesso. Não há backfill: contas
 antigas começam pendentes. Exclusão de usuário remove seus aceites em cascata.
 
+O documento usa `preamble` e seções com blocos `paragraph`, `list` e `table`,
+mantendo a ordem do DOCX. As tabelas preservam cabeçalhos semânticos de coluna
+(seções 8 e 20) ou de linha (controle do documento). Conteúdo é renderizado
+literalmente com `textContent`, nunca como HTML. Um bloco desconhecido interrompe
+o carregamento, sem permitir aceitar um documento renderizado parcialmente.
+
 As rotas públicas de cadastro, recuperação de senha e health checks permanecem
 públicas com seus contratos atuais. O gate não protege HTML estático ou fotos de
 perfil já públicas; ele impede montar conteúdo autenticado e usar funcionalidades
@@ -71,6 +87,12 @@ A migration `039_ethics_acceptances` precisa ser aplicada antes de executar a AP
 nova. O runner existente aplica migrations e provisiona os privilégios. A ausência
 da tabela falha de forma fechada, sem liberar acesso. Não foram alterados scripts
 de deploy, Nginx, cron ou serviços de produção nesta entrega.
+
+A substituição do mock pela versão oficial **não exige nova migration** ou
+limpeza de aceites. O mecanismo existente consulta a versão e o hash atuais.
+O arquivo Word é a fonte textual, não é executado nem convertido por uma
+dependência de produção. Elementos gráficos do papel timbrado não são copiados:
+a tela mantém a identidade visual Conecta.
 
 O PDF não é necessário nesta fase: o texto na página permite observar a rolagem
 de forma consistente sem depender do visualizador nativo. Upload, gestão de
@@ -88,6 +110,14 @@ substituídos. Cobrem os três perfis, contas sem aceite, validação de payload
 versão/hash, idempotência, isolamento entre contas, erros, guard de sessão,
 rolagem, checkbox e retorno seguro.
 
+`tests/fixtures/ethics-official-provenance.json` registra o SHA-256 do DOCX
+original e o digest dos 148 textos normalizados (espaços/quebras de linha), na
+ordem do arquivo, após a única correção autorizada de DHO. O teste de conteúdo e
+o navegador comparam esse digest com o documento efetivamente apresentado.
+`tests/fixtures/ethics-mock-v1.json` mantém a identidade exata do mock anterior
+para testar reaceite e preservação do histórico, sem depender do arquivo externo.
+O teste não modifica o DOCX original enviado.
+
 Para testar no Chrome, instale Playwright e `@axe-core/playwright` fora do projeto:
 
 ```sh
@@ -100,7 +130,8 @@ O script inicia e encerra seu próprio servidor loopback. Usa frontend, helpers 
 autenticação, rotas e middleware reais, substituindo somente Firebase e transporte
 SQL. Confere login, link direto, resposta de API, segundo contexto de navegador,
 teclado, falhas/retries, conflito de versão, logout e troca de conta com gravação
-pendente. Audita reflow e WCAG A/AA em 320, 360, 402, 768, 1366 e 1920 px. Evidências
+pendente. Audita fidelidade textual, tabelas, reflow e WCAG A/AA em 320, 360, 402,
+768, 1366 e 1920 px. Evidências
 ficam em `opencode/ethics-acceptance` na pasta temporária; `VISUAL_OUTPUT` altera o
 destino.
 

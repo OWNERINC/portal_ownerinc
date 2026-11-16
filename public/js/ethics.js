@@ -2,6 +2,7 @@ import { auth } from './firebase-config.js';
 import { fetchAPI, getCurrentUserDoc, logout } from './auth.js';
 import { safeDestination } from './portal-destination.js';
 import { createEthicsReader } from './ethics-reader.js';
+import { renderEthicsDocument } from './ethics-document.js';
 
 const elements = Object.fromEntries([...document.querySelectorAll('[id]')].map(element => [element.id, element]));
 const node = id => elements[id];
@@ -43,21 +44,11 @@ async function loadTerm() {
     if (!isCurrent()) return;
     if (data.accepted === true) return enterPortal();
     term = data.term;
+    node('ethics-title').textContent = term.title;
     node('ethics-notice').textContent = term.notice;
+    node('ethics-notice').hidden = !term.notice;
     node('ethics-version').textContent = `Versão ${term.version}${term.mock ? ' · Demonstração' : ''}`;
-    const sections = term.sections.map(section => {
-      const element = document.createElement('section');
-      const title = document.createElement('h2');
-      title.textContent = section.title;
-      element.append(title);
-      for (const paragraph of section.paragraphs) {
-        const text = document.createElement('p');
-        text.textContent = paragraph;
-        element.append(text);
-      }
-      return element;
-    });
-    node('ethics-document').replaceChildren(...sections);
+    renderEthicsDocument(node('ethics-document'), term);
     node('ethics-content').hidden = false;
     node('ethics-reader').scrollTop = 0;
     node('ethics-reading-status').textContent = 'Role o termo até o final para liberar a confirmação.';

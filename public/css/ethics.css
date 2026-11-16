@@ -18,6 +18,13 @@ h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); line-height: 1.25; }
 .ethics-reader section:first-child h2 { margin-top: 0; }
 .ethics-reader p { margin: 0 0 14px; }
 .ethics-reader section:last-child p:last-child { margin-bottom: 0; }
+.ethics-document-cover { margin-bottom: 24px; }
+.ethics-document-cover p:first-child, .ethics-document-cover p:nth-child(2) { font-weight: 700; }
+.ethics-reader ul { padding-left: 24px; margin: 0 0 16px; }
+.ethics-reader li + li { margin-top: 12px; }
+.ethics-reader table { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 16px 0; font-size: 0.9375rem; }
+.ethics-reader th, .ethics-reader td { border: 1px solid var(--border); padding: 12px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.ethics-reader th { background: var(--bg); font-weight: 700; }
 .ethics-reading-status { color: var(--text-secondary); font-size: 0.875rem; margin: 12px 0 16px; }
 .ethics-confirmation { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; min-height: 44px; cursor: pointer; }
 .ethics-confirmation input { width: 20px; height: 20px; flex: 0 0 20px; margin: 3px 0 0; accent-color: var(--primary); }
