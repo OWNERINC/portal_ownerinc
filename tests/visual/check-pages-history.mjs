@@ -44,8 +44,6 @@ const richDoc = text => ({type:'doc',content:[{type:'paragraph',content:[{type:'
 async function key(page, key = 'Control+z') { await page.keyboard.press(key); }
 async function advancedPosition(page) {
   await pagesEditorOrganize(page);
-  const details = page.locator('.pages-inspector-advanced');
-  if (!await details.evaluate(n => n.open)) await details.locator('summary').first().click();
 }
 async function saved(page, id) {
   const r = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/pages/${id}/draft`);
@@ -166,7 +164,7 @@ try {
     assert.equal(await page.evaluate(()=>!!identity.av&&!!identity.bv),true,'real PM root view descriptors exist');
     await pmA.click(); await pmA.press('Control+End'); await pmA.pressSequentially(' typed');
     await page.locator(`[data-block-id="${b.id}"] .pages-select-block`).click();
-    await advancedPosition(page);
+    if(await page.locator('[data-sheet-tab=style]').isVisible())await page.locator('[data-sheet-tab=style]').click();
     await page.locator('.pages-legacy-presentation > summary').click();
     await page.getByRole('combobox',{name:'Fonte',exact:true}).selectOption('oswald');
     await pagesEditorOrganize(page);

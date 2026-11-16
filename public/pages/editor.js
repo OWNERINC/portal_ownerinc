@@ -206,7 +206,7 @@ export function mountPageEditor(page) {
   function renderToolbar() {
     if (!toolbar || !state?.editable || !live()) return;
     const block = allBlocks(state.document).find(item => item.id === activeId);
-    const disclosures=inspectorUI&&inspectorUI.blockId===block?.id?{advanced:inspectorUI.node.querySelector('.pages-inspector-advanced')?.open,legacy:inspectorUI.node.querySelector('.pages-legacy-presentation')?.open}:null;
+    const disclosures=inspectorUI&&inspectorUI.blockId===block?.id?{legacy:inspectorUI.node.querySelector('.pages-legacy-presentation')?.open}:null;
     inspectorUI?.dispose(); inspectorUI = null;
     unregisterTextMenu?.(); unregisterTextMenu = null;
     contextTools?.remove(); contextTools = null;
@@ -244,10 +244,10 @@ export function mountPageEditor(page) {
       control.addEventListener('change', () => composition({ type: 'style', blockId: block.id, style: { ...(findBlock(state.document, block.id).block.style || defaultStyle()), [key]: control.value } }));
       presentation.append(field(label, control));
     }
-    const legacyPresentation = el('details', { className: 'pages-legacy-presentation' }, el('summary', { text: 'Presets legados deste bloco' }), presentation,
+    const legacyPresentation = el('details', { className: 'pages-legacy-presentation' }, el('summary', { text: 'Presets legados deste bloco' }),
+      el('p',{className:'pages-panel-help',text:'Mantém a apresentação de documentos anteriores. Alterações afetam este bloco; o padrão da página não substitui estes presets automaticamente.'}),presentation,
       toolbarCommand('Presets legados em todos os blocos existentes', () => openLegacyStyle(null)));
     presentation.removeAttribute('data-inspector-section');
-    advancedNodes.push(legacyPresentation);
     // Width uses the same bounded command and merge confirmation as Task 11.
     const origin=state, sequence=loadSequence;
     const canStyle=()=>live()&&state===origin&&loadSequence===sequence&&canEditContent()&&!historyBlocked()&&v3Available();
@@ -280,8 +280,9 @@ export function mountPageEditor(page) {
         node.append(...advancedNodes,field('Composição da linha',layout));
       }
     });
+    inspectorUI.node.querySelector('[data-inspector-section="style"]').append(legacyPresentation);
     toolbar.append(inspectorUI.node);
-    if(disclosures){inspectorUI.node.querySelector('.pages-inspector-advanced').open=disclosures.advanced;inspectorUI.node.querySelector('.pages-legacy-presentation').open=disclosures.legacy;}
+    if(disclosures)inspectorUI.node.querySelector('.pages-legacy-presentation').open=disclosures.legacy;
     if (['rich_text','callout','faq'].includes(block.type)) {
       if (!activeEditor()) return;
       const formats = el('div', { className: 'pages-format-tools', role: 'toolbar', 'aria-label': 'Formatação do texto selecionado' });
@@ -353,9 +354,10 @@ export function mountPageEditor(page) {
       if (['rich_text','callout'].includes(block.type)) {
         if (block.type === 'callout') {
           const fields = el('div', { className: 'pages-block-fields' });
-          for (const [key, label, options] of [['tone','Tom',['info','attention','success']], ['icon','Ícone',['none','info','alert','check']]]) {
+          for (const [key, label, options] of [['tone','Tom',['info','attention','success']], ['icon','Ícone do destaque',['none','info','alert','check']]]) {
             const control = el('select', { 'aria-label': label }); options.forEach(value => control.append(el('option', { value, text: optionLabels[value], selected: value === block[key] })));
-            bind(control, value => value[key]); control.addEventListener('change', () => { editBlock(block.id, key, control.value, false); }); fields.append(field(label, control));
+            bind(control, value => value[key]); control.addEventListener('change', () => { editBlock(block.id, key, control.value, false); });
+            const styleField=field(label, control);styleField.dataset.inspectorSection='style';fields.append(styleField);
           }
           entry.fields = fields;
         }
@@ -379,7 +381,7 @@ export function mountPageEditor(page) {
           nativeField(pick,()=>{},()=>false,()=>blockNodes.get(block.id)===entry);
           node.append(pick);const syncPicker=()=>{pick.hidden=!!currentBlock()?.media_id;};syncPicker();entry.syncAudioPicker=syncPicker;
         }
-        const fields = createBlockFields({ page, block, resolveBlock: currentBlock, createRichEditor,
+        const fields = createBlockFields({ page, block, resolveBlock: currentBlock, createRichEditor, previewRoot: figure?.node,
           canEdit: canEditContent, canAct: () => canEditContent() && !historyBlocked(), bindNative: nativeField, nativeMeta,
           transact(meta, change) { return edit(meta, doc => { if (change(doc) === false) return false; const found = findBlock(doc, block.id); if (!found) return false; const candidate = clone(doc); findBlock(candidate, block.id).column.blocks.splice(found.index,1); return !!insertAt(candidate, { columnId: found.column.id, index: found.index, block: found.block }); }); },
           upload: (files,target) => { void upload(files[0], newId(), target, files.slice(1)); },
@@ -410,7 +412,8 @@ export function mountPageEditor(page) {
         entry.reconcile = () => { refreshButton(); destinations.refresh(); };
         entry.syncDestinations = destinations.refresh;
         entry.dispose = () => destinations.dispose();
-        entry.fields = el('div', { className: 'pages-block-fields' }, field('Rótulo', label), field('Estilo do botão', preset), destinations.node);
+        const presetField=field('Estilo do botão', preset);presetField.dataset.inspectorSection='style';
+        entry.fields = el('div', { className: 'pages-block-fields' }, field('Rótulo', label), presetField, destinations.node);
         entry.reconcile();
       } else if (block.type === 'divider') {
         node.append(el('hr'));

@@ -159,7 +159,7 @@ export function createInspector({ document: doc, block, onAppearance, onReset, o
     const sync=()=>{input.value=block.appearance?.[key]||effective[key];}; bindNative?.(input,sync,()=>!available,()=>!disposed&&node.isConnected); return field(label,input);
   };
   const textual=block.type!=='divider';
-  // Compact Content uses the same atomic appearance callback as the full fields.
+  // Compact typography uses the same atomic appearance callback as the full fields.
   // 16 px is the standard base scale, not a claim that every heading/body uses it.
   if (textual && !['image','gif','gallery'].includes(block.type)) {
     const options = {};
@@ -193,32 +193,32 @@ export function createInspector({ document: doc, block, onAppearance, onReset, o
   else node.append(el('p',{text:'Tipografia, tamanho e alinhamento não se aplicam ao separador.'}));
   const savedWidth=findBlock(doc,block.id)?.row.layout==='single'?'full':'half';
   const width=selectControl('Largura do bloco',{full:'Linha inteira',half:'Meia linha'},savedWidth,value=>{if(current())onWidth(value,width);else width.value=savedWidth;});
-  bindNative?.(width,()=>{width.value=findBlock(doc,block.id)?.row.layout==='single'?'full':'half';},()=>false,()=>!disposed&&node.isConnected);node.append(field('Largura',width));
+  const widthField=field('Largura',width);
+  bindNative?.(width,()=>{width.value=findBlock(doc,block.id)?.row.layout==='single'?'full':'half';},()=>false,()=>!disposed&&node.isConnected);
   const savedFill=block.appearance?.background||(block.style?effective.background:'inherit');
-  const fill=selectControl('Fundo do bloco',{none:'Sem preenchimento',inherit:block.style?'Remover ajuste (manter estilo legado)':doc.presentation?.defaults?.palette==='conecta'?'Padrão Conecta':'Padrão da página',custom:'Cor personalizada',...Object.fromEntries(fills.map(c=>[c,c]))},savedFill,value=>{if(!current()||!available){fill.value=savedFill;return;}if(value==='custom'){const root=node.closest('#page-editor-root');root?.querySelector('[data-sheet-tab="position"]')?.click();advanced.open=true;hex.focus();fill.value=savedFill;return;}if(onAppearance({background:value==='inherit'?null:value})===false)fill.value=savedFill;});
+  const fill=selectControl('Fundo do bloco',{none:'Sem preenchimento',inherit:block.style?'Remover ajuste (manter estilo legado)':doc.presentation?.defaults?.palette==='conecta'?'Padrão Conecta':'Padrão da página',custom:'Cor personalizada',...Object.fromEntries(fills.map(c=>[c,c]))},savedFill,value=>{if(!current()||!available){fill.value=savedFill;return;}if(value==='custom'){hex.focus();fill.value=savedFill;return;}if(onAppearance({background:value==='inherit'?null:value})===false)fill.value=savedFill;});
   if(!fills.includes(savedFill)&&!['none','inherit'].includes(savedFill)){fill.append(el('option',{value:savedFill,text:savedFill}));fill.value=savedFill;}
   const hex=el('input',{value:effective.background,'aria-label':'Cor de fundo personalizada',maxlength:32,spellcheck:'false'});
-  const feedback=el('p',{className:'pages-style-invalid',role:'alert'});
+  const feedback=el('p',{id:`pages-inspector-${++panelSequence}-error`,className:'pages-style-invalid',role:'alert'});
+  hex.setAttribute('aria-describedby',feedback.id);
   const reset=()=>{hex.value=effective.background;};bindNative?.(hex,reset,()=>!available,()=>!disposed&&node.isConnected);
-  hex.addEventListener('change',()=>{if(!current()||!available){reset();return;}const color=normalizeHex(hex.value);if(!color){feedback.textContent='Use uma cor hexadecimal #RRGGBB.';reset();return;}hex.value=color;if(onAppearance({background:color})===false)reset();});
+  hex.addEventListener('change',()=>{if(!current()||!available){reset();return;}const color=normalizeHex(hex.value);hex.setAttribute('aria-invalid',String(!color));if(!color){feedback.textContent='Use uma cor hexadecimal #RRGGBB.';return;}feedback.textContent='';hex.value=color;if(onAppearance({background:color})===false)reset();});
   bindNative?.(fill,()=>{fill.value=savedFill;},()=>!available,()=>!disposed&&node.isConnected);
   const swatches=el('div',{className:'pages-fill-swatches',role:'group','aria-label':'Cores de fundo'},...fills.map(color=>swatch(color,()=>{if(current()&&available)onAppearance({background:color});},{disabled:!available})));
   const fillField=field('Fundo',fill); fillField.classList.add('pages-shared-fill');
-  node.append(fillField,swatches,feedback);
+  node.append(fillField,swatches,field('Cor de fundo personalizada',hex),feedback);
   const tags=el('input',{value:(block.tags||[]).join(', '),'aria-label':'Tags do bloco',maxlength:838});
   bindNative?.(tags,()=>{tags.value=(block.tags||[]).join(', ');},()=>!available,()=>!disposed&&node.isConnected);
   tags.addEventListener('change',event=>{if(!current()||!available){tags.value=(block.tags||[]).join(', ');return;}const values=parseLocalTags(tags.value);if(!values){feedback.textContent='Use até 20 tags únicas, não vazias, de 40 caracteres.';tags.value=(block.tags||[]).join(', ');return;}if(onTags(values,nativeMeta(event))===false)tags.value=(block.tags||[]).join(', ');});
   node.append(field('Tags',tags),control('Ícone',icons,'icon'));
-  const advanced=el('details',{className:'pages-inspector-advanced','data-inspector-section':'position'},el('summary',{text:'Opções avançadas'}));
-  advanced.append(field('Cor de fundo personalizada',hex));
-  onAdvanced?.(advanced);
-  if(onReset)advanced.append(button(block.style?'Usar padrão da página — substituir cores e tipografia legadas':'Usar padrão da página para este bloco',()=>{if(current()&&available)onReset();},{className:'btn btn-ghost pages-reset-appearance',disabled:!available}));
-  node.append(advanced);
-  if(!available)node.append(el('p',{text:'Personalização v3 indisponível no servidor. Use os presets legados em Opções avançadas.'}));
+  if(onReset)node.append(button(block.style?'Usar padrão da página — substituir cores e tipografia legadas':'Usar padrão da página para este bloco',()=>{if(current()&&available)onReset();},{className:'btn btn-ghost pages-reset-appearance',disabled:!available}));
+  if(!available)node.append(el('p',{text:'Personalização v3 indisponível no servidor. Use os presets legados em Estilo.'}));
   node.append(el('p',{className:'pages-style-contrast',role:'status',text:contrastText(doc)}));
-  for(const child of node.children)if(child!==advanced)child.dataset.inspectorSection='style';
-  const compact=node.querySelector('.pages-compact-typography');if(compact)compact.dataset.inspectorSection='content';
-  fillField.dataset.inspectorSection='content-style';
+  const style=el('section',{className:'pages-inspector-group','data-inspector-section':'style'},el('h3',{text:'Estilo'}),...Array.from(node.children));
+  const position=el('section',{className:'pages-inspector-group','data-inspector-section':'position'},el('h3',{text:'Posição'}),widthField);
+  // Keep the existing callback/transaction authority; only its host is now flat.
+  onAdvanced?.(position);
+  node.append(style,position);
   return {node,blockId:block.id,dispose(){disposed=true;}};
 }
 

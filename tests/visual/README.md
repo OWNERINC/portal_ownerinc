@@ -48,6 +48,21 @@ por Chrome/PGlite. Aceite final das seis pranchas pertence à Task 18.
 
 ## Revisão editável de Pages (Task 15)
 
+### Inspector e formulários de mídia (melhorias Task 8)
+
+`node tests/visual/check-pages-controls.mjs inspector` usa `PGLITE_MODULE_PATH`,
+`PLAYWRIGHT_MODULE_PATH` e uma pasta **nova** em `PAGES_CONTROLS_OUTPUT`. Cria páginas
+pela API e edita pela UI real em 1366/390 px, sem substituir o documento aberto.
+Confere Conteúdo/Estilo/Posição, presets legados, hexadecimal, largura, duplicar/
+excluir/undo, três uploads registrados, ordinal/identidade/metadados, miniatura blob
+privada sem GET adicional, grupos ordem/remoção, troca/remoção/undo, campos longos,
+download, SQL/save/reload, PM retido e publicador somente leitura. Não oculta ações
+para passar; tabs/scroll são os controles reais. Use também as suítes existentes
+`check-pages-editor-media.mjs` (`MEDIA_VISUAL_OUTPUT`), `check-pages-style.mjs`
+(`STYLE_VISUAL_OUTPUT`), `check-pages-buttons.mjs` (`BUTTONS_VISUAL_OUTPUT`) e
+`check-pages-history.mjs` (`HISTORY_VISUAL_OUTPUT`). Mídia exige os binários externos
+FFmpeg/ffprobe. Não é aceite visual das seis pranchas nem validação de serviços reais.
+
 ### Controles e sobreposições (melhorias Task 5)
 
 `node tests/visual/check-pages-controls.mjs overlays` usa `PGLITE_MODULE_PATH`,

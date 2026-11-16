@@ -12,11 +12,26 @@ export function mediaKind(file, expected) {
 // current IDs, including after history/reorder/source replacement.
 export function createBlockFields({ page, block, resolveBlock, transact, upload, onFocus, createRichEditor,
   bindNative: nativeBinder, nativeMeta, canEdit, canAct = canEdit, richOptions, registerEditor, unregisterEditor,
-  onSource, onChange = () => {} }) {
+  onSource, onChange = () => {}, previewRoot }) {
   const blockId = block.id, node = el('div', { className: 'pages-block-fields' }), items = new Map(), syncs = [];
   let disposed = false;
   const current = () => !disposed && resolveBlock();
   const retained = () => !!current();
+  // Borrow only an already authenticated canvas blob. The renderer owns its
+  // lifetime; this inspector neither fetches private media nor creates URLs.
+  function refreshPreviews() {
+    if (disposed) return;
+    for (const [id,entry] of items) {
+      if (!entry.preview) continue;
+      const source = previewRoot?.querySelector(`[data-gallery-item-id="${id}"] img`)?.getAttribute('src');
+      const privateSource = source?.startsWith('blob:') ? source : null;
+      if (privateSource) { if (entry.preview.getAttribute('src') !== privateSource) entry.preview.setAttribute('src',privateSource); }
+      else entry.preview.removeAttribute('src');
+      entry.preview.hidden = !privateSource;
+    }
+  }
+  const previewObserver = block.type === 'gallery' && previewRoot && typeof MutationObserver !== 'undefined' ? new MutationObserver(refreshPreviews) : null;
+  previewObserver?.observe(previewRoot,{subtree:true,childList:true,attributes:true,attributeFilter:['src']});
   const bindNative = (control, sync, unavailable, keep = retained) => nativeBinder(control, sync, unavailable, () => keep() && node.contains(control));
   function change(meta, apply) {
     if (!current()) return false;
@@ -93,8 +108,22 @@ export function createBlockFields({ page, block, resolveBlock, transact, upload,
         const keep = () => retained() && entry.retained && items.get(itemId) === entry;
         const resolve = () => keep() ? current()?.items?.find(i => i.id === itemId) : null;
         if (type === 'gallery') {
-          for (const [key,label,max] of [['alt','Texto alternativo',300],['caption','Legenda',1000],['credit','Crédito',300]]) input(host, key, label, max, resolve, itemId, false, localSyncs);
-          picker(host, 'Substituir imagem da galeria', 'image', { target: 'replace', blockId, itemId, sourceType: 'gallery' }, false, keep);
+          host.classList.add('pages-gallery-item');
+          const title = el('h3'), metadata = el('p',{className:'pages-gallery-metadata'});
+          const preview = el('img',{className:'pages-gallery-preview',hidden:true}); entry.preview = preview;
+          host.setAttribute('role','group'); host.setAttribute('aria-labelledby',`gallery-item-${itemId}`); title.id = `gallery-item-${itemId}`;
+          host.append(title,preview,metadata);
+          localSyncs.push(() => {
+            const value = resolve(); if (!value) return;
+            const ordinal = current().items.findIndex(i => i.id === itemId) + 1;
+            title.textContent = `Imagem ${ordinal} de ${current().items.length}`;
+            preview.alt = `Prévia privada da imagem ${ordinal}`;
+            metadata.textContent = `${value.kind === 'gif' ? 'GIF' : 'Imagem'} · arquivo privado · ${value.media_id || 'Não enviado'}`;
+          });
+          const fields = el('div',{className:'pages-gallery-metadata-fields'}); host.append(fields);
+          for (const [key,label,max] of [['alt','Texto alternativo',300],['caption','Legenda',1000],['credit','Crédito',300]]) input(fields, key, label, max, resolve, itemId, false, localSyncs);
+          const replace = el('div',{className:'pages-gallery-replace',role:'group','aria-label':'Arquivo do item'}); host.append(replace);
+          picker(replace, 'Substituir imagem da galeria', 'image', { target: 'replace', blockId, itemId, sourceType: 'gallery' }, false, keep);
         } else {
           const summary=el('summary',{className:'pages-faq-question',text:item.question||'Pergunta não preenchida'});host.append(summary);
           localSyncs.push(()=>{summary.textContent=resolve()?.question||'Pergunta não preenchida';});
@@ -107,11 +136,28 @@ export function createBlockFields({ page, block, resolveBlock, transact, upload,
             onChange(content, meta = {}) { if (!keep()) return; const changed = mutate({ ...meta, group: `${blockId}:${itemId}:answer` }, value => { const target = value.items.find(i => i.id === itemId); if (!target) return false; target.answer = content; }); if (!changed && resolve()) entry.editor.sync(resolve().answer); },
           }); registerEditor(itemId, entry.editor);
         }
+        const order = el('div',{className:'pages-media-item-order',role:'group','aria-label':'Ordem do item'}); host.append(order);
         for (const delta of [-1,1]) {
           const text = delta < 0 ? 'Subir item' : 'Descer item';
-          action(host, text, () => { mutate({ closeGroup: true }, value => { const from = value.items.findIndex(i => i.id === itemId), to = from + delta; if (from < 0 || to < 0 || to >= value.items.length) return false; const [moved] = value.items.splice(from,1); value.items.splice(to,0,moved); }); refresh(); }, () => { const index = current()?.items.findIndex(i => i.id === itemId); return index < 0 || index + delta < 0 || index + delta >= current()?.items.length; }, keep);
+          action(order, text, () => {
+            const focused = order.contains(document.activeElement) ? document.activeElement : null;
+            mutate({ closeGroup: true }, value => {
+              const from = value.items.findIndex(i => i.id === itemId), to = from + delta;
+              if (from < 0 || to < 0 || to >= value.items.length) return false;
+              const [moved] = value.items.splice(from,1); value.items.splice(to,0,moved);
+            });
+            refresh();
+            // insertBefore can blur a moved native control. Keep keyboard focus
+            // within this same keyed item, even if its action reached a boundary.
+            if (focused && keep() && host.isConnected) {
+              const target = !focused.disabled ? focused : Array.from(order.querySelectorAll('button')).find(control => !control.disabled);
+              target?.focus({ preventScroll: true });
+            }
+          }, () => { const index = current()?.items.findIndex(i => i.id === itemId); return index < 0 || index + delta < 0 || index + delta >= current()?.items.length; }, keep);
         }
-        action(host, 'Remover item', () => { mutate({ closeGroup: true }, value => { const index = value.items.findIndex(i => i.id === itemId); if (index < 0) return false; value.items.splice(index,1); }); refresh(); }, () => false, keep);
+        const remove = el('div',{className:'pages-media-item-remove',role:'group','aria-label':'Remoção do item'}); host.append(remove);
+        const removeButton = action(remove, 'Remover item', () => { mutate({ closeGroup: true }, value => { const index = value.items.findIndex(i => i.id === itemId); if (index < 0) return false; value.items.splice(index,1); }); refresh(); }, () => false, keep);
+        removeButton.classList.remove('btn-ghost'); removeButton.classList.add('btn-danger-ghost');
       }
       entry.syncs.forEach(sync => sync());
       if (entry.editor) entry.editor.sync(item.answer, bookmark?.blockId === blockId && bookmark.itemId === itemId ? bookmark : null);
@@ -122,11 +168,12 @@ export function createBlockFields({ page, block, resolveBlock, transact, upload,
         if (before) node.insertBefore(entry.node, before); else node.append(entry.node);
       }
     }
+    refreshPreviews();
   }
   function disposeItem(id, entry) {
     entry.retained = false; items.delete(id);
     entry.editor?.destroy(); if (entry.editor) unregisterEditor(id); entry.node.remove();
   }
   refresh();
-  return { node, refresh, dispose() { if (disposed) return; disposed = true; items.forEach((entry,id) => disposeItem(id,entry)); node.remove(); } };
+  return { node, refresh, dispose() { if (disposed) return; disposed = true; previewObserver?.disconnect(); items.forEach((entry,id) => disposeItem(id,entry)); node.remove(); } };
 }

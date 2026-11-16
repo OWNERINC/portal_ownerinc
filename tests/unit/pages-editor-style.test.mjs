@@ -23,7 +23,11 @@ test('image/GIF/gallery size is explicitly inapplicable in its ordered inspector
     const document=upgradeDocument(pageDocument('Media size')),block=document.sections[0].rows[0].columns[0].blocks[0];block.type=type;
     const before=JSON.stringify(document),changes=[];
     const inspector=createInspector({document,block,onAppearance:patch=>changes.push(patch)});doc.body.append(inspector.node);
-    assert.deepEqual(inspector.node.children.slice(0,4).map(n=>n.firstElementChild.textContent),['Tipografia','Tamanho','Alinhamento','Largura']);
+    const style=inspector.node.children[0],position=inspector.node.children[1];
+    assert.equal(style.dataset.inspectorSection,'style');assert.equal(position.dataset.inspectorSection,'position');
+    assert.deepEqual(style.children.slice(1,4).map(n=>n.firstElementChild.textContent),['Tipografia','Tamanho','Alinhamento']);
+    assert.equal(position.children[1].firstElementChild.textContent,'Largura');
+    assert.equal(style.querySelector('input').getAttribute('aria-label'),'Cor de fundo personalizada');
     const size=inspector.node.querySelectorAll('select').find(n=>n.getAttribute('aria-label')==='Tamanho');
     assert.equal(size.disabled,true,type);assert.equal(size.value,'not-applicable');
     assert.match(size.parentElement.textContent,/14 px/);

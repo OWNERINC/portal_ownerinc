@@ -687,7 +687,7 @@ test('button and callout fields display Portuguese options without changing thei
   const tone = control('Tom'); assert.equal(tone.querySelectorAll('option').find(node => node.value === 'attention').textContent, 'Atenção');
   tone.value = 'attention'; tone.dispatchEvent(new TestEvent('change'));
   assert.equal(h.state.document.sections[0].rows[0].columns[0].blocks.find(block => block.type === 'callout').tone, 'attention');
-  assert.equal(control('Ícone').querySelectorAll('option').find(node => node.value === 'none').textContent, 'Sem ícone');
+  assert.equal(control('Ícone do destaque').querySelectorAll('option').find(node => node.value === 'none').textContent, 'Sem ícone');
   assert.equal(pm.destroyed, 0);
 });
 

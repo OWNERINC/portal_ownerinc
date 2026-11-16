@@ -113,8 +113,6 @@ try {
     if (width < 1100) {
       await page.getByRole('button', { name: 'Estilo', exact: true }).click();
       // New per-block inheritance controls truthfully require server writer v3.
-      await page.getByRole('button', { name: 'Posição', exact: true }).click();
-      await page.locator('.pages-inspector-advanced > summary').click();
       await page.locator('.pages-legacy-presentation > summary').click();
       await page.getByRole('combobox', { name: 'Fonte', exact: true }).selectOption('manrope');
       await pagesBrowserReflow(page, AxeBuilder, `v2-bottom-sheet-${width}`);

@@ -16,6 +16,29 @@ O exemplo de vestimenta é ilustrativo, não uma política oficial.
 
 ## Base e compatibilidade
 
+O inspector separa Conteúdo (campos do bloco e destinos), Estilo (tipografia,
+cores inclusive hexadecimal, ícone, tags e reset) e Posição (largura/composição,
+mover, duplicar e excluir). Desktop conserva os grupos abertos; o compacto usa
+as mesmas seções em suas abas. Presets legados continuam em disclosure secundário
+explicado dentro de Estilo; abrir controles não converte v1/v2/v3. `onAdvanced`
+conserva o callback de composição existente, mas recebe um grupo plano de Posição.
+Campos nativos de estilo de botão/callout são movidos, não clonados; ao trocar
+seleção retornam ao proprietário keyed. FAQ e EditorViews continuam inline por ID.
+
+Cada item de galeria tem título ordinal, tipo e identidade do arquivo privado,
+metadados e grupos distintos de arquivo/ordem/remoção. `previewRoot`, opcional em
+`createBlockFields`, fornece somente o DOM do painter atual: um MutationObserver
+restrito à galeria reaproveita `blob:` já autenticado, acompanha troca/remoção e é
+desconectado no dispose. Não cria URLs nem faz requisições extras. O painter mantém
+a propriedade/revogação das URLs. Campos de destino/download usam gaps de 16 px;
+labels preservam 8 px. Nenhuma transação ou validação SQL foi movida para o painel.
+
+`node tests/visual/check-pages-controls.mjs inspector` exige as mesmas variáveis
+locais de `menus`, com saída nova. Cobre 1366/390 px, legado, cor, largura,
+duplicação/exclusão/undo, três uploads reais, identidade/ordem/metadados/miniaturas,
+remoção/troca/undo, destino, save/SQL/reload e publicador read-only. Não substitui
+documento aberto nem comprova PostgreSQL concorrente, autenticação ou mobile físico.
+
 Os menus transitórios do editor (Prévia, Mais ações e Mais opções de texto)
 compartilham `createEditorMenus({page})`: `register(details)` devolve unregister,
 `closeAll({restoreFocus = false})` fecha sem salvar e `dispose()` libera listeners.

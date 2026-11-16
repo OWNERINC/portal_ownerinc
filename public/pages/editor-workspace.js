@@ -107,9 +107,11 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
   const inspectorTitle = el('h2', { text: 'Editar bloco' });
   const inspector = el('aside', { className: 'pages-v2-inspector', 'aria-label': 'Propriedades do editor' });
   const contentFields = el('div', { className: 'pages-v2-content-fields', 'data-inspector-section': 'content' });
+  const blockStyleFields = el('div', { className: 'pages-v2-block-style-fields', 'data-inspector-section': 'style' });
+  let styledFieldsHost;
   const mobileFormat = el('div', { className: 'pages-v2-mobile-format', 'data-inspector-section': 'content', hidden: true });
   const extraFormat = el('div', { className: 'pages-v2-extra-format', 'data-inspector-section': 'style', hidden: true });
-  const blockPanel = el('div', { className: 'pages-v2-block-panel' }, mobileFormat, contentFields, extraFormat, toolbar);
+  const blockPanel = el('div', { className: 'pages-v2-block-panel' }, mobileFormat, contentFields, blockStyleFields, extraFormat, toolbar);
   const pagePanel = el('div', { className: 'pages-v2-page-panel', hidden: true }, metadata, actions);
   function setTab(tab) {
     const isPage = tab === 'page'; blockPanel.hidden = isPage; pagePanel.hidden = !isPage;
@@ -356,9 +358,18 @@ export function createEditorWorkspace({ root, page, menus, header, actions, meta
       const section = currentDocument?.sections.find(s => s.rows.some(r => r.columns.some(c => c.blocks.some(b => b.id === block?.id))));
       activeSection = section?.id;
       sectionList.querySelectorAll('[data-structure-section]').forEach(node => node.setAttribute('aria-pressed', String(node.dataset.structureSection === activeSection)));
+      if (styledFieldsHost !== fields) {
+        // Retain native fields/callbacks while presenting button/callout styling
+        // outside Content. Return them to their keyed owner before switching.
+        if(styledFieldsHost)styledFieldsHost.append(...Array.from(blockStyleFields.children));
+        styledFieldsHost=fields;
+        if(fields)for(const child of Array.from(fields.children))if(child.dataset.inspectorSection==='style')blockStyleFields.append(child);
+      }
       if (fields && contentFields.firstElementChild !== fields) contentFields.replaceChildren(fields);
       if (fields) fields.hidden = false;
       if (!fields) contentFields.replaceChildren(el('p', { className: 'pages-v2-field-hint', text: block ? 'Edite o texto diretamente na página. Use Estilo ou Posição para personalizar este bloco.' : 'Selecione um bloco na página.' }));
+      const styleGroup=toolbar.querySelector('.pages-inspector-group[data-inspector-section="style"]');
+      if(styleGroup&&blockStyleFields.parentElement!==styleGroup)styleGroup.insertBefore(blockStyleFields,styleGroup.children[1]||null);
       if (open) openInspector('block');
       if (!pagePanel.hidden) return;
       inspectorTitle.textContent = compact?.matches && block ? 'Editar bloco' : section?.label || (block ? 'Editar bloco' : 'Selecione um bloco');

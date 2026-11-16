@@ -186,17 +186,32 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
 .pages-page-style-panel .pages-style-contrast { margin-bottom: 6px; }
 .pages-page-style-panel [data-apply-style] { width: 129px; min-height: 44px; border: 0; padding: 8px 10px; font-size: 13px; }
 .pages-style-legacy { margin-top: 12px; font-size: .75rem; }
-.pages-style-legacy summary, .pages-inspector-advanced summary { cursor: pointer; }
+.pages-style-legacy summary, .pages-legacy-presentation summary { cursor: pointer; }
 .pages-fill-swatches { display: flex; flex-wrap: wrap; gap: 4px; }
 .pages-color-swatch.btn { display: inline-grid; place-items: center; min-width: 44px; width: 44px; min-height: 44px; padding: 3px; border: 0; background: transparent; }
 .pages-color-swatch::before { content: ''; width: 24px; height: 24px; background: var(--swatch); border: 1px solid #deded9; border-radius: 50%; }
 #page-editor-root .pages-style-inspector { display: grid; gap: 16px; }
-#page-editor-root .pages-style-inspector > .pages-field { margin: 0; }
-#page-editor-root .pages-style-inspector > details { font-size: .75rem; }
+#page-editor-root .pages-inspector-group { display: grid; gap: 16px; min-width: 0; }
+#page-editor-root .pages-inspector-group + .pages-inspector-group { margin-top: 8px; padding-top: 24px; border-top: 1px solid var(--border); }
+#page-editor-root .pages-inspector-group > h3 { margin: 0; font-size: .875rem; }
+#page-editor-root .pages-inspector-group .pages-field { min-width: 0; margin: 0; gap: 8px; }
+#page-editor-root .pages-inspector-group :is(input,select,button) { max-width: 100%; min-width: 0; }
+#page-editor-root .pages-legacy-presentation { font-size: .875rem; }
+#page-editor-root .pages-legacy-presentation summary { min-height: 44px; align-content: center; }
+#page-editor-root .pages-legacy-presentation > :not(summary) { margin-top: 16px; }
 #page-editor-root .pages-fill-swatches .pages-color-swatch.btn { flex: 0 0 44px; min-width: 44px; width: 44px; min-height: 44px; padding: 4px; }
-#page-editor-root .pages-style-inspector .pages-inspector-advanced { margin-top: 0; }
-#page-editor-root .pages-inspector-advanced > :not(summary) { margin-top: 12px; }
-#page-editor-root .pages-inspector-advanced .pages-toolbar-presentation { gap: 12px; }
+#page-editor-root .pages-legacy-presentation .pages-toolbar-presentation { gap: 16px; }
+#page-editor-root :is(.pages-button-destination,.pages-destination-download,.pages-gallery-metadata-fields) { display: grid; min-width: 0; gap: 16px; }
+#page-editor-root :is(.pages-button-destination,.pages-gallery-item) :is(input,select,textarea) { width: 100%; min-width: 0; max-width: 100%; }
+#page-editor-root .pages-gallery-item { display: grid; gap: 16px; min-width: 0; padding-block: 24px; border-bottom: 1px solid var(--border); }
+#page-editor-root .pages-gallery-item h3 { margin: 0; font-size: 1rem; }
+#page-editor-root .pages-gallery-metadata { margin: 0; overflow-wrap: anywhere; font-size: .8125rem; color: var(--text-secondary); }
+#page-editor-root .pages-gallery-preview { width: 100%; height: 112px; object-fit: contain; background: var(--bg); }
+#page-editor-root .pages-media-item-order { display: flex; flex-wrap: wrap; gap: 8px; }
+#page-editor-root .pages-media-item-remove { margin-top: 8px; }
+#page-editor-root .pages-gallery-item .pages-field { gap: 8px; margin: 0; }
+#page-editor-root .pages-v2-block-style-fields { display: grid; gap: 16px; margin-bottom: 24px; }
+#page-editor-root .pages-v2-block-style-fields:empty { display: none; }
 #page-editor-root .pages-reset-appearance { white-space: normal; max-width: 100%; text-align: start; }
 #page-editor-root .pages-v2-content-fields:has(> .pages-v2-field-hint) { display: none; }
 #page-editor-root .pages-v2-inspector-heading h2 { margin-bottom: 16px; }
@@ -376,9 +391,7 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
   #page-editor-root .pages-style-inspector { gap: 16px; }
   #page-editor-root .pages-style-inspector .pages-field { gap: 8px; }
   #page-editor-root .pages-style-inspector .pages-field :is(input:not([type=checkbox]),select) { min-height: 44px; padding: 10px 12px; font-size: 14px; }
-  #page-editor-root .pages-style-inspector > .pages-field > span { line-height: 17px; }
-  #page-editor-root .pages-style-inspector > .pages-fill-swatches { margin-block: -4px; }
-  #page-editor-root .pages-style-inspector .pages-inspector-advanced .pages-field :is(input,select) { min-height: 44px; height: 44px; }
+  #page-editor-root .pages-inspector-group > .pages-field > span { line-height: 17px; }
   #page-editor-root .pages-v2-inspector .pages-field > span { font-size: 11px; }
 }
 @media (min-width:1100px) {
@@ -406,8 +419,8 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
   #page-editor-root .pages-v2-sheet-tabs .btn { background: transparent; border: 0; padding-inline: 0; border-radius: 0; }
   #page-editor-root .pages-v2-sheet-tabs [aria-pressed=true] { color: var(--accent-text); box-shadow: inset 0 -2px var(--accent); }
   #page-editor-root .pages-sheet-done { display: inline-flex; margin-top: 20px; }
-  #page-editor-root[data-inspector-section=content] [data-inspector-section]:not([data-inspector-section=content],[data-inspector-section=content-style]),
-  #page-editor-root[data-inspector-section=style] [data-inspector-section]:not([data-inspector-section=style],[data-inspector-section=content-style]),
+   #page-editor-root[data-inspector-section=content] [data-inspector-section]:not([data-inspector-section=content]),
+   #page-editor-root[data-inspector-section=style] [data-inspector-section]:not([data-inspector-section=style]),
   #page-editor-root[data-inspector-section=position] [data-inspector-section]:not([data-inspector-section=position]) { display: none; }
   #page-editor-root .pages-v2-page-panel .pages-metadata { max-width: 600px; }
   #page-editor-root .pages-v2-sheet-tabs:has(+ .pages-v2-block-panel[hidden]) { display: none; }
@@ -416,8 +429,7 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
   #page-editor-root .pages-v2-content-title { font-size: 2rem; }
   .pages-editor-panel::backdrop { background: var(--scrim); }
 }
-/* The compact Content sheet reuses commands and the shared background field.
-   Extra text controls live in Style; only the combined font/scale input is mobile. */
+/* Compact sheets use the same content/style/position groups as desktop. */
 #page-editor-root .pages-compact-typography, #page-editor-root .pages-v2-mobile-notice { display: none; }
 @media (max-width:1099px) {
   #page-editor-root .pages-v2-inspector {
@@ -443,7 +455,8 @@ body.pages-editor-active .page-body { padding: 0; max-width: none; }
   #page-editor-root .pages-v2-extra-format { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
   #page-editor-root .pages-v2-extra-format[hidden] { display: none; }
   #page-editor-root .pages-compact-typography { display: grid; }
-  #page-editor-root .pages-style-inspector { gap: 12px; }
+   #page-editor-root .pages-style-inspector { gap: 16px; }
+   #page-editor-root .pages-inspector-group + .pages-inspector-group { margin: 0; padding: 0; border: 0; }
   #page-editor-root .pages-style-inspector .pages-field { gap: 8px; }
   #page-editor-root .pages-v2-inspector .pages-field :is(input:not([type=checkbox]),select) { min-height: 44px; padding: 10px 12px; font-size: 16px; }
   #page-editor-root .pages-v2-inspector .pages-shared-fill > span { font-size: 0; }

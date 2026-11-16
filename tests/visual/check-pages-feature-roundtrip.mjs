@@ -98,7 +98,6 @@ export async function checkPagesFeatureRoundtrip(browser, output) {
     for (const [name, value] of [['Tipografia','source-serif-4'], ['Tamanho','large'], ['Alinhamento','center'], ['Fundo do bloco','#FFFFFF'], ['Ícone','check']]) await inspector.getByRole('combobox', { name, exact: true }).selectOption(value);
     await inspector.getByRole('textbox', { name: 'Tags do bloco' }).fill('Integração, Guia'); await inspector.getByRole('textbox', { name: 'Tags do bloco' }).press('Tab');
     await inspector.getByRole('combobox', { name: 'Largura do bloco' }).selectOption('half');
-    await inspector.locator('.pages-inspector-advanced > summary').click();
     await inspector.getByRole('button', { name: 'Duplicar', exact: true }).click();
     await p.getByRole('button', { name: 'Desfazer exclusão', exact: true }).click(); await p.keyboard.press('Control+y');
     const duplicated = await p.locator('[data-block-type=rich_text]').count(); assert.equal(duplicated, 5);
