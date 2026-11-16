@@ -9,7 +9,7 @@
 
 **Tech Stack:** JavaScript ES modules, CSS, ProseMirror/Sortable existentes, Express/PostgreSQL existentes, testes Node, Playwright + axe + harness PGlite local.
 
-**Status:** Aprovado pelo usuário em 16/11/2026. Execução com agentes por tarefa e revisão independente; gate específico da tarefa 9 preservado.
+**Status:** Implementadas e revisadas as tarefas 1–8 e 10. Tarefa 9/A18 adiada pelo usuário no gate específico. Prévia visual das melhorias aprovada sem observações e sem deploy. Validação serial final: 9/9 controles, 15/15 runners amplos, verify 1.219/1.221 aprovados, zero falhas e dois skips existentes. Registro em `docs/reviews/2026-11-16-pages-controls-acceptance.md`; integração ainda não autorizada.
 
 ## Base e decisões de escopo
 
@@ -377,5 +377,6 @@ entregue se o gate da tarefa 9 não for aprovado; nunca declarar 18/18 nesse cas
 - Dependências sem ciclos; APIs novas definidas onde introduzidas; nenhum schema novo.
 - Base visual preservada; mudanças maiores que correção possuem gate de aceite.
 - Sem modificações de produção, estimativas de prazo artificiais ou promessa de equivalência de pixels.
-- Plano revisto inline contra os 18 achados. Próximo passo é aprovação do plano e
-  escolha de execução inline ou agentes por tarefa com revisão, não implementação automática.
+- Plano executado com agentes por tarefa e revisão independente. Tarefas 1–8 e 10
+  concluídas, A18 adiado por escolha do usuário. Revisão final e aceite visual
+  concluídos; integração/deploy continuam como decisões separadas do usuário.

@@ -3,7 +3,7 @@
 ## Estado e limites do aceite
 
 Base das tarefas 1–8: `1436f69237c091abf3196553e14465b582278c6d`.
-Plano aprovado: `BASE1436f69`. Este registro separa regressão automatizada,
+Plano aprovado: `docs/superpowers/plans/2026-11-16-pages-controls-improvements.md`. Este registro separa regressão automatizada,
 comparação com referências e aceite humano. **Não é autorização de integração,
 deploy ou publicação. A18 foi adiado pelo usuário no gate da tarefa 9.**
 Não foram implementados novos nomes de arquivo ou UX de legendas.
@@ -19,7 +19,7 @@ documento de usuário aberto é substituído para demonstrar comportamento.
 Cada item abaixo é verificável pelo runner indicado. O resultado final da execução
 e as limitações são registrados nas seções seguintes; não equivale a 18/18.
 **A01–A17: correções exercitadas com PASS funcional automatizado no harness**;
-aceite humano e contraste inconclusivo de nós adicionais continuam gates separados.
+aceite humano e contraste inconclusivo de nós adicionais são registros separados.
 
 - **A01 — menu de texto:** `controls-menus`, quatro larguras; ações textuais reais,
   alvo 44 px, lista numerada/lista/remoção/undo, Escape e identidade PM.
@@ -158,7 +158,8 @@ de geometria no toolbar/inspector; Estilo/Inserir/Revisão também nos painéis.
 tem cinco falhas de texto amostrado por região histórica e mobile quatro (incluindo
 tipografia/fundo agora em Estilo). Esses resultados NÃO são removidos nem reclassificados
 como igualdade; vários textos continuam visíveis fora da região histórica, como
-mostra `desktop-review.png`. A aprovação humana dessas diferenças ainda está pendente.
+mostra `desktop-review.png`. A aprovação humana dessas diferenças está registrada abaixo;
+ela não altera o resultado quantitativo estrito `NOT_ACCEPTED`.
 `style-strict.log` e `workspace-strict.log` registram exit1 por 44 vs36 e 412 vs329.
 Repetição sobre o runtime/CSS final em `pages-task10-tail-a/six-reference/` mantém
 **NOT_ACCEPTED** com seis capturas/overlays/diffs novos e hashes originais intactos.
@@ -239,10 +240,55 @@ visual. Comparação estrita usa `check-pages-reference.mjs`, diretório novo em
 ser registrado, não convertido em sucesso. Style/workspace/mobile também conservam
 `--strict-reference-geometry` separado do modo funcional.
 
+## Aceite visual humano desta rodada
+
+Após a revisão independente do conjunto e a aprovação da correção final
+`90c32d7`, o controlador apresentou um seletor com dez capturas reais do runtime
+local final: Estilo desktop, pendências e link tablet, controles de texto mobile,
+menu expandido, inspector de Estilo, salvamento busy/não confirmado, galeria e
+erros independentes. A página explicitou diferenças intencionais das pranchas
+anteriores e A18 adiado, sem alegar igualdade de pixels.
+
+O usuário selecionou **“Aprovar visual · sem deploy”**, sem observações.
+Este é o aceite humano da apresentação das melhorias A01–A17, não autorização
+de integração, deploy, acesso a produção ou publicação de conteúdo. A18 continua
+adiado. A matriz estrita permanece `NOT_ACCEPTED`; os 13 resultados axe
+incompletos e os limites de dispositivos/plataformas não são resolvidos por esse aceite.
+A repetição serial final dos testes era independente e ainda estava em execução
+no momento da escolha; ela concluiu posteriormente com os resultados abaixo.
+
+## Fechamento da revisão independente e validação final
+
+Runtime final: `90c32d74bca5dd19bae1259b860363cd8e7829bd`.
+A revisão do conjunto encontrou alvos compactos de texto abaixo de 44 px,
+seleção de caso por variável de ambiente ignorada e orientação arquitetural antiga
+contraditória. Os três pontos foram corrigidos numa única rodada limitada;
+a revisão independente do diff `188cabc..90c32d7` aprovou as correções,
+sem novos ajustes obrigatórios. O gate humano foi satisfeito separadamente acima.
+
+Execução serial final `pages-final-fix-final-a/summary.json`:
+
+- **9/9 casos de controles e 15/15 runners amplos funcionais aprovados** sobre
+  o runtime final; 26/26 comandos filhos terminaram com exit 0, incluindo verify
+  e diff-check. Não é apenas a combinação de execuções de versões anteriores.
+- **`npm run verify`: 1.221 testes, 1.219 aprovados, zero falhas, dois skips existentes.**
+- Testes focados separados: 30/30 aprovados.
+- Controles de texto compactos: 36 medições e 144 verificações de borda,
+  sem misses; caixa real mínima 44×44 px em 320/390/768 px, comandos reais e
+  EditorViews retidas. A matriz de toolbar principal continua separada dessa superfície.
+- Runner aceita argumento posicional > `PAGES_CONTROLS_CASE` > padrão `menus`;
+  valores inválidos são rejeitados antes de iniciar o harness.
+
+Logs e capturas finais ficam em
+`C:/Users/Criação/AppData/Local/Temp/opencode/pages-final-fix-final-a/`;
+testes focados em `pages-final-fix-focused.log` no mesmo diretório pai.
+Aceite humano não altera os resultados estritos e limitações de acessibilidade
+documentados acima. Nenhuma escrita em produção, push, PR ou deploy nesta rodada.
+
 ## Gates restantes
 
-- Aceite humano visual: **pendente**, a ser apresentado pelo controlador após
-  revisão independente de toda a branch. Este executor não solicitou aceite.
+- Aceite humano visual: **aprovado**, sem deploy e sem observações, conforme
+  registro acima. Integração/deploy continuam sem autorização.
 - A18/tarefa 9: **adiado pelo usuário**.
 - Touch físico, teclado virtual/IME físico, Safari/iOS: **não verificados**.
   Eventos sintéticos/CDP Chrome não substituem essa validação.
