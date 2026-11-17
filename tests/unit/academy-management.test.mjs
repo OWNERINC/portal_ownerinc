@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import test from 'node:test';
-import { FixtureNode, TestEvent, parseInto, deferred, drain } from '../helpers/frontend-feedback-harness.mjs';
+import { FixtureNode, TestEvent, parseInto, deferred, drain, createFeedbackHarness } from '../helpers/frontend-feedback-harness.mjs';
 
 const [app, manager, course, curriculum, admin] = await Promise.all([
   readFile('public/academy/app.js', 'utf8'), readFile('public/academy/manage-view.js', 'utf8'),
@@ -42,6 +42,137 @@ async function curriculumHarness(extraLesson = false) {
 }
 
 function button(root, text) { return root.querySelectorAll('button').find(node => node.textContent === text); }
+
+async function managerHarness(search = '?manage=1', { allowed = true, courseId, newCourse = false } = {}) {
+  const h = await createFeedbackHarness('academy', { mount: false, url: `https://portal.test/academy.html${search}`,
+    modules: [{ path: 'public/academy/view-utils.js', exports: 'routeLink, button, errorState' }] });
+  const navigations = [], editors = [];
+  // The router facade exposes writes only; read state from window.history.
+  h.page.history = Object.fromEntries(['pushState', 'replaceState'].map(method => [method, h.window.history[method].bind(h.window.history)]));
+  Object.assign(h.context, {
+    can: () => allowed,
+    createCourseEditor: options => { editors.push(options); return { dispose() {} }; },
+    createCurriculumEditor: () => ({ dispose() {} }),
+  });
+  vm.runInContext(`${manager.replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '')}\nglobalThis.mountAcademyManager = mountAcademyManager;`, h.context);
+  const root = h.node('academy-root');
+  const dispose = h.context.mountAcademyManager({ root, page: h.page, courseId, newCourse, navigate: params => navigations.push({ ...params }) });
+  await drain();
+  return { ...h, root, dispose, navigations, editors };
+}
+const courses = (offset, count) => Array.from({ length: count }, (_, i) => ({
+  id: `course-${offset + i}`, title: `Curso ${offset + i}`, delivery_mode: 'external', active: true,
+}));
+
+test('management reaches all 105 courses in bounded pages with total, links and navigation context', async () => {
+  const seen = [];
+  for (let offset = 0; offset < 105; offset += 20) {
+    const h = await managerHarness(`?manage=1&manage_offset=${offset}`);
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.requests[0].path, `/api/academy?all=true&limit=20&offset=${offset}`);
+    h.requests[0].resolve({ data: courses(offset, Math.min(20, 105 - offset)), total: 105 }); await drain();
+    const links = h.root.querySelector('.academy-manager-list').querySelectorAll('a');
+    seen.push(...links.map(link => new URL(link.href, h.page.location.href).searchParams.get('course')));
+    for (const link of links) assert.equal(new URL(link.href, h.page.location.href).searchParams.get('manage_offset'), String(offset));
+    assert.match(h.root.textContent, new RegExp(`Página ${offset / 20 + 1} de 6 · 105 cursos`));
+    assert.equal(Boolean(button(h.root, 'Anterior')), offset > 0);
+    assert.equal(Boolean(button(h.root, 'Próxima')), offset < 100);
+    const create = h.root.querySelectorAll('a').find(link => link.textContent === 'Novo curso');
+    assert.equal(new URL(create.href, h.page.location.href).searchParams.get('manage_offset'), String(offset));
+    if (offset < 100) {
+      button(h.root, 'Próxima').click(); button(h.root, 'Próxima').click();
+      await drain();
+      assert.deepEqual(h.navigations, [{ manage: '1', manage_offset: String(offset + 20) }]);
+    } else {
+      links.at(-1).click();
+      assert.deepEqual(h.navigations, [{ manage: '1', manage_offset: '100', course: 'course-104' }]);
+    }
+    h.dispose(); h.page.dispose();
+  }
+  assert.deepEqual(seen, courses(0, 105).map(item => item.id));
+});
+
+test('management editor cancel and creation retain their source page', async () => {
+  for (const newCourse of [false, true]) {
+    const h = await managerHarness('?manage=1&manage_offset=100', { newCourse, courseId: newCourse ? undefined : 'course-104' });
+    if (!newCourse) { h.requests[0].resolve({ course: courses(104, 1)[0] }); await drain(); }
+    h.editors[0].onCancel();
+    assert.deepEqual(h.navigations[0], { manage: '1', manage_offset: '100' });
+    if (newCourse) {
+      h.editors[0].onSaved({ id: 'created' });
+      assert.deepEqual(h.navigations[1], { manage: '1', manage_offset: '100', course: 'created' });
+    }
+    h.dispose(); h.page.dispose();
+  }
+});
+
+test('management canonicalizes invalid offsets without losing router state or pushing history', async () => {
+  for (const [input, expected] of [['-20', 0], ['abc', 0], ['1e2', 0], ['9007199254740992', 0], ['1000020', 0], ['1000000', 1000000], ['39', 20], ['020', 20]]) {
+    const h = await managerHarness(`?manage=1&manage_offset=${input}`);
+    assert.equal(h.requests[0].path, `/api/academy?all=true&limit=20&offset=${expected}`);
+    assert.equal(new URL(h.page.location.href).searchParams.get('manage_offset'), String(expected));
+    assert.equal(h.window.history.length, 1);
+    h.dispose(); h.requests[0].resolve({ data: [], total: 0 }); await drain(); h.page.dispose();
+  }
+});
+
+test('management recovers a removed last page once and preserves history state', async () => {
+  const h = await managerHarness('?manage=1&manage_offset=100');
+  h.window.history.replaceState({ routerIndex: 7, academyCatalog: '/academy.html?initial_offset=20' }, '', h.page.location.href);
+  h.requests[0].resolve({ data: [], total: 42 }); await drain();
+  assert.equal(h.requests[1].path, '/api/academy?all=true&limit=20&offset=40');
+  assert.equal(new URL(h.page.location.href).searchParams.get('manage_offset'), '40');
+  assert.equal(h.window.history.state.routerIndex, 7);
+  h.requests[1].resolve({ data: courses(40, 2), total: 42 }); await drain();
+  assert.match(h.root.textContent, /Página 3 de 3 · 42 cursos/);
+  assert.equal(h.window.history.length, 1);
+  h.dispose(); h.page.dispose();
+  const changedAgain = await managerHarness('?manage=1&manage_offset=100');
+  changedAgain.requests[0].resolve({ data: [], total: 42 }); await drain();
+  changedAgain.requests[1].resolve({ data: [], total: 1 }); await drain();
+  assert.equal(changedAgain.requests.length, 2, 'bounded recovery on concurrent deletions');
+  assert.ok(button(changedAgain.root, 'Tentar novamente'));
+  changedAgain.dispose(); changedAgain.page.dispose();
+});
+
+test('management distinguishes empty/forbidden/error and retries the same page once with focus', async () => {
+  const h = await managerHarness('?manage=1&manage_offset=20');
+  h.requests[0].reject(new Error('offline')); await drain();
+  const retry = button(h.root, 'Tentar novamente'); assert.ok(retry); retry.focus();
+  retry.click(); retry.click(); await drain();
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].path, h.requests[0].path);
+  h.requests[1].resolve({ data: courses(20, 1), total: 21 }); await drain();
+  assert.equal(h.doc.activeElement, h.root.querySelector('h1'));
+  h.dispose(); h.page.dispose();
+  const empty = await managerHarness();
+  empty.requests[0].resolve({ data: [], total: 0 }); await drain();
+  assert.match(empty.root.textContent, /Nenhum curso cadastrado/);
+  assert.equal(button(empty.root, 'Tentar novamente'), undefined);
+  empty.dispose(); empty.page.dispose();
+  const forbidden = await managerHarness('?manage=1', { allowed: false });
+  assert.equal(forbidden.requests.length, 0);
+  assert.match(forbidden.root.textContent, /não está disponível/);
+  forbidden.dispose(); forbidden.page.dispose();
+  const revoked = await managerHarness('?manage=1&manage_offset=20');
+  revoked.requests[0].reject(Object.assign(new Error('forbidden'), { status: 403 })); await drain();
+  assert.match(revoked.root.textContent, /não tem permissão/);
+  assert.equal(button(revoked.root, 'Tentar novamente'), undefined);
+  assert.equal(revoked.root.querySelector('.academy-manager-list'), null);
+  revoked.dispose(); revoked.page.dispose();
+});
+
+test('management ignores late success and failure after disposal', async () => {
+  for (const failure of [false, true]) {
+    const h = await managerHarness();
+    h.dispose();
+    if (failure) h.requests[0].reject(new Error('late failure'));
+    else h.requests[0].resolve({ data: courses(0, 1), total: 1 });
+    await drain();
+    assert.equal(h.root.textContent, '');
+    h.page.dispose();
+  }
+});
 
 test('Academy management is a permissioned route with dedicated editors and real API links', () => {
   assert.match(app, /mountAcademyManager/);

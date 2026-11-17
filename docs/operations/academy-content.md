@@ -6,6 +6,13 @@ registra o que foi verificado e o que ainda depende de ambiente autorizado.
 
 ### Correções da gestão — 17/11/2026
 
+- A gestão lista 20 cursos por página, com total e controles **Anterior/Próxima**.
+  A posição fica em `manage_offset` na URL e é preservada ao recarregar, navegar
+  pelo histórico, abrir/criar um curso e cancelar. **Voltar aos cursos** recupera
+  o contexto do catálogo do aluno.
+- Falha de leitura oferece **Tentar novamente** no mesmo lote. Se a página
+  deixar de existir, a gestão recupera a última página válida; catálogo vazio
+  é identificado como **Nenhum curso cadastrado**.
 - O formulário abre com entrega, público/cargos, grupo visual, ícone e
   disponibilidade já salvos. Os labels estão associados aos controles nativos.
 - **Adicionar aula** abre título e URL juntos no módulo. Informe YouTube ou

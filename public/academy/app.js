@@ -34,6 +34,7 @@ export function mountAcademy(page) {
       if (url.origin !== page.location.origin || !url.pathname.endsWith('/academy.html')) return {};
       const params = Object.fromEntries(url.searchParams);
       delete params.course; delete params.lesson; delete params.manage; delete params.preview;
+      delete params.manage_offset; delete params.new;
       return params;
     } catch { return {}; }
   }
@@ -42,7 +43,7 @@ export function mountAcademy(page) {
     if (!page.canLeave()) return;
     const current = new URL(page.location.href);
     const state = { ...window.history.state };
-    if (!current.searchParams.has('course') && !current.searchParams.has('lesson')) state.academyCatalog = current.href;
+    if (!current.searchParams.has('course') && !current.searchParams.has('lesson') && !current.searchParams.has('manage')) state.academyCatalog = current.href;
     const url = new URL('./academy.html', current);
     url.search = new URLSearchParams(params).toString();
     // Flush before committing the URL. A second click invalidates the first transition.
@@ -56,7 +57,7 @@ export function mountAcademy(page) {
     if (!alreadyFlushed && view?.beforeNavigate && await view.beforeNavigate() === false) return;
     if (token !== generation || !page.active) return;
     view?.dispose(); scope?.dispose(); view = null;
-    scope = createPageLifecycle({ user: page.user });
+    scope = createPageLifecycle({ user: page.user, history: page.history });
     const currentScope = scope;
     scope.location = page.location;
     scope.brandAssets = brandAssets;
@@ -70,7 +71,7 @@ export function mountAcademy(page) {
     try {
       if (params.has('manage')) {
         if (!can(page.user, 'manageAcademy')) throw Object.assign(new Error(unavailable), { status: 403 });
-        const managerRoot = element('div'); root.replaceChildren(brand(brandAssets), managerRoot, routeLink('Voltar aos cursos', {}, navigate));
+        const managerRoot = element('div'); root.replaceChildren(brand(brandAssets), managerRoot, routeLink('Voltar aos cursos', catalogParams(), navigate));
         const disposeManager = mountAcademyManager({ root: managerRoot, page: scope, courseId, newCourse: params.get('new') === '1', navigate });
         scope.cleanup(disposeManager);
       } else if (preview && !can(page.user, 'manageAcademy')) {
