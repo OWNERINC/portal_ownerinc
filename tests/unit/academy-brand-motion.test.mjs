@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
+import { FixtureNode } from '../helpers/frontend-feedback-harness.mjs';
 
 async function load(file, names, context) {
   const source = (await readFile(file, 'utf8')).replace(/^export /gm, '');
@@ -77,6 +78,37 @@ test('brand clones remove IDs and preserve explicit ARIA semantics', async () =>
   const labelled = context.createBrandIcon(new Map([['icon-01', source]]), 'icon-01', { decorative: false, label: 'Ícone' });
   assert.equal(labelled.role, 'img');
   assert.equal(labelled['aria-label'], 'Ícone');
+});
+
+test('brand, cover and hydration support native SVG readonly className after assets load', async () => {
+  const icons = [];
+  const context = {
+    element(tag, attrs = {}, children = []) {
+      const node = new FixtureNode(tag);
+      for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+      node.append(...children);
+      return node;
+    },
+    createBrandIcon() {
+      const svg = new FixtureNode('svg');
+      svg.setAttribute = (name, value) => { svg.attrs[name] = String(value); };
+      svg.getAttribute = name => svg.attrs[name] ?? null;
+      Object.defineProperty(svg, 'className', { get: () => ({ baseVal: svg.attrs.class || '' }) });
+      icons.push(svg); return svg;
+    },
+  };
+  const source = (await readFile('public/academy/view-utils.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
+  vm.runInNewContext(`'use strict';\n${source}\nObject.assign(globalThis, { brand, cover, hydrateBrandAssets });`, context);
+  context.brand(new Map());
+  context.cover({ icon_key: 'icon-04' }, {}, new Map());
+  const fallback = new FixtureNode('img');
+  fallback.setAttribute('src', './assets/academy/icon-02.svg');
+  let replacement;
+  fallback.replaceWith = node => { replacement = node; };
+  context.hydrateBrandAssets({ querySelectorAll: () => [fallback] }, new Map());
+  assert.equal(icons[0].getAttribute('class'), 'academy-logo');
+  assert.equal(icons[1].getAttribute('class'), 'academy-cover');
+  assert.equal(replacement.getAttribute('class'), 'academy-cover');
 });
 
 test('completion motion is finite and cancelled by the classroom signal', async () => {

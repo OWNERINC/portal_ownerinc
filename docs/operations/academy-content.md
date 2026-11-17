@@ -4,6 +4,24 @@ Manual operacional da entrega de 1º de outubro de 2026. Ele descreve o contrato
 implementado; a [matriz de aceite](../reviews/2026-09-30-academy-acceptance.md)
 registra o que foi verificado e o que ainda depende de ambiente autorizado.
 
+### Correções da gestão — 17/11/2026
+
+- O formulário abre com entrega, público/cargos, grupo visual, ícone e
+  disponibilidade já salvos. Os labels estão associados aos controles nativos.
+- **Adicionar aula** abre título e URL juntos no módulo. Informe YouTube ou
+  arquivo HTTPS MP4/WebM e use **Criar aula**. A aula começa indisponível.
+  Erros mantêm os campos para correção; cancelar dados preenchidos confirma descarte.
+- A leitura de gestão (`all=true`, somente `manageAcademy`) inclui mídia e descrição
+  próprias das aulas. Alterar só título preserva descrição, mídia, versão e progresso.
+  A leitura do currículo pelo aluno continua resumida.
+- Salvar curso, módulo, aula ou ordem preserva rascunhos dos demais itens.
+  Rascunhos vivem apenas na tela; não há autosave. Sair pela navegação, sidebar,
+  Cancelar ou histórico pede confirmação única. Operações pendentes bloqueiam saída.
+- A confirmação da escrita é aplicada antes da releitura. Uma falha de releitura
+  não restaura títulos/ordens antigos nem reabre o formulário de uma aula já criada.
+  Para trocar a entrega interno/externo, salve primeiro os rascunhos do currículo.
+  Durante a escrita do curso, os controles do currículo ficam temporariamente bloqueados.
+
 ## 1. Audiência e cadastro por cargo
 
 1. Crie o curso como **Formação inicial** (`all`) quando ele deve aparecer para

@@ -4,21 +4,22 @@ import { element } from '../js/ui.js';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function input(label, id, type = 'text', value = '', attrs = {}) {
-  const control = element(type === 'textarea' ? 'textarea' : type === 'select' ? 'select' : 'input', { id, className: 'academy-manager-input', ...attrs });
+  const control = element(type === 'textarea' ? 'textarea' : type === 'select' ? 'select' : 'input', { id, ...(!['textarea', 'select'].includes(type) ? { type } : {}), className: 'academy-manager-input', ...attrs });
   if (type === 'textarea') control.value = value || '';
   else if (type !== 'select') control.value = value ?? '';
-  const group = element('div', { className: 'academy-manager-field' }, [element('label', { htmlFor: id, text: label }), control]);
+  const group = element('div', { className: 'academy-manager-field' }, [element('label', { for: id, text: label }), control]);
   return { group, control };
 }
 
 function selectedIds(select) { return [...select.selectedOptions].map(option => option.value).filter(id => UUID.test(id)); }
 
-export function createCourseEditor({ root, page, course = null, onSaved = () => {} }) {
+export function createCourseEditor({ root, page, course = null, onSaved = () => {}, onCancel = () => {}, beforeSave = () => '', onSavingChange = () => {}, registerGuard = true }) {
   const request = page.bindAPI({ fetchAPI, fetchAPIPage });
   let dirty = false;
   let saving = false;
   let disposed = false;
   let jobTitleLoadFailed = false;
+  let jobTitlesLoading = true;
   const form = element('form', { className: 'academy-manager-form', novalidate: '' });
   const fields = {};
   const add = (name, type, value, attrs) => { const result = input(name, `academy-${name.toLowerCase().replace(/[^a-z]+/g, '-')}`, type, value, attrs); fields[name] = result.control; form.append(result.group); return result.control; };
@@ -36,6 +37,11 @@ export function createCourseEditor({ root, page, course = null, onSaved = () => 
   add('URL externa', 'url', course?.url, { maxlength: '2048' });
   const active = add('Disponível', 'select', course?.active ? 'true' : 'false');
   active.append(element('option', { value: 'false', text: 'Rascunho / indisponível' }), element('option', { value: 'true', text: 'Disponibilizar' }));
+  delivery.value = course?.delivery_mode || 'external';
+  audience.value = course?.audience || 'all';
+  fields['Grupo visual'].value = course?.learning_group || 'initial';
+  fields.Ícone.value = course?.icon_key || 'icon-01';
+  active.value = course?.active ? 'true' : 'false';
   const titles = add('Cargos elegíveis', 'select', '', { multiple: '', size: '7', 'aria-describedby': 'academy-job-title-help' });
   const help = element('p', { id: 'academy-job-title-help', className: 'academy-manager-help', role: 'status', text: 'Carregando cargos…' });
   form.append(help);
@@ -45,12 +51,12 @@ export function createCourseEditor({ root, page, course = null, onSaved = () => 
   form.append(element('div', { className: 'academy-manager-actions' }, [cancel, save]), feedback);
   root.replaceChildren(element('h2', { text: course ? 'Editar curso' : 'Novo curso' }), form);
 
-  function markDirty() { if (!saving) { dirty = true; page.toast?.('Há alterações não salvas.'); } }
+  function markDirty() { if (!saving) dirty = true; }
   form.addEventListener('input', markDirty);
   form.addEventListener('change', markDirty);
-  audience.addEventListener('change', () => { titles.disabled = audience.value !== 'job_titles'; });
+  audience.addEventListener('change', () => { titles.disabled = jobTitlesLoading || jobTitleLoadFailed || audience.value !== 'job_titles'; });
   delivery.addEventListener('change', () => { fields['URL externa'].required = delivery.value === 'external'; });
-  titles.disabled = audience.value !== 'job_titles';
+  titles.disabled = true;
   fields['URL externa'].required = delivery.value === 'external';
 
   async function loadTitles() {
@@ -67,32 +73,47 @@ export function createCourseEditor({ root, page, course = null, onSaved = () => 
       help.textContent = `${all.length} cargos carregados. Cargos inativos permanecem visíveis, mas não concedem acesso.`;
       titles.disabled = audience.value !== 'job_titles';
     } catch {
+      if (disposed) return;
       jobTitleLoadFailed = true;
       help.textContent = 'Não foi possível carregar todos os cargos. O seletor não está disponível.';
       titles.replaceChildren(); titles.disabled = true;
-    }
+    } finally { jobTitlesLoading = false; }
   }
   void loadTitles();
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    if (saving || jobTitleLoadFailed || !form.reportValidity()) return;
+    if (saving || disposed || !form.reportValidity()) return;
+    if (jobTitleLoadFailed || jobTitlesLoading) { feedback.textContent = 'Aguarde o carregamento dos cargos antes de salvar.'; return; }
     if (audience.value === 'job_titles' && !selectedIds(titles).length) { feedback.textContent = 'Selecione ao menos um cargo para um curso restrito.'; return; }
-    saving = true; save.disabled = true; form.setAttribute('aria-busy', 'true'); feedback.textContent = '';
     const body = {
       title: fields.Título.value.trim(), category: fields.Categoria.value.trim(), description: fields.Descrição.value.trim(),
       delivery_mode: delivery.value, audience: audience.value, learning_group: fields['Grupo visual'].value, icon_key: fields.Ícone.value,
       instructor_name: fields.Instrutor.value.trim(), order: Number(fields.Ordem.value), active: active.value === 'true',
       url: delivery.value === 'internal' ? null : fields['URL externa'].value.trim(), allowed_job_title_ids: selectedIds(titles),
     };
+    const blocked = beforeSave(body);
+    if (blocked) { feedback.textContent = blocked; return; }
+    saving = true; save.disabled = true; form.setAttribute('aria-busy', 'true'); feedback.textContent = '';
+    onSavingChange(true);
+    const controls = [...form.querySelectorAll('input, select, textarea, button')].map(control => [control, control.disabled]);
+    controls.forEach(([control]) => { control.disabled = true; });
+    let saved;
     try {
-      const saved = await request.fetchAPI(course ? `/api/academy/${encodeURIComponent(course.id)}` : '/api/academy', { method: course ? 'PUT' : 'POST', body: JSON.stringify(body) });
-      dirty = false; onSaved(saved);
+      saved = await request.fetchAPI(course ? `/api/academy/${encodeURIComponent(course.id)}` : '/api/academy', { method: course ? 'PUT' : 'POST', body: JSON.stringify(body) });
+      if (disposed) return;
+      dirty = false; course = saved;
+      feedback.textContent = 'Curso salvo.';
     } catch (error) {
-      feedback.textContent = `Não foi possível salvar o curso: ${error.message || 'erro desconhecido'}`;
-    } finally { saving = false; save.disabled = false; form.removeAttribute('aria-busy'); }
+      if (!disposed) feedback.textContent = `Não foi possível salvar o curso: ${error.message || 'erro desconhecido'}`;
+    } finally {
+      saving = false;
+      onSavingChange(false);
+      if (!disposed) { controls.forEach(([control, disabled]) => { control.disabled = disabled; }); save.disabled = false; form.removeAttribute('aria-busy'); }
+    }
+    if (saved && !disposed) onSaved(saved);
   });
-  cancel.addEventListener('click', () => onSaved(null));
-  page.beforeLeave(() => !saving && (!dirty || window.confirm('Há alterações do curso que ainda não foram salvas. Sair mesmo assim?')));
-  return { isDirty: () => dirty || saving, dispose() { disposed = true; form.replaceChildren(); } };
+  cancel.addEventListener('click', () => { if (!saving) onCancel(); });
+  if (registerGuard) page.beforeLeave(() => disposed || (!saving && (!dirty || window.confirm('Há alterações do curso que ainda não foram salvas. Sair mesmo assim?'))));
+  return { isDirty: () => dirty, isSaving: () => saving, dispose() { disposed = true; form.replaceChildren(); } };
 }

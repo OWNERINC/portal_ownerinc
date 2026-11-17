@@ -12,6 +12,24 @@ body{line-height:1.5}.topbar{position:sticky;top:0;z-index:20;box-shadow:0 8px 2
 main{width:100%;max-width:none;min-height:calc(100dvh - 112px)}#createView,#savedView,.editor{width:100%}.editor{grid-template-columns:minmax(360px,32vw) minmax(0,1fr)}.preview-area{width:100%;min-height:calc(100dvh - 190px)}.gallery{min-height:calc(100dvh - 190px)}
 @media(max-width:900px){.editor{grid-template-columns:1fr}.preview-area{min-height:500px}.gallery{min-height:auto}}
 .vacancy-card .card-pad{padding:28px}.vacancy-card h2{margin-top:10px}.vacancy-description{margin:8px 0 12px}.vacancy-description>span,.vacancy-sections>div>span{font-size:9px;letter-spacing:.14em;font-weight:700}.vacancy-description p{font-size:12px;line-height:1.35;margin:4px 0 0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.vacancy-sections{display:grid;grid-template-columns:1fr 1fr;gap:15px}.vacancy-sections .requirements{margin:6px 0 0;gap:5px}.vacancy-sections .requirements span{font-size:10px;padding:6px 8px}.vacancy-apply{border-top:1px solid;padding-top:10px;margin-top:auto;display:flex;flex-wrap:wrap;gap:6px 12px;font-size:10px}.vacancy-apply strong{width:100%;font-size:11px;color:inherit}.vacancy-card .card-footer{padding-top:10px;margin-top:10px}.vacancy-card .card-footer img{height:auto;max-height:36px}
+/* Scale the complete 420px composition with the real preview, including line boxes.
+   The export clone freezes that same canvas width; actual overflow remains blocked. */
+.vacancy-card{container-type:inline-size}
+.vacancy-card .card-pad{padding:6.6667cqw;font-size:3.5714cqw}
+.vacancy-card .card-kicker{gap:1.9048cqw;font-size:2.381cqw}
+.vacancy-card .card-kicker svg{width:4.2857cqw;height:4.2857cqw;flex-shrink:0}
+.vacancy-card h2{font-size:8.3333cqw;line-height:1.15;margin:2.381cqw 0 1.9048cqw}
+.vacancy-card .sub{font-size:3.0952cqw;margin-bottom:3.3333cqw}
+.vacancy-card .vacancy-description{margin:1.9048cqw 0 2.8571cqw}
+.vacancy-card .vacancy-description>span,.vacancy-card .vacancy-sections>div>span{font-size:2.1429cqw}
+.vacancy-card .vacancy-description p{font-size:2.8571cqw;margin-top:.9524cqw}
+.vacancy-card .vacancy-sections{gap:3.5714cqw;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.vacancy-card .requirements{margin-top:1.4286cqw;gap:1.1905cqw}
+.vacancy-card .requirements span{font-size:2.381cqw;padding:1.4286cqw 1.9048cqw}
+.vacancy-card .vacancy-apply{padding-top:2.381cqw;gap:1.4286cqw 2.8571cqw;font-size:2.381cqw}
+.vacancy-card .vacancy-apply strong{font-size:2.619cqw}
+.vacancy-card .card-footer{padding-top:2.381cqw;margin-top:2.381cqw;gap:3.5714cqw;font-size:2.619cqw;min-height:8.0952cqw}
+.vacancy-card .card-footer img{width:24.2857cqw;max-height:8.5714cqw}
 .employee-card{container-type:inline-size}
 .employee-layout{height:100%;display:flex;flex-direction:column;min-height:0}
 .employee-photo{flex:0 0 40%;width:100%;min-height:0;margin:0;border-radius:0;overflow:hidden;background:#e8e0d4;display:grid;place-items:center;color:#b99a61}

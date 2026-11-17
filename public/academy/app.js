@@ -20,6 +20,7 @@ export function mountAcademy(page) {
   const root = document.getElementById('academy-root');
   if (!root) return;
   let scope = null, view = null, generation = 0, brandAssets = null, catalogEntryPending = true;
+  page.beforeLeave(() => !scope || scope.canLeave());
   if (typeof fetch === 'function') loadBrandAssets({ signal: page.signal }).then(assets => {
     brandAssets = assets;
     if (!page.active) return;
@@ -38,7 +39,7 @@ export function mountAcademy(page) {
   }
   async function navigate(params) {
     if (!page.active) return;
-    if (page.busy) { page.toast('Aguarde a operação em andamento terminar.'); return; }
+    if (!page.canLeave()) return;
     const current = new URL(page.location.href);
     const state = { ...window.history.state };
     if (!current.searchParams.has('course') && !current.searchParams.has('lesson')) state.academyCatalog = current.href;
@@ -70,7 +71,7 @@ export function mountAcademy(page) {
       if (params.has('manage')) {
         if (!can(page.user, 'manageAcademy')) throw Object.assign(new Error(unavailable), { status: 403 });
         const managerRoot = element('div'); root.replaceChildren(brand(brandAssets), managerRoot, routeLink('Voltar aos cursos', {}, navigate));
-        const disposeManager = mountAcademyManager({ root: managerRoot, page: scope, courseId, newCourse: params.get('new') === '1' });
+        const disposeManager = mountAcademyManager({ root: managerRoot, page: scope, courseId, newCourse: params.get('new') === '1', navigate });
         scope.cleanup(disposeManager);
       } else if (preview && !can(page.user, 'manageAcademy')) {
         throw Object.assign(new Error(unavailable), { status: 404 });

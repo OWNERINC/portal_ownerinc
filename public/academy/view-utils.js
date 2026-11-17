@@ -14,7 +14,7 @@ export function routeLink(text, params, navigate, options = {}) {
 }
 export function brand(assets = null) {
   const mark = assets ? createBrandIcon(assets, 'logo-dark', { decorative: false, label: 'Ownerinc Academy' }) : element('img', { src: './assets/academy/logo-dark.svg', alt: '', width: '240', height: '80' });
-  mark.className = 'academy-logo';
+  mark.setAttribute('class', 'academy-logo');
   return element('header', { className: 'academy-brand' }, [
     mark,
     element('div', {}, [heading('Ownerinc Academy'), element('p', { text: 'Conhecimento que faz parte do seu dia.' })]),
@@ -35,7 +35,7 @@ export function cover(course, page, assets = null) {
     className: 'academy-cover', src: `./assets/academy/${key}.svg`, alt: '', width: '640', height: '360', loading: 'lazy',
     'data-brand-fallback': 'true',
   });
-  image.className = 'academy-cover';
+  image.setAttribute('class', 'academy-cover');
   return image;
 }
 export function hydrateBrandAssets(root, assets) {
@@ -43,7 +43,7 @@ export function hydrateBrandAssets(root, assets) {
   root.querySelectorAll('.academy-cover[data-brand-fallback]').forEach(image => {
     const match = image.getAttribute('src')?.match(/icon-0[1-6]/);
     const icon = createBrandIcon(assets, match ? match[0] : 'symbol');
-    icon.className = 'academy-cover';
+    icon.setAttribute('class', 'academy-cover');
     image.replaceWith(icon);
   });
 }

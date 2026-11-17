@@ -2,7 +2,9 @@
 
 Data: 17/11/2026
 Base: `db7687d7f33416358be5678ae23bbd0cfe194dc3`
-Estado: abordagem aprovada; especificação aguardando revisão.
+Estado: abordagem e especificação aprovadas; implementado e revalidado localmente.
+
+Resultado: [revalidação D01–D07](../../reviews/2026-11-17-academy-vacancy-revalidation.md).
 
 ## Objetivo
 
@@ -138,4 +140,4 @@ O documento oficial de Ética e os worktrees/capturas existentes são preservado
 Revisão inline concluída: requisitos mapeados a D01–D07; contrato de mídia
 permanece obrigatório; leitura adicional é restrita à gestão; salvamento não
 descarta outros itens; overflow continua protegido. Sem requisitos em aberto
-além da aprovação desta especificação.
+pendentes de decisão.

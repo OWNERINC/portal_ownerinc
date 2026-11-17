@@ -76,9 +76,11 @@ function summary(course, data, preview) {
     ...summarizeProgress(course.active === true ? courseLessons(course, data, true) : [], data.progress) };
 }
 
-function lessonSummary(lesson, progress) {
+function lessonSummary(lesson, progress, preview = false) {
   const { id, module_id, title, order, active, media_version } = lesson;
   return { id, module_id, title, order, active, media_version,
+    ...(preview ? { description: lesson.description, media_type: lesson.media_type,
+      youtube_video_id: lesson.youtube_video_id, media_url: lesson.media_url } : {}),
     completed: progress.some(row => row.lesson_id === id && row.media_version === media_version && row.completed === true) };
 }
 
@@ -103,7 +105,7 @@ async function getCourseView(pool, user, courseId, { preview = false } = {}) {
   return { course: summary(course, data, preview),
     ...(preview ? { allowed_job_title_ids: course.allowed_job_title_ids } : {}),
     modules: data.modules.map(module => ({ ...module, lessons: data.lessons
-      .filter(lesson => lesson.module_id === module.id).map(lesson => lessonSummary(lesson, data.progress)) })) };
+      .filter(lesson => lesson.module_id === module.id).map(lesson => lessonSummary(lesson, data.progress, preview)) })) };
 }
 
 async function getLessonView(pool, user, lessonId, { preview = false } = {}) {

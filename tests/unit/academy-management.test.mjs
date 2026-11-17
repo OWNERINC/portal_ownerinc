@@ -10,7 +10,7 @@ const [app, manager, course, curriculum, admin] = await Promise.all([
   readFile('public/js/admin.js', 'utf8'),
 ]);
 
-async function curriculumHarness() {
+async function curriculumHarness(extraLesson = false) {
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
   doc.createElement = tag => new FixtureNode(tag, doc);
   doc.createTextNode = text => { const node = doc.createElement('#text'); node.textContent = text; return node; };
@@ -18,10 +18,12 @@ async function curriculumHarness() {
   const requests = [];
   const transport = (path, options = {}) => { const item = { path, options, ...deferred() }; requests.push(item); return item.promise; };
   const pageController = new AbortController();
+  const guards = [];
   const page = {
     signal: pageController.signal,
     bindAPI() { return { fetchAPI: transport, fetchAPIPage: transport }; },
-    beforeLeave() {},
+    beforeLeave(guard) { guards.push(guard); },
+    canLeave() { return guards.every(guard => guard() !== false); },
   };
   const context = vm.createContext({ document: doc, window, console, AbortController, DOMException, URLSearchParams, URL, setTimeout, clearTimeout,
     fetchAPI: transport, fetchAPIPage: transport });
@@ -32,13 +34,11 @@ async function curriculumHarness() {
   const root = doc.createElement('main');
   const handle = context.createCurriculumEditor({ root, page, courseId: 'course-a', initialCourse: {
     id: 'course-a', delivery_mode: 'internal', modules: [{ id: 'module-a', title: 'Módulo original', order: 1, active: false,
-      lessons: [{ id: 'lesson-a', title: 'Aula original', order: 1, active: false, media_type: 'youtube', youtube_video_id: 'dQw4w9WgXcQ', description: '' }] }],
+      lessons: [{ id: 'lesson-a', title: 'Aula original', order: 1, active: false, media_type: 'youtube', youtube_video_id: 'dQw4w9WgXcQ', description: '' },
+        ...(extraLesson ? [{ id: 'lesson-b', title: 'Segunda aula', order: 2, active: false, media_type: 'file', media_url: 'https://media.test/b.mp4', description: '' }] : [])] }],
   } });
   await drain();
-  requests.at(-1).resolve({ course: { id: 'course-a', delivery_mode: 'internal' }, modules: [{ id: 'module-a', title: 'Módulo original', order: 1, active: false,
-    lessons: [{ id: 'lesson-a', title: 'Aula original', order: 1, active: false, media_type: 'youtube', youtube_video_id: 'dQw4w9WgXcQ', description: '' }] }] });
-  await drain();
-  return { root, requests, handle, pageController, window };
+  return { root, requests, handle, pageController, window, page };
 }
 
 function button(root, text) { return root.querySelectorAll('button').find(node => node.textContent === text); }
@@ -56,24 +56,114 @@ test('Academy management is a permissioned route with dedicated editors and real
   assert.match(admin, /academy\.html\?manage=1&course=/);
 });
 
-test('management editors protect dirty and in-flight navigation', () => {
-  assert.match(course, /page\.beforeLeave\(\(\) => !saving/);
-  assert.match(curriculum, /page\.beforeLeave\(\(\) => !saving/);
-  assert.match(manager, /curriculum\?\.dispose\(\)/);
-  assert.match(manager, /view\.course \|\| view/);
-  assert.match(manager, /delivery_mode === 'internal'/);
+test('typing a curriculum draft protects navigation; pending and failed saves retain it', async () => {
+  const h = await curriculumHarness();
+  const title = h.root.querySelectorAll('input').find(node => node.value === 'Aula original');
+  title.value = 'Rascunho'; title.dispatchEvent(new TestEvent('input', { bubbles: true }));
+  h.window.confirm = () => false;
+  assert.equal(h.handle.isDirty(), true);
+  assert.equal(h.page.canLeave(), false);
+  h.window.confirm = () => true;
+  assert.equal(h.page.canLeave(), true);
+  button(h.root, 'Salvar aula').click(); await drain();
+  assert.equal(h.page.canLeave(), false);
+  h.requests.at(-1).reject(new Error('Falha de escrita')); await drain();
+  assert.equal(title.value, 'Rascunho');
+  assert.equal(h.handle.isDirty(), true);
 });
 
-test('curriculum refreshes authoritative state after mutations without CMS material handlers', () => {
-  assert.doesNotMatch(manager, /lessonDocumentFlights|existingFlight|findExisting|\/api\/cms/);
-  assert.doesNotMatch(curriculum, /documentBusy|cms\.html|Materiais/);
-  assert.match(curriculum, /course = null; panel\.querySelector/);
-  assert.match(curriculum, /const loaded = await request\.fetchAPI\(`\/api\/academy/);
-  assert.match(curriculum, /loadToken/);
-  assert.match(curriculum, /const result = await save\(`\/api\/academy\/lessons/);
-  assert.match(curriculum, /const result = await save\(`\/api\/academy\/modules/);
-  assert.match(curriculum, /if \(result && !disposed\) await reload\(\)/);
-  assert.match(curriculum, /media: \{ type: 'youtube', url: '' \}/, 'new lessons start without a fabricated video URL');
+test('saving a module preserves the pending lesson after authoritative refresh', async () => {
+  const h = await curriculumHarness();
+  const title = h.root.querySelectorAll('input').find(node => node.value === 'Aula original');
+  title.value = 'Edição pendente'; title.dispatchEvent(new TestEvent('input', { bubbles: true }));
+  button(h.root, 'Salvar módulo').click(); await drain();
+  h.requests.at(-1).resolve({ id: 'module-a' }); await drain();
+  h.requests.at(-1).resolve({ course: { id: 'course-a' }, modules: [{ id: 'module-a', title: 'Módulo salvo', active: false, order: 1,
+    lessons: [{ id: 'lesson-a', title: 'Aula original', order: 1, active: false, media_type: 'youtube', youtube_video_id: 'dQw4w9WgXcQ', description: 'Descrição preservada' }] }] });
+  await drain();
+  assert.ok(h.root.querySelectorAll('input').some(node => node.value === 'Edição pendente'));
+  assert.equal(h.handle.isDirty(), true);
+  button(h.root, 'Salvar aula').click(); await drain();
+  const body = JSON.parse(h.requests.at(-1).options.body);
+  assert.equal(body.title, 'Edição pendente');
+  assert.equal(body.description, 'Descrição preservada');
+});
+
+test('inline lesson validates, retains inputs on error, and closes after committed POST even if refresh fails', async () => {
+  const h = await curriculumHarness();
+  button(h.root, 'Adicionar aula').click();
+  const form = h.root.querySelector('form');
+  form.reportValidity = () => true;
+  const [title, url] = form.querySelectorAll('input');
+  const submit = () => form.dispatchEvent(new TestEvent('submit', { bubbles: true }));
+  submit(); await drain();
+  assert.equal(h.requests.length, 0);
+  title.value = 'Nova aula'; title.dispatchEvent(new TestEvent('input'));
+  url.value = 'https://media.test/new.mp4'; url.dispatchEvent(new TestEvent('input'));
+  submit(); await drain();
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual(JSON.parse(h.requests[0].options.body).media, { type: 'file', url: url.value });
+  submit(); await drain(); assert.equal(h.requests.length, 1, 'No duplicate POST while pending');
+  h.requests[0].reject(new Error('Erro de escrita')); await drain();
+  assert.equal(title.value, 'Nova aula'); assert.equal(url.value, 'https://media.test/new.mp4');
+  h.window.confirm = () => false;
+  button(form, 'Cancelar').click(); assert.ok(h.root.querySelector('form'));
+  submit(); await drain();
+  h.requests.at(-1).resolve({ id: 'lesson-b', title: 'Nova aula', media_type: 'file', media_url: url.value, active: false, order: 2 }); await drain();
+  h.requests.at(-1).reject(new Error('Erro no refresh')); await drain();
+  assert.equal(h.root.querySelector('form'), null);
+  assert.ok(h.root.querySelectorAll('input').some(node => node.value === 'Nova aula'));
+  assert.equal(h.handle.isDirty(), false);
+});
+
+test('reorder ACK survives failed refresh and subsequent title save never resends stale order', async () => {
+  const h = await curriculumHarness(true);
+  h.root.querySelectorAll('button').find(node => node.getAttribute('aria-label') === 'Mover aula Segunda aula para cima').click();
+  await drain();
+  assert.deepEqual(JSON.parse(h.requests.at(-1).options.body).ids, ['lesson-b', 'lesson-a']);
+  h.requests.at(-1).resolve([{ id: 'lesson-b', order: 1 }, { id: 'lesson-a', order: 2 }]); await drain();
+  h.requests.at(-1).reject(new Error('Falha de releitura')); await drain();
+  const titles = h.root.querySelectorAll('input').filter(node => node.getAttribute('aria-label')?.startsWith('Título da aula'));
+  assert.deepEqual(titles.map(node => node.value), ['Segunda aula', 'Aula original']);
+  titles[0].value = 'Título confirmado'; titles[0].dispatchEvent(new TestEvent('input'));
+  button(h.root, 'Salvar aula').click(); await drain();
+  const body = JSON.parse(h.requests.at(-1).options.body);
+  assert.equal(body.title, 'Título confirmado');
+  assert.equal(Object.hasOwn(body, 'order'), false);
+  h.requests.at(-1).resolve({ id: 'lesson-b', title: 'Título confirmado', order: 1 }); await drain();
+  h.requests.at(-1).reject(new Error('Falha de releitura')); await drain();
+  assert.ok(h.root.querySelectorAll('input').some(node => node.value === 'Título confirmado'));
+});
+
+test('inline media classification uses exact YouTube hosts, never query fragments', async () => {
+  const h = await curriculumHarness();
+  button(h.root, 'Adicionar aula').click();
+  const form = h.root.querySelector('form'); form.reportValidity = () => true;
+  const [title, url] = form.querySelectorAll('input'); title.value = 'Nova aula';
+  for (const [value, type] of [
+    ['https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ', 'youtube'],
+    ['https://m.youtube.com/shorts/dQw4w9WgXcQ', 'youtube'],
+    ['https://media.test/video.mp4?source=youtube.com', 'file'],
+  ]) {
+    url.value = value; form.dispatchEvent(new TestEvent('submit')); await drain();
+    assert.deepEqual(JSON.parse(h.requests.at(-1).options.body).media, { type, url: value });
+    h.requests.at(-1).reject(new Error('Manter formulário para próxima entrada')); await drain();
+  }
+});
+
+test('course-save lock freezes curriculum controls without clearing drafts', async () => {
+  const h = await curriculumHarness();
+  const title = h.root.querySelectorAll('input').find(node => node.value === 'Aula original');
+  title.value = 'Rascunho preservado'; title.dispatchEvent(new TestEvent('input'));
+  h.handle.setLocked(true);
+  assert.equal(title.disabled, true);
+  assert.equal(h.page.canLeave(), false);
+  button(h.root, 'Salvar aula').click();
+  assert.equal(h.requests.length, 0);
+  h.handle.setLocked(false);
+  assert.equal(title.disabled, false);
+  assert.equal(title.value, 'Rascunho preservado');
+  assert.equal(h.handle.isDirty(), true);
 });
 
 test('ordinary module save reloads and renders the authoritative title/status', async () => {

@@ -282,3 +282,23 @@ test('course and lesson views project only persisted Academy fields', async t =>
   assert.equal(JSON.stringify(failure.body).includes('private database failure'), false);
   f.pool.query = original;
 });
+
+test('only authorized course preview includes editable lesson media and description', async t => {
+  const f = fixture();
+  const { request } = await createAcademyHttp(t, f.pool, f.users);
+  const id = f.courses[2].id;
+  const get = (user, suffix = '') => request.get(`/api/academy/${id}${suffix}`).set('x-fixture-user', user);
+  const student = (await get('closer').expect(200)).body.modules[0].lessons[0];
+  for (const key of ['description', 'media_type', 'youtube_video_id', 'media_url']) assert.equal(Object.hasOwn(student, key), false);
+  await get('adminWithoutPermission', '?all=true').expect(403);
+  const preview = (await get('manager', '?all=true').expect(200)).body.modules[0].lessons[0];
+  assert.equal(preview.description, f.lessons[4].description);
+  assert.equal(preview.media_type, 'youtube');
+  assert.equal(preview.youtube_video_id, f.lessons[4].youtube_video_id);
+  f.lessons[4].media_type = 'file';
+  f.lessons[4].media_url = 'https://media.test/lesson.mp4';
+  f.lessons[4].youtube_video_id = null;
+  const file = (await get('manager', '?all=true').expect(200)).body.modules[0].lessons[0];
+  assert.equal(file.media_url, f.lessons[4].media_url);
+  assert.equal(file.youtube_video_id, null);
+});
