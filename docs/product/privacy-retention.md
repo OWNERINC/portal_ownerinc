@@ -21,8 +21,12 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Dados mínimos: UID do titular, versão, SHA-256 do conteúdo, indicação de mock e
   data/hora gerada pelo banco. Não há coleta adicional de IP, dispositivo ou tempo
   de leitura para este fluxo.
-- O registro mock não representa aceite do documento oficial nem assinatura
-  eletrônica. Rolar até o final não comprova leitura ou compreensão.
+- A versão oficial atual é o Código de Ética e Conduta 1.0 (2026). O aceite mock
+  anterior não libera essa versão; seus registros permanecem preservados, sem
+  conversão automática em aceite oficial.
+- O registro de confirmação não é apresentado como assinatura eletrônica. Rolar
+  até o final não comprova leitura ou compreensão. Os campos impressos do Anexo I
+  são texto estático, sem nova coleta de dados pessoais.
 - Retenção: enquanto a conta existir; excluir o usuário remove seus aceites por
   cascata. O cron não recebe acesso a esses registros. Qualquer obrigação futura
   de retenção do documento oficial depende de validação jurídica própria.

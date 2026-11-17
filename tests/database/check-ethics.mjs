@@ -10,6 +10,7 @@ if (!process.env.PGLITE_MODULE_PATH) throw new Error('Set PGLITE_MODULE_PATH to 
 const { PGlite } = await import(pathToFileURL(resolve(process.env.PGLITE_MODULE_PATH)).href);
 const require = createRequire(import.meta.url);
 const { acceptTerm, term } = require('../../api/ethics');
+const legacyMock = require('../fixtures/ethics-mock-v1.json');
 const db = new PGlite();
 try {
   await db.exec(`CREATE ROLE portal_api; CREATE ROLE portal_cron;
@@ -19,23 +20,27 @@ try {
   await db.exec(migration);
   await db.exec(migration);
   assert.equal((await db.query('SELECT * FROM ethics_acceptances')).rows.length, 0, 'no backfill for existing accounts');
+  const current = `SELECT EXISTS (SELECT 1 FROM ethics_acceptances
+    WHERE user_uid = $1 AND term_version = $2 AND content_sha256 = $3) AS accepted`;
   for (const uid of ['viewer', 'admin', 'super']) {
+    await db.query(`INSERT INTO ethics_acceptances (user_uid, term_version, content_sha256, is_mock, accepted_at)
+      VALUES ($1, $2, $3, TRUE, '2026-11-10T10:00:00Z')`, [uid, legacyMock.version, legacyMock.contentHash]);
+    assert.equal((await db.query(current, [uid, term.version, term.contentHash])).rows[0].accepted, false);
     const first = await acceptTerm(db, uid);
     const repeat = await acceptTerm(db, uid);
     assert.deepEqual(repeat, first);
     assert.ok(Number.isFinite(new Date(first.accepted_at).getTime()));
   }
-  assert.equal((await db.query('SELECT * FROM ethics_acceptances')).rows.length, 3);
+  assert.equal((await db.query('SELECT * FROM ethics_acceptances')).rows.length, 6);
   assert.equal((await db.query('SELECT * FROM ethics_acceptances WHERE is_mock IS TRUE')).rows.length, 3);
-  const current = `SELECT EXISTS (SELECT 1 FROM ethics_acceptances
-    WHERE user_uid = $1 AND term_version = $2 AND content_sha256 = $3) AS accepted`;
+  assert.equal((await db.query('SELECT * FROM ethics_acceptances WHERE is_mock IS FALSE')).rows.length, 3);
   assert.equal((await db.query(current, ['viewer', term.version, term.contentHash])).rows[0].accepted, true);
   assert.equal((await db.query(current, ['viewer', 'official-v1', term.contentHash])).rows[0].accepted, false);
   assert.equal((await db.query(current, ['viewer', term.version, '0'.repeat(64)])).rows[0].accepted, false);
   await assert.rejects(db.query('INSERT INTO ethics_acceptances (user_uid, term_version, content_sha256, is_mock) VALUES ($1,$2,$3,$4)', ['viewer', 'bad', 'bad-hash', true]), /check constraint/);
   await assert.rejects(db.query('INSERT INTO ethics_acceptances (user_uid, term_version, content_sha256, is_mock) VALUES ($1,$2,$3,$4)', ['missing', term.version, term.contentHash, true]), /foreign key constraint/);
   await db.exec('SET ROLE portal_api');
-  assert.equal((await db.query('SELECT * FROM ethics_acceptances')).rows.length, 3);
+  assert.equal((await db.query('SELECT * FROM ethics_acceptances')).rows.length, 6);
   await acceptTerm(db, 'viewer');
   await assert.rejects(db.exec('UPDATE ethics_acceptances SET accepted_at = NOW()'), /permission denied/);
   await assert.rejects(db.exec('DELETE FROM ethics_acceptances'), /permission denied/);

@@ -1,0 +1,13 @@
+{
+  "sourceFile": "Código de ética.docx",
+  "sourceFileSha256": "953537f661b5d8c853654f408241245efa4934fc67ee4c036636b17d075daa19",
+  "version": "1.0",
+  "normalizedTextCount": 148,
+  "normalizedTextSha256": "ed3b1e78e12b58c21630d000aabb4159d65b2dfbedc665870c798cbf0f27b468",
+  "sectionCount": 27,
+  "tableRowCounts": [7, 7, 5],
+  "approvedCorrection": {
+    "before": "Responsável pela governança do canal: xxxxxxxxxxx",
+    "after": "Responsável pela governança do canal: DHO"
+  }
+}

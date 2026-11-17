@@ -782,6 +782,7 @@ try {
   );
   await verifyMigrations();
   const { acceptTerm, term } = require('../api/ethics');
+  const legacyEthicsMock = JSON.parse(await readFile(new URL('../tests/fixtures/ethics-mock-v1.json', import.meta.url), 'utf8'));
   for (const profile of [
     { role: 'viewer', permissions: {} },
     { role: 'admin', permissions: { manageUsers: true } },
@@ -792,10 +793,17 @@ try {
     await client.query('INSERT INTO users (uid, email, role, permissions) VALUES ($1, $2, $3, $4::jsonb)',
       [uid, `${uid}@example.com`, profile.role, JSON.stringify(profile.permissions)]);
     assert.equal((await client.query('SELECT 1 FROM ethics_acceptances WHERE user_uid = $1', [uid])).rowCount, 0);
+    await client.query(`INSERT INTO ethics_acceptances (user_uid, term_version, content_sha256, is_mock)
+      VALUES ($1, $2, $3, TRUE)`, [uid, legacyEthicsMock.version, legacyEthicsMock.contentHash]);
+    assert.equal((await client.query('SELECT 1 FROM ethics_acceptances WHERE user_uid = $1 AND term_version = $2 AND content_sha256 = $3',
+      [uid, term.version, term.contentHash])).rowCount, 0, 'historical mock does not release official term');
     const accepted = await acceptTerm(client, uid);
     assert.deepEqual(await acceptTerm(client, uid), accepted, 'retry keeps original PostgreSQL timestamp');
-    const saved = await client.query('SELECT term_version, content_sha256, is_mock FROM ethics_acceptances WHERE user_uid = $1', [uid]);
-    assert.deepEqual(saved.rows, [{ term_version: term.version, content_sha256: term.contentHash, is_mock: true }]);
+    const saved = await client.query('SELECT term_version, content_sha256, is_mock FROM ethics_acceptances WHERE user_uid = $1 ORDER BY term_version', [uid]);
+    assert.deepEqual(saved.rows, [
+      { term_version: term.version, content_sha256: term.contentHash, is_mock: false },
+      { term_version: legacyEthicsMock.version, content_sha256: legacyEthicsMock.contentHash, is_mock: true },
+    ]);
     await client.query('DELETE FROM users WHERE uid = $1', [uid]);
     assert.equal((await client.query('SELECT 1 FROM ethics_acceptances WHERE user_uid = $1', [uid])).rowCount, 0);
   }

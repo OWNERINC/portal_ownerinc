@@ -1,9 +1,10 @@
 // Loopback-only browser integration: real page, shared auth helpers, Express
 // routes and middleware; Firebase identities and SQL transport are fixtures.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,8 @@ const { chromium } = await import(pathToFileURL(resolve(process.env.PLAYWRIGHT_M
 const { default: AxeBuilder } = await import(pathToFileURL(resolve(process.env.AXE_MODULE_PATH)).href);
 const require = createRequire(new URL('../../api/package.json', import.meta.url));
 const express = require('express');
+const legacyMock = JSON.parse(await readFile(new URL('../fixtures/ethics-mock-v1.json', import.meta.url), 'utf8'));
+const provenance = JSON.parse(await readFile(new URL('../fixtures/ethics-official-provenance.json', import.meta.url), 'utf8'));
 const { app, state } = await ethicsHarness();
 app.get('/dashboard.html', (_req, res) => res.type('html').send('<!doctype html><html lang="pt-BR"><title>Portal fixture</title><main><h1>Portal liberado</h1></main></html>'));
 app.get('/probe.html', (_req, res) => res.type('html').send(`<!doctype html><html lang="pt-BR"><title>Protected fixture</title><main></main><script type="module">
@@ -77,6 +80,8 @@ try {
   // Login and direct loads exercise the same gate for all existing roles.
   for (const uid of ['viewer', 'admin', 'super']) {
     state.acceptances.clear();
+    const historicalKey = `${uid}:${legacyMock.version}:${legacyMock.contentHash}`;
+    state.acceptances.set(historicalKey, { accepted_at: '2026-11-10T10:00:00.000Z', is_mock: true });
     const { context, page } = await contextFor(uid);
     await page.goto(`${origin}/login.html?next=${encodeURIComponent('/probe.html?tab=1#content')}`);
     await loaded(page);
@@ -89,7 +94,9 @@ try {
     await page.locator('#ethics-accept').click();
     await page.waitForURL(url => url.pathname === '/probe.html' && url.search === '?tab=1' && url.hash === '#content');
     await page.waitForFunction(() => document.querySelector('main').textContent.startsWith('Área protegida:'));
-    assert.equal(state.acceptances.size, 1);
+    assert.equal(state.acceptances.size, 2);
+    assert.equal(state.acceptances.get(`${uid}:${term.version}:${term.contentHash}`).is_mock, false);
+    assert.equal(state.acceptances.get(historicalKey).is_mock, true);
     // The server owns the saved choice, including on another browser context.
     const second = await contextFor(uid);
     await second.page.goto(`${origin}/ethics.html?next=/probe.html`);
@@ -104,7 +111,7 @@ try {
     });
     await loaded(page);
     assert.equal(await page.evaluate(() => __fixtureAuth.currentUser.uid), uid);
-    results.push({ scenario: 'login/direct/API gate, acceptance and second browser', uid, pass: true });
+    results.push({ scenario: 'historical mock requires official reacceptance; login/direct/API gate and second browser', uid, pass: true });
     await context.close();
   }
   for (const width of [320, 360, 402, 768, 1366, 1920]) {
@@ -116,12 +123,29 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width}: overflow`);
     const audit = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
     assert.deepEqual(audit.violations.map(item => ({ id: item.id, nodes: item.nodes.map(node => node.target) })), [], `${width}: accessibility`);
-    assert.match(await page.locator('#ethics-notice').textContent(), /demonstração/);
+    assert.equal(await page.locator('#ethics-notice').isVisible(), false);
+    assert.equal(await page.locator('#ethics-title').textContent(), 'Código de Ética e Conduta');
+    assert.equal(await page.locator('#ethics-version').textContent(), 'Versão 1.0');
+    const renderedTexts = await page.locator('#ethics-document').evaluate(host => [...host.querySelectorAll('p,h2,li,th,td')]
+      .map(node => node.textContent.trim().replace(/\s+/g, ' ')));
+    assert.equal(renderedTexts.length, provenance.normalizedTextCount);
+    assert.equal(createHash('sha256').update(JSON.stringify(renderedTexts)).digest('hex'), provenance.normalizedTextSha256,
+      `${width}: rendered document must preserve every source text in order`);
+    assert.equal(await page.locator('#ethics-document table').count(), 3);
+    assert.equal(await page.locator('#ethics-document th[scope="row"]').count(), 5);
+    assert.equal(await page.locator('#ethics-document input').count(), 0);
+    const fitsReader = await page.locator('#ethics-reader').evaluate(reader => reader.scrollWidth <= reader.clientWidth);
+    assert.equal(fitsReader, true, `${width}: tables/signature lines must not cause horizontal reader overflow`);
     await page.screenshot({ path: join(output, `ethics-${width}.png`), fullPage: true });
+    if ([360, 1366].includes(width)) {
+      await page.locator('#ethics-document table').first().evaluate(table => table.scrollIntoView({ block: 'start' }));
+      await page.screenshot({ path: join(output, `ethics-table-${width}.png`), fullPage: true });
+      await page.locator('#ethics-reader').evaluate(reader => { reader.scrollTop = 0; });
+    }
     await readAndCheck(page);
     await page.locator('#ethics-checkbox').uncheck();
     assert.equal(await page.locator('#ethics-accept').isDisabled(), true);
-    results.push({ scenario: 'reflow, keyboard and WCAG A/AA', width, violations: 0, pass: true });
+    results.push({ scenario: 'official content parity, tables, reflow, keyboard and WCAG A/AA', width, violations: 0, pass: true });
     await context.close();
   }
   {
