@@ -72,6 +72,10 @@ router.post('/:id/approve', authMiddleware, async (req, res, next) => {
          requestId: req.id,
        });
       discardClient = approval?.discardClient === true;
+      const held = client;
+      client = null;
+      held.release(discardClient);
+      if (approval.afterRelease) await approval.afterRelease();
       return approval;
     });
     res.json(result);

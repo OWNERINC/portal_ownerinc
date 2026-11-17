@@ -68,11 +68,16 @@ function mayViewAll(user, permission, value) {
 
 async function withAudit(pool, req, action, targetType, operation, options = {}) {
   const client = await pool.connect();
+  let commitAttempted = false;
+  let commitCompleted = false;
+  let discardClient = false;
   try {
     await client.query('BEGIN');
     const result = await operation(client);
     if (result === undefined || result === null) {
+      commitAttempted = true;
       await client.query('COMMIT');
+      commitCompleted = true;
       return result;
     }
     const targetId = typeof options.targetId === 'function' ? options.targetId(result) : options.targetId;
@@ -82,13 +87,23 @@ async function withAudit(pool, req, action, targetType, operation, options = {})
        VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
       [req.user.uid, action, targetType, targetId || null, req.id, JSON.stringify(details)]
     );
+    commitAttempted = true;
     await client.query('COMMIT');
+    commitCompleted = true;
     return result;
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (commitAttempted && !commitCompleted) {
+      discardClient = true;
+      error.commitAmbiguous = true;
+    } else if (!commitCompleted) {
+      await client.query('ROLLBACK').catch(() => {
+        discardClient = true;
+        error.rollbackAmbiguous = true;
+      });
+    }
     throw error;
   } finally {
-    client.release();
+    client.release(discardClient);
   }
 }
 

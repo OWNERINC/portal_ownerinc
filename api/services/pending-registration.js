@@ -463,8 +463,9 @@ async function expirePendingRegistrations({ pool, retentionDays = 730, requestId
           `DELETE FROM pending_registrations
            WHERE id = $1 AND firebase_uid = $2 AND status = $3
              AND created_at = $4::timestamptz AND firebase_cleanup_pending = TRUE`,
-          [registration.id, registration.firebase_uid, registration.status, registration.created_at],
+          [registration.id, registration.firebase_uid, registration.status, registration.created_at_key],
         );
+        if (result.rowCount !== 1) throw new Error('Pending registration retention delete did not match the locked identity.');
         commitAttempted = true;
         await client.query('COMMIT');
         commitCompleted = true;
@@ -563,6 +564,7 @@ async function approvePendingRegistration({ client, pool, id, jobTitleId, contra
     const enable = await enableActiveUser({ client, pool, uid: registration.firebase_uid, email: registration.email, requestId });
     if (enable.state === 'active') return { status: 'approved', state: 'active' };
     const result = { status: 'approved_pending_enable', state: 'enable_pending' };
+    if (enable.afterRelease) Object.defineProperty(result, 'afterRelease', { value: enable.afterRelease, enumerable: false });
     return enable.discardClient ? discardClient(result) : result;
   } catch (error) {
     if (!commitAttempted) {

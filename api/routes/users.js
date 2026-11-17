@@ -227,6 +227,11 @@ router.post('/', authMiddleware, async (req, res, next) => {
   let commitCompleted = false;
   let discardClient = false;
   const { email, name = '', contract_type = 'clt', is_pj = false, pj_due_day = null, job_title_id = null, phone = '' } = req.body;
+  function releaseClient(discard = false) {
+    const held = client;
+    client = null;
+    held?.release(discard);
+  }
   const contract = normalizeContract(contract_type, pj_due_day);
   if (!contract || contract.is_pj !== is_pj) return invalid(req, res);
   const normalizedEmail = email.trim().toLowerCase();
@@ -249,6 +254,7 @@ router.post('/', authMiddleware, async (req, res, next) => {
     commitAttempted = true;
     await client.query('COMMIT');
     commitCompleted = true;
+    releaseClient();
     try {
        const enable = await enableActiveUser({ pool, uid: rows.uid, email: normalizedEmail, requestId: req.id });
       if (enable.state !== 'active') {
@@ -262,6 +268,7 @@ router.post('/', authMiddleware, async (req, res, next) => {
   } catch (err) {
     let rollbackFailed = false;
     if (!commitAttempted) await client?.query('ROLLBACK').catch(() => { rollbackFailed = true; discardClient = true; });
+    releaseClient(discardClient || (commitAttempted && !commitCompleted));
     await compensateCreatedInvitedUser({
       pool,
       uid: createdUid || err.firebaseUid,
@@ -297,7 +304,7 @@ router.post('/', authMiddleware, async (req, res, next) => {
     }
     next(err);
   } finally {
-    client?.release(discardClient || (commitAttempted && !commitCompleted));
+    releaseClient(discardClient || (commitAttempted && !commitCompleted));
   }
 });
 

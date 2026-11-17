@@ -108,10 +108,10 @@ test('duplicate names remain within the 120-character contract', async () => {
   assert.match(source, /LEFT\(\$1 \|\| ' v2', 120\)/);
 });
 
-test('malformed image normalization returns invalid while storage cleanup remains active', async () => {
+test('malformed image normalization returns invalid while storage cleanup is limited to definite rollback', async () => {
   const source = await read('api/routes/pos-cards.js');
   assert.match(source, /let normalized;[\s\S]*?try \{\s*normalized = await normalizeImage\(content\);\s*\} catch \{\s*return invalid\(req, res\);\s*\}/);
-  assert.match(source, /if \(storageKey\) await fs\.unlink\(path\.join\(uploadDirectory, storageKey\)\)\.catch\(\(\) => \{\}\)/);
+  assert.match(source, /if \(storageKey && !committed && !error\.commitAmbiguous && !error\.rollbackAmbiguous\) \{\s*await fs\.unlink\(path\.join\(uploadDirectory, storageKey\)\)\.catch\(\(\) => \{\}\)/);
 });
 
 test('invalid and missing resources carry repository request identifiers', async () => {

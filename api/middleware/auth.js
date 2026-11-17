@@ -5,6 +5,7 @@ const { can, canUseAutoCard, canUsePosCards } = require('./policy');
 const { rateLimit } = require('./security');
 const { isEthicsBootstrapRequest, term } = require('../ethics');
 
+const requestLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 300, key: (req) => req.firebaseUser.uid });
 const writeLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => req.user.uid });
 const progressLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 120, key: (req) => req.user.uid });
 const progressPath = /^\/api\/academy\/lessons\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/progress$/i;
@@ -32,30 +33,32 @@ async function authMiddleware(req, res, next) {
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token.', requestId: req.id });
   }
+  req.firebaseUser = decoded;
   try {
-     const { rows } = await pool.query(
-       `SELECT u.*, jt.name AS job_title, jt.active AS job_title_active, jt.page_access AS job_title_access,
+    return await requestLimit(req, res, async () => {
+      const { rows } = await pool.query(
+        `SELECT u.*, jt.name AS job_title, jt.active AS job_title_active, jt.page_access AS job_title_access,
           EXISTS (SELECT 1 FROM ethics_acceptances ea
             WHERE ea.user_uid = u.uid AND ea.term_version = $2 AND ea.content_sha256 = $3) AS ethics_accepted
          FROM users u LEFT JOIN job_titles jt ON jt.id = u.job_title_id
         WHERE u.uid = $1`, [decoded.uid, term.version, term.contentHash]
-     );
-     const user = rows[0];
-     if (!user) {
-       const pending = await pool.query(
-         `SELECT status FROM pending_registrations
+      );
+      const user = rows[0];
+      if (!user) {
+        const pending = await pool.query(
+          `SELECT status FROM pending_registrations
           WHERE firebase_uid = $1 ORDER BY created_at DESC LIMIT 1`,
-         [decoded.uid],
-       );
-       if (pending.rows[0]?.status === 'pending') {
-         return res.status(403).json({ error: 'Cadastro pendente de aprovação.', reason: 'pending-approval', requestId: req.id });
-       }
-       return res.status(403).json({ error: 'Account is not active.', requestId: req.id });
-     }
-     const accountDisabled = user.permissions?.accountDisabled === true || user.permissions?.accountDisabled === 'true';
-     if (accountDisabled) {
-       return res.status(403).json({ error: 'Account is disabled.', reason: 'account-disabled', requestId: req.id });
-     }
+          [decoded.uid],
+        );
+        if (pending.rows[0]?.status === 'pending') {
+          return res.status(403).json({ error: 'Cadastro pendente de aprovação.', reason: 'pending-approval', requestId: req.id });
+        }
+        return res.status(403).json({ error: 'Account is not active.', requestId: req.id });
+      }
+      const accountDisabled = user.permissions?.accountDisabled === true || user.permissions?.accountDisabled === 'true';
+      if (accountDisabled) {
+        return res.status(403).json({ error: 'Account is disabled.', reason: 'account-disabled', requestId: req.id });
+      }
       if (user.firebase_enable_pending === true) {
         return res.status(403).json({ error: 'Account enablement is pending.', reason: 'enable-pending', requestId: req.id });
       }
@@ -63,15 +66,15 @@ async function authMiddleware(req, res, next) {
       if (user.ethics_accepted !== true && !isEthicsBootstrapRequest(req.method, req.originalUrl)) {
         return res.status(403).json({ error: 'Leia e aceite o Código de Ética para acessar o Portal.', reason: 'ethics-required', requestId: req.id });
       }
-     req.firebaseUser = decoded;
-     req.user = user;
-    req.user.autocard_access = canUseAutoCard(req.user);
-    req.user.pos_cards_access = canUsePosCards(req.user);
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-      const pathname = (req.originalUrl || '').split('?')[0];
-      return (req.method === 'PUT' && progressPath.test(pathname) ? progressLimit : writeLimit)(req, res, next);
-    }
-    next();
+      req.user = user;
+      req.user.autocard_access = canUseAutoCard(req.user);
+      req.user.pos_cards_access = canUsePosCards(req.user);
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+        const pathname = (req.originalUrl || '').split('?')[0];
+        return (req.method === 'PUT' && progressPath.test(pathname) ? progressLimit : writeLimit)(req, res, next);
+      }
+      return next();
+    });
   } catch (err) {
     next(err);
   }
