@@ -10,8 +10,12 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - Saída: a conta é primeiro desativada e tokens são revogados.
 - Exclusão: super-admin pode apagar o registro pessoal, a identidade Firebase e
   a foto pelo painel após desativar a conta.
-- Referências em conteúdo, notificações e auditoria passam a nulas; o histórico
-  operacional permanece sem UID estável do titular.
+- As referências relacionadas ao perfil são removidas ou anuladas conforme o
+  domínio: autoria ligada por FK passa a nula, o UID sai das listas de
+  destinatários e alvo/email são removidos da auditoria tratada pelo fluxo.
+- Esse apagamento não anonimiza todo histórico operacional. Recibos de
+  idempotência de Pages e linhas de importação têm as exceções descritas abaixo;
+  não devem ser apresentados como registros sem identificadores do titular.
 
 ## Aceite do Código de Ética
 
@@ -34,7 +38,11 @@ substitui orientação jurídica nem o registro formal das bases legais.
 ## Fotos
 
 - Uploads são decodificados e normalizados para WebP, sem nome baseado em UID.
-- A foto anterior é removida na substituição e existe remoção explícita.
+- Após confirmar a substituição, o fluxo tenta remover a foto anterior e registra
+  eventual falha de limpeza. Também existe remoção explícita.
+- Se a confirmação da transação se perder, os arquivos envolvidos são
+  preservados até se conhecer o estado persistido. Isso pode manter arquivo
+  órfão; não há expurgo automático geral de fotos órfãs implementado.
 - Fotos são arquivos públicos não indexados por nome aleatório para permitir uso
   em `<img>` sem token. Não devem conter documentos ou informação sensível.
 - Anonimização remove a referência e tenta excluir o arquivo correspondente.
@@ -116,12 +124,30 @@ substitui orientação jurídica nem o registro formal das bases legais.
 - O log contém ator, ação, alvo, request ID, detalhes mínimos e horário.
 - Somente super-admin consulta a trilha pela interface.
 
+## Pages e recibos de idempotência
+
+- Excluir um usuário anula sua autoria vinculada por FK; não apaga páginas,
+  revisões ou mídias preservadas pelo módulo.
+- `page_requests.actor_uid` é mantido no recibo junto à chave da mutação,
+  operação, destino, hash, resposta de confirmação e data. O UID integra a
+  identidade da operação para que apagar uma conta não libere a mesma chave
+  para reaplicação de uma escrita já realizada.
+- Esses recibos não contêm tokens nem snapshots do documento, mas continuam
+  identificáveis pelo UID. Não há rotina de expurgo dos recibos implementada.
+- Finalidade, base legal e prazo definitivo dessa retenção devem ser validados
+  pelo responsável pela política. Esta descrição registra o comportamento
+  técnico atual e não institui retenção ilimitada como política aprovada.
+
 ## Importação de Usuários
 
 - O CSV é processado somente por administradores com `manageUsers` e não é
   armazenado antes da confirmação explícita.
 - O histórico do job e suas linhas permanece por 30 dias; convites concluídos e
   usuários criados seguem as retenções próprias do Portal.
+- O apagamento do perfil não apaga nem anonimiza imediatamente essas linhas:
+  UID Firebase, nome, email, telefone e demais dados da importação podem
+  permanecer até a expiração do job. O vínculo do criador do job é anulado por
+  FK, o que não remove os dados dos colaboradores importados.
 - Duplicatas, cargos desconhecidos ou inativos e falhas de envio ficam
   registrados por linha, sem re-convidar contas existentes.
 
