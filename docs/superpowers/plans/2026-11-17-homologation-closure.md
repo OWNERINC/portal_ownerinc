@@ -16,8 +16,8 @@ Nova evidência em `Temp/opencode/portal-closure-20261117-r1/`.
 - [x] D09: implementação e atualização do manual Academy.
 - [x] D08: contraste localizado e provas de preview/exportação.
 - [x] Revalidar jornadas, verificações completas e revisão independente.
-- [ ] Commitar/publicar candidato e executar CI Linux na branch explícita.
-- [ ] Consolidar evidências e atualizar gates e dependências operacionais.
+- [x] Commitar/publicar candidato e executar CI Linux na branch explícita.
+- [x] Consolidar evidências e atualizar gates e dependências operacionais.
 
 ## 1. D09 — regressões e implementação
 
@@ -101,3 +101,18 @@ Arquivo de runtime: `public/cards-pos/styles.css`, regra
   somente os dois seletores foram atualizados; repetição completa 17/17 PASS.
 - Quatro harnesses finais: 300 requisições, zero pageerror/serverErrors e
   18 tabelas idênticas após reabertura em cada um. Limites PGlite/fixtures mantidos.
+
+## CI concluída e continuidade
+
+Candidato `524e1319b9109f2ef6c28c144e10cda884d77f5f`, branch publicada
+`fix/portal-readiness`, run `44166828544` SUCCESS.
+Verify Linux: 1.286 PASS / 2 SKIP / 0 FAIL; Academy PostgreSQL: 6/6 PASS.
+Migrations/bootstrap/upgrade/grants/readiness, aliases concorrentes, recovery
+DB-only Pages, nginx config, builds/scans/audit e SBOMs aprovados.
+GHCR/deploy-production pulados conforme a branch.
+
+Relatório: `docs/reviews/2026-11-17-homologation-closure.md`.
+Esta execução delimitada termina com as correções e os ensaios CI comprovados.
+O todo de homologação integral permanece aberto para proxy vivo, carga
+representativa, Firebase/SMTP reais, restore integral/off-host e aceite humano.
+Formulário assíncrono **Destinos das integrações reais** aberto, ainda sem resposta.
