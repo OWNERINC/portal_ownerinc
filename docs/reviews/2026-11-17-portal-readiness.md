@@ -2,13 +2,15 @@
 
 ## Estado
 
-Implementação e verificação primária concluídas na branch
-`fix/portal-readiness`; revisão independente ainda pendente.
-Este registro ainda não representa aprovação final ou implantação.
+**Pacote de código/documentação aceito pela sessão principal**, após verificação
+local e revisão independente com veredito **`ship`**, na branch
+`fix/portal-readiness`. A homologação de capacidade e a implantação continuam
+pendentes.
 
 Base: `dfe991db1a8aa89921262345ce72acee1279dd0e`.
 Especificação: commit `cee81d0`.
 Implementação: `dc2f979a9874bd3950f11e9121c688411367407e`.
+Documentação e HEAD revisado: `e3c529b5bca78332f1e3f6d9cd837e5554151801`.
 Especificação aprovada:
 [`2026-11-17-portal-readiness-design.md`](../superpowers/specs/2026-11-17-portal-readiness-design.md).
 Plano:
@@ -106,14 +108,36 @@ Logs primários preservados em `C:/Users/Criação/AppData/Local/Temp/opencode/`
 - `portal-readiness-primary-ethics-sql.log`.
 
 O implementador registrou falhas pré-correção e resultados verdes em
-`.superpowers/sdd/2026-11-17-portal-readiness/task-1-report.md`. Seu verify
+`task-1-report.md`, arquivado com o ledger, brief, pacote da diff e parecer em
+`C:/Users/Criação/AppData/Local/Temp/opencode/portal-readiness-evidence-20261117-e3c529b/`.
+Seu verify
 ignorou Compose por restrição do worker; a execução primária acima efetivamente
 validou Compose. PGlite, doubles e limite de tempo dos testes não são benchmark.
 
 ## Revisão independente
 
-Pendente: revisão fresca de conformidade, qualidade e diff completa desde a
-base, incluindo documentação. O aceite primário depende de veredito `ship`.
+Revisor fresco `sol-advisor-reviewer`, sessão
+`ses_e15e013d8ffea8kyZraxybfCNe`, examinou o pacote completo
+`dfe991db..e3c529b`, com requisitos, código real, callers e testes.
+
+**Veredito: `ship`.** Conformidade da task, qualidade e revisão ampla da branch
+aprovadas; nenhum defeito introduzido, lacuna obrigatória ou novo minor
+identificado. Não foi necessária rodada de correção.
+
+O parecer confirmou o UID validado, continuação assíncrona, gates, propriedade
+das conexões e cadeia `afterRelease`, chave temporal sob lock, preservação dos
+uploads e fidelidade da documentação de apagamento. Também confirmou a
+limitação preexistente de aquisições aninhadas fora dos caminhos corrigidos.
+
+O revisor não reexecutou suítes. Suas permissões negaram shell e logs externos;
+portanto, não alegou validação independente dos logs brutos, do HEAD ou da
+limpeza da árvore Git. As execuções e a conferência Git pertencem à sessão
+principal. A primary confirmou HEAD `e3c529b`, árvore limpa e os dois worktrees
+preservados ao receber o parecer.
+
+Aceite primário: o pacote satisfaz a especificação aprovada dentro das evidências
+locais descritas. Alterações posteriores ao HEAD revisado registram apenas este
+aceite e o encerramento do plano. Não houve alteração runtime após a revisão.
 
 ## Fronteiras de aceite
 

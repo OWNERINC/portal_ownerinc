@@ -40,8 +40,8 @@ instalados, Nginx e PGlite externo apenas para SQL descartável.
 - [x] Desenho aprovado, branch preparada e baseline verificado.
 - [x] Task 1: implementação e regressões do pacote.
 - [x] Inspeção primária, documentação e verificações.
-- [ ] Revisão independente e correções delimitadas.
-- [ ] Registro de aceite e entrega da branch.
+- [x] Revisão independente e correções delimitadas.
+- [x] Registro de aceite e entrega da branch.
 
 ### Task 1: Correções localizadas de prontidão
 
@@ -233,10 +233,10 @@ if (storageKey && !committed && !error.commitAmbiguous && !error.rollbackAmbiguo
 - [x] Update privacy text with factual exceptions; add traffic/recovery operator
   guidance and acceptance evidence, distinguishing local PASS from native/
   production/hardware checks not executed.
-- [ ] Generate a diff package from `dfe991db` through the implemented revision.
-- [ ] Fresh reviewer checks spec compliance and quality, returns `ship`,
+- [x] Generate a diff package from `dfe991db` through the implemented revision.
+- [x] Fresh reviewer checks spec compliance and quality, returns `ship`,
   `fix-first` or `rethink`. Corrections go to the same implementation worker.
-- [ ] Record the review, accepted outcome and remaining capacity gates.
+- [x] Record the review, accepted outcome and remaining capacity gates.
 
 ## Diagnostic references
 
@@ -245,6 +245,12 @@ com Compose config, 112 testes direcionados PASS, SQL de retenção PASS, SQL Pa
 3 PASS, SQL Ética PASS, build Pages e diff check PASS. Nginx nativo indisponível.
 Evidência detalhada e limites no
 [`registro de aceite`](../../reviews/2026-11-17-portal-readiness.md).
+
+Revisão fresca da task e da branch completa `dfe991db..e3c529b`: `ship`, sem
+correções ou minors. Aceite primário concluído. A branch e os worktrees ficam
+preservados; integração e deploy dependem de decisão própria. Evidências de
+trabalho arquivadas em
+`C:/Users/Criação/AppData/Local/Temp/opencode/portal-readiness-evidence-20261117-e3c529b/`.
 
 Read the scripts/results under:
 
