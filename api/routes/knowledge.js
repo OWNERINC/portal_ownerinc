@@ -1,11 +1,13 @@
 const express = require('express');
 const pool = require('../db');
+const { loadDocument, documentImage, documentSummary } = require('../knowledge/documents');
 const { authMiddleware, can } = require('../middleware/auth');
 const {
   forbidden, invalid, parseListQuery, text, uuid, validBody, withAudit,
 } = require('../route-utils');
 
 const router = express.Router();
+const uploadDir = () => process.env.UPLOAD_DIR || '/app/uploads';
 const schema = {
   title: text(200, true),
   category: text(100),
@@ -60,18 +62,47 @@ router.get('/', authMiddleware, async (req, res, next) => {
       })
       : rows;
     res.set('X-Total-Count', String(matches.length))
-      .json(matches.slice(page.offset, page.offset + page.limit));
+      .json(await Promise.all(matches.slice(page.offset, page.offset + page.limit)
+        .map(article => documentSummary(article, uploadDir()))));
   } catch (error) {
     next(error);
   }
 });
+
+async function readDocument(req, res, next) {
+  if (!uuid(req.params.id) || Object.keys(req.query).length) return invalid(req, res);
+  try {
+    const { rows } = await pool.query('SELECT id, document FROM knowledge_base WHERE id=$1', [req.params.id]);
+    if (!rows[0] || rows[0].document?.kind !== 'pdf') {
+      return res.status(404).json({ error: 'Documento indisponível.', requestId: req.id });
+    }
+    const descriptor = rows[0].document;
+    res.set('Cache-Control', 'private, no-store');
+    if (req.params.number !== undefined || req.path.endsWith('/cover')) {
+      const bytes = await documentImage(uploadDir(), descriptor, req.params.number ?? 'cover');
+      return res.type('image/webp').set('X-Content-Type-Options', 'nosniff').send(bytes);
+    }
+    const manifest = await loadDocument(uploadDir(), descriptor);
+    const base = `/api/knowledge/${req.params.id}/document`;
+    return res.json({ pageCount: manifest.pages.length, sourceUrl: manifest.source.url,
+      pages: manifest.pages.map(({ number, width, height, text }) => ({
+        number, width, height, text, url: `${base}/pages/${number}`,
+      })) });
+  } catch (error) {
+    if (error.status === 404) return res.status(404).json({ error: 'Documento indisponível.', requestId: req.id });
+    return next(error);
+  }
+}
+router.get('/:id/document', authMiddleware, readDocument);
+router.get('/:id/document/cover', authMiddleware, readDocument);
+router.get('/:id/document/pages/:number', authMiddleware, readDocument);
 
 router.get('/:id', authMiddleware, async (req, res, next) => {
   if (!uuid(req.params.id)) return invalid(req, res);
   try {
     const { rows } = await pool.query('SELECT * FROM knowledge_base WHERE id = $1', [req.params.id]);
     if (!rows[0]) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
-    res.json(rows[0]);
+    res.json(await documentSummary(rows[0], uploadDir()));
   } catch (error) {
     next(error);
   }
@@ -91,7 +122,7 @@ router.post('/', authMiddleware, async (req, res, next) => {
       );
       return { row: rows[0] };
     }, { targetId: result => result.row.id });
-    res.status(201).json(result.row);
+    res.status(201).json(await documentSummary(result.row, uploadDir()));
   } catch (error) { next(error); }
 });
 
@@ -113,7 +144,7 @@ router.put('/:id', authMiddleware, async (req, res, next) => {
       return { row: rows[0] };
     }, { targetId: req.params.id });
     if (!result || !result.row) return res.status(404).json({ error: 'Article not found.', requestId: req.id });
-    res.json(result.row);
+    res.json(await documentSummary(result.row, uploadDir()));
   } catch (error) { next(error); }
 });
 

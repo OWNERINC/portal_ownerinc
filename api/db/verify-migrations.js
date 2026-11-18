@@ -40,6 +40,7 @@ const expectedVersions = [
   '040_pages',
   '041_pages_media',
   '042_pages_reference_fidelity',
+  '043_knowledge_documents',
 ];
 
 const historicalVersions = Object.freeze([
@@ -107,6 +108,11 @@ async function verifyMigrations() {
       throw new Error(`Unexpected migration ledger: ${appliedVersions.join(',')}`);
     }
     const result = await pool.query(`SELECT to_regclass('public.job_titles') AS job_titles,
+      EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='knowledge_base'
+        AND column_name='document' AND data_type='jsonb' AND is_nullable='YES') AS knowledge_document,
+      EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.knowledge_base'::regclass
+        AND conname='knowledge_document_check' AND contype='c' AND convalidated) AS knowledge_document_check,
       to_regclass('public.ombudsman') AS ombudsman,
       to_regclass('public.ombudsman_workflow_idx') AS ombudsman_workflow_idx,
       to_regclass('public.autocard_cards') AS autocard_cards,
@@ -326,6 +332,8 @@ async function verifyMigrations() {
          AND has_table_privilege('portal_cron', 'public.audit_log', 'UPDATE')
          AND has_table_privilege('portal_cron', 'public.audit_log', 'DELETE')) AS cron_audit_privileges`);
     if (result.rows[0].job_titles !== 'job_titles'
+      || result.rows[0].knowledge_document !== true
+      || result.rows[0].knowledge_document_check !== true
       || result.rows[0].ombudsman !== null
       || result.rows[0].ombudsman_workflow_idx !== null
       || result.rows[0].autocard_cards !== 'autocard_cards'

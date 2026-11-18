@@ -33,7 +33,7 @@ test('042 is additive, repeatable, LF-only and leaves provisioning and historica
 
 test('current and historical readiness ledgers require 042 and reject a pre-042 ledger', async () => {
   for (const versions of [expectedVersions, historicalExpectedVersions]) {
-    assert.equal(versions.at(-1), '042_pages_reference_fidelity');
+    assert.ok(versions.includes('042_pages_reference_fidelity'));
     assert.equal(isAcceptedMigrationLedger(versions), true);
     assert.equal(isAcceptedMigrationLedger(versions.slice(0, -1)), false);
   }

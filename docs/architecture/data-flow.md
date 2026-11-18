@@ -109,11 +109,14 @@ Evidências e limites da validação local: [cadastro com senha e aprovação](.
    tabelas e rotas. Seus transportes não chamam `/api/cms`; seus harnesses
    rejeitam SQL para `cms_documents`, `cms_revisions`, `cms_assets` e o lock
    `7193029`, além de exigirem uma chamada positiva ao domínio sob teste.
-2. Knowledge aceita somente `title`, `category` e `content`; campos PDF legados
+2. A edição comum de Knowledge aceita somente `title`, `category` e `content`; campos PDF legados
    retornam `401` sem autenticação, `403` sem `manageKnowledge` e `400`, para o
    gestor autenticado, após autenticação e autorização, mas antes de SQL,
-   transação ou auditoria. A edição e a leitura usam texto simples seguro. PDF
-   ativo retirado por ausência de rota própria.
+   transação ou auditoria. Descrições usam texto simples seguro. Documentos
+   convertidos usam descritor próprio `document` e rotas autenticadas sob
+   `/api/knowledge/:id/document`, com pacotes privados em
+   `UPLOAD_DIR/knowledge-private/<sha256>`. Só o importador operacional pode
+   vincular descritores; o Código reutiliza `/api/ethics`.
 3. Benefits e Reminders projetam `description`/`instructions` próprias; a
    delivery sem reminder mantém `content_url = null`. Academy usa a hierarquia
    `academy` → `academy_modules` → `academy_lessons`, locks de linha, audiência
