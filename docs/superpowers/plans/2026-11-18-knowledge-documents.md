@@ -84,7 +84,7 @@ assert all(p["width"] > 0 and p["height"] > 0 for p in manifest["pages"])
 
 - [x] Inspecionar visualmente capa e páginas com texto de cada PDF, registrar
   contagem, tamanho e hashes; corrigir legibilidade antes do vínculo.
-- [ ] Commit delimitado do conversor e metadados textuais; binários ficam externos.
+- [x] Commit delimitado do conversor e metadados textuais; binários ficam externos.
 
 ## Task 2: Persistência e leitura autenticada
 
@@ -124,7 +124,7 @@ assert.equal(validateDescriptor({ kind: 'ethics', key: 'x' }), false);
   descritor inválido, página fora da faixa e `/uploads/knowledge-private`.
 - [x] Executar os testes focais e migration em banco descartável local disponível;
   registrar separadamente evidência que dependa de PostgreSQL nativo.
-- [ ] Commit delimitado de backend/migration/testes.
+- [x] Commit delimitado de backend/migration/testes.
 
 ## Task 3: Leitor contínuo e catálogo
 
@@ -151,7 +151,7 @@ Knowledge chama descarte ao iniciar outra leitura e ao desmontar a página.
   reflow320px. Ampliar sem depender de hover, animação ou pop-up externo.
 - [x] Rodar testes de leitor, Knowledge, navegação persistente e Ética; verificar
   troca de artigo e volta à lista durante carregamento.
-- [ ] Commit delimitado de leitor, integração e testes.
+- [x] Commit delimitado de leitor, integração e testes.
 
 ## Task 4: Importação auditada e repetível
 
@@ -172,7 +172,7 @@ título, categoria, descrição e descritor. Retorna created/unchanged e IDs.
   extraído em `docs/operations/knowledge-documents.md`.
 - [x] Atualizar documentação atual da Base e manifesto antigo para refletir o
   novo formato, preservando rastreabilidade das fontes.
-- [ ] Commit delimitado do importador, testes e documentação.
+- [x] Commit delimitado do importador, testes e documentação.
 
 ## Task 5: Aceite local e revisão
 
@@ -188,7 +188,7 @@ título, categoria, descrição e descritor. Retorna created/unchanged e IDs.
 
 ## Task 6: Publicação do lote aprovado
 
-- [ ] Conferir release produtiva e Git remoto atuais; construir candidato que
+- [x] Conferir release produtiva e Git remoto atuais; construir candidato que
   contenha somente a feature e suas dependências, preservando WIP anterior.
 - [ ] Executar os checks do candidato exato e publicar pelo fluxo existente;
   acompanhar conclusão pelo mecanismo de notificação, sem polling.

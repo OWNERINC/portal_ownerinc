@@ -20,11 +20,17 @@ const { articles } = JSON.parse(await readFile(join(root, 'import.json'), 'utf8'
 const provenance = JSON.parse(await readFile('tests/fixtures/ethics-official-provenance.json', 'utf8'));
 const h = await knowledgeDocumentAPI({ uploadDir: root });
 await importDocuments({ pool: h.pool, uploadDir: root, articles, batch: 'visual-knowledge', apply: true });
-h.app.use(require('express').static(fileURLToPath(new URL('../../public/', import.meta.url))));
-const server = createServer(h.app);
+// Mirror Nginx: only API/uploads reach Express and its real rate limiter.
+// Serving frontend assets through the API would exhaust its budget artificially.
+const express = require('express');
+const site = express();
+site.use((req, res, next) => /^\/(?:api|uploads)(?:\/|$)/.test(req.path) ? h.app(req, res, next) : next());
+site.use(express.static(fileURLToPath(new URL('../../public/', import.meta.url))));
+const server = createServer(site);
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const errors = [], results = [];
+const responses = [];
 let browser;
 async function contextFor(width) {
   const context = await browser.newContext({ viewport: { width, height: 850 }, reducedMotion: 'reduce' });
@@ -47,6 +53,10 @@ async function contextFor(width) {
   });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
+  page.on('response', response => {
+    const url = new URL(response.url());
+    if (url.origin === origin) responses.push({ path: url.pathname, status: response.status() });
+  });
   return { context, page };
 }
 async function catalog(page) {
@@ -165,8 +175,22 @@ try {
     results.push({ retry: true, lateResponseNavigation: true });
   }
   assert.deepEqual(errors, []);
-  await writeFile(join(output, 'results.json'), JSON.stringify({ results, errors, transport: 'PGlite and real UI/API; synthetic Firebase' }, null, 2));
+  assert.deepEqual(responses.filter(response => response.status === 429), [], 'real API rate limit');
+  await writeFile(join(output, 'results.json'), JSON.stringify({ results, errors, responses,
+    transport: 'PGlite and real UI/API/rate limiter; static assets outside API; synthetic Firebase' }, null, 2));
   console.log(`Knowledge browser: ${results.length} scenarios PASS; ${output}`);
+} catch (error) {
+  const pages = browser?.contexts().flatMap(context => context.pages()) || [];
+  await writeFile(join(output, 'failure.json'), JSON.stringify({
+    error: error.message, results, errors, responses,
+    pages: await Promise.all(pages.map(async page => ({
+      url: page.url(), text: await page.locator('body').innerText().catch(() => ''),
+    }))),
+  }, null, 2));
+  for (const [index, page] of pages.entries()) {
+    await page.screenshot({ path: join(output, `failure-${index}.png`) }).catch(() => {});
+  }
+  throw error;
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

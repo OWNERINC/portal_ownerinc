@@ -125,7 +125,9 @@ não remova a coluna para retornar à release anterior.
   SQL locais, identidades Firebase sintéticas. Exige as variáveis anteriores,
   `PLAYWRIGHT_MODULE_PATH` e `KNOWLEDGE_VISUAL_OUTPUT` apontando para pasta nova.
   Verifica 320/390/1366 px, nove posts, oito PDFs, fidelidade do Código, zoom,
-  teclado, retry e navegação durante carregamento.
+  teclado, retry e navegação durante carregamento. Serve os arquivos estáticos
+  fora da API, como o Nginx; mantém o limitador real de requisições da API.
+  Salva `results.json` com tráfego e, em falhas, diagnóstico e captura da página.
 
 Esses ensaios não equivalem a autenticação Firebase produtiva. O CI mantém o
 gate de migrations/estrutura em PostgreSQL 16 nativo.

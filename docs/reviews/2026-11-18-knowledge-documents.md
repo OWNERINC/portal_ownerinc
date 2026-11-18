@@ -90,3 +90,27 @@ A captura foi estabilizada esperando `decode()` antes do screenshot.
 Base produtiva consultada: `dfe991db1a8aa89921262345ce72acee1279dd0e`,
 igual a `origin/main`. Preparar candidato delimitado e registrar aqui a release,
 backup, auditoria e conferência após a importação.
+
+### Candidato delimitado
+
+Branch `feat/knowledge-documents`, baseada na release acima, recebeu somente a
+especificação (`3802077`) e a feature (`ada60e9`, origem `cc41694`).
+`npm run verify`: **1.234 testes / 1.230 PASS / 4 SKIP / 0 FAIL**.
+`npm run security`: zero vulnerabilidades no escopo produtivo.
+SQL/API/importação com os pacotes reais passou também neste candidato.
+
+A primeira rodada visual do candidato encontrou HTTP 429. O diagnóstico
+registrou 196 respostas estáticas e 110 respostas de API bem-sucedidas antes
+do bloqueio: o harness encaminhava HTML/CSS/JavaScript pelo limitador da API,
+diferentemente do Nginx produtivo. O checkout de desenvolvimento tinha uma
+alteração anterior do limite que mascarava essa divergência do teste.
+
+O harness foi corrigido para servir `public/` separadamente e encaminhar somente
+`/api` e `/uploads` para a aplicação real, preservando o limite produtivo.
+Passou nos **12 cenários**, com 186 respostas API 200, uma 503 deliberadamente
+injetada para testar retry e nenhuma 429. Agora salva tráfego e diagnóstico
+da página quando falha. Nenhuma mudança no limite produtivo foi necessária.
+
+Evidências: `Temp/opencode/knowledge-visual-release-diagnostic-20261118` e
+`Temp/opencode/knowledge-visual-release-final-20261118`. A rodada final conserva
+os limites anteriores: Firebase sintético, SQL PGlite e viewports emulados.
