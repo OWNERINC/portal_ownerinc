@@ -86,6 +86,7 @@ export class FixtureNode extends Node {
 export async function createFeedbackHarness(name, {
   expose = '', fonts = Promise.resolve(), mount = true, modules = [],
   url = `https://portal.test/${name}.html`,
+  user = {},
 } = {}) {
   const html = await readFile(`public/${name}.html`, 'utf8');
   const doc = new FixtureNode('document'); doc.ownerDocument = doc;
@@ -122,7 +123,7 @@ export async function createFeedbackHarness(name, {
     const item = { kind, path, options, ...deferred() }; requests.push(item); return item.promise;
   };
   const context = vm.createContext({
-    document: doc, window, fixtureLocation: location, console, AbortController, DOMException, URLSearchParams, TextEncoder, structuredClone,
+    document: doc, window, fixtureLocation: location, fixtureUser: user, console, AbortController, DOMException, URLSearchParams, TextEncoder, structuredClone,
     Event: TestEvent, URL: class extends URL { static revokeObjectURL(url) { revoked.push(url); } },
     setTimeout(fn) { const id = ++resourceId; timers.set(id, fn); return id; }, clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { const id = ++resourceId; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
@@ -159,8 +160,8 @@ export async function createFeedbackHarness(name, {
     let source = (await readFile(path, 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
     const end = source.lastIndexOf('}');
     source = `${source.slice(0, end)}\n${expose}\n${source.slice(end)}`;
-    vm.runInContext(`${source}\nglobalThis.page = createPageLifecycle(); page.location = fixtureLocation; mount(page);`, context, { filename: path });
-  } else vm.runInContext('globalThis.page = createPageLifecycle(); page.location = fixtureLocation;', context);
+    vm.runInContext(`${source}\nglobalThis.page = createPageLifecycle({ user: fixtureUser }); page.location = fixtureLocation; mount(page);`, context, { filename: path });
+  } else vm.runInContext('globalThis.page = createPageLifecycle({ user: fixtureUser }); page.location = fixtureLocation;', context);
   return {
     doc, window, context, html, requests, revoked, frames, timers, observers, captures, page: context.page, popstate,
     node: id => doc.getElementById(id),

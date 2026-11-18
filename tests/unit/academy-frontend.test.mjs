@@ -278,19 +278,16 @@ test('an authorized preview uses explicit all=true but never persists progress',
   assert.equal(h.latest('/progress'), undefined); h.page.dispose();
 });
 
-test('the actual Dashboard opens internal courses in Portal and keeps valid legacy external destinations', async () => {
-  const { createFeedbackHarness } = await import('../helpers/frontend-feedback-harness.mjs');
-  for (const candidate of [course('course-a'), course('external', { delivery_mode: 'external', url: 'https://training.test/course' })]) {
-    const h = await createFeedbackHarness('dashboard');
-    h.latest('/api/academy/continue?').resolve([]);
-    await drain();
-    h.latest('/api/academy?').resolve([candidate]);
-    await drain();
-    const links = h.node('academy-preview').querySelectorAll('a');
-    for (const link of links) {
-      assert.equal(link.getAttribute('href'), candidate.delivery_mode === 'internal' ? './academy.html?course=course-a' : 'https://training.test/course');
-      assert.equal(link.getAttribute('target'), candidate.delivery_mode === 'internal' ? null : '_blank');
-    }
-    h.page.dispose();
+test('Academy remains directly routable and generated while all shared menus omit its entry', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const generator = await readFile('scripts/generate-public-shell.mjs', 'utf8');
+  assert.match(generator, /\['academy\.html', 'academy', 'Academy'\]/);
+  const router = await readFile('public/js/router.js', 'utf8');
+  assert.match(router, /academy/);
+  for (const page of ['dashboard', 'knowledge', 'reminders', 'academy', 'pages', 'page-editor', 'benefits', 'profile', 'admin', 'autocard', 'cards-pos', 'solides']) {
+    const html = await readFile(`public/${page}.html`, 'utf8');
+    const sidebar = html.match(/<!-- generated:portal-sidebar -->([\s\S]*?)<!-- \/generated:portal-sidebar -->/)?.[1];
+    assert.ok(sidebar, page);
+    assert.doesNotMatch(sidebar, /academy\.html|Academy/, page);
   }
 });
