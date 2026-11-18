@@ -151,5 +151,5 @@ A especificação cobre implementação e validação desta atualização. A apr
 de deploy anterior pertence à entrega dos documentos já concluída. Publicar
 esta nova mudança exige autorização própria após a prévia e os checks.
 
-Estado: desenho escolhido pelo usuário; especificação escrita para revisão
-antes do plano técnico e da implementação.
+Estado: especificação aprovada pelo usuário em 18/11/2026 pela ação
+**Aprovar e implementar**. Implementação e validação autorizadas.
