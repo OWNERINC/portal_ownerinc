@@ -90,6 +90,12 @@ HTML.
 
 ## Documentação
 
+- [Manual de administradores e operadores — Markdown](docs/operations/manual-operadores.md)
+  · [PDF com sumário clicável](docs/operations/manual-operadores.pdf)
+  (edição 18/11/2026, release candidata `feat/portal-welcome`; não atesta deploy).
+  Para regenerar localmente, instale PyMuPDF e fonttools e execute
+  `python scripts/build-operator-manual.py --inspection-dir <diretorio-novo>`.
+  O gerador confere texto, limites e navegação e salva PNGs para inspeção visual.
 - [Brief do produto](docs/product/brief.md)
 - [Escopo](docs/product/scope.md)
 - [Inventário da implementação funcional](docs/product/feature-inventory.md)
