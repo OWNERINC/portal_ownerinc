@@ -1,7 +1,11 @@
 {
   "source_folder": "https://drive.google.com/drive/folders/10520HN-PzHQUizY_IYO16C5Fxn6kT-T1",
   "prepared_on": "2026-11-18",
-  "status": "converted_locally_pending_publication",
+  "status": "published",
+  "published_at": "2026-11-18T05:08:25.424Z",
+  "release": "31de9142b9ad5c8feef0d1754768f6b1ab3e938b",
+  "batch": "uniformes-20261118",
+  "publication_evidence": "../reviews/2026-11-18-knowledge-documents.md",
   "publication_guide": "knowledge-documents.md",
   "converted_pages": 207,
   "webp_page_bytes": 30091182,
