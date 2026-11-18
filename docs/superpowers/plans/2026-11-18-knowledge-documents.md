@@ -190,12 +190,18 @@ título, categoria, descrição e descritor. Retorna created/unchanged e IDs.
 
 - [x] Conferir release produtiva e Git remoto atuais; construir candidato que
   contenha somente a feature e suas dependências, preservando WIP anterior.
-- [ ] Executar os checks do candidato exato e publicar pelo fluxo existente;
+- [x] Executar os checks do candidato exato e publicar pelo fluxo existente;
   acompanhar conclusão pelo mecanismo de notificação, sem polling.
-- [ ] Conferir migration043 e API do candidato antes de inserir conteúdo.
-- [ ] Criar backup completo anterior à importação; enviar arquivos privados e
+- [x] Conferir migration043 e API do candidato antes de inserir conteúdo.
+- [x] Criar backup completo anterior à importação; enviar arquivos privados e
   conferir hashes do pacote no destino.
-- [ ] Executar dry-run, aplicar o lote validado e conferir IDs por nova conexão.
-- [ ] Validar nove posts, imagens e Código; conferir health/ready e registrar
+- [x] Executar dry-run, aplicar o lote validado e conferir IDs por nova conexão.
+- [x] Validar nove posts, imagens e Código; conferir health/ready e registrar
   release, auditoria e backup.
-- [ ] Atualizar relatório e pendência do projeto com resultado e evidências.
+- [x] Atualizar relatório e pendência do projeto com resultado e evidências.
+
+Concluído em 18/11/2026, release `31de9142b9ad5c8feef0d1754768f6b1ab3e938b`,
+PR #103 e workflow 44241073670 aprovados. Importação criou nove posts; todos os
+207 WebPs e oito capas conferidos no container produtivo. Backup, auditoria,
+preservação de dados e limites da validação estão em
+`docs/reviews/2026-11-18-knowledge-documents.md`.

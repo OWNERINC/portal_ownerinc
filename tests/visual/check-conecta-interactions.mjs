@@ -66,16 +66,20 @@ try {
     await page.getByRole('heading', { name: 'Nosso jeito de trabalhar', exact: true }).waitFor();
     await capture('academy-lesson');
 
-    await page.route('**/api/academy/continue?*', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Falha simulada de carregamento' }) }));
-    await page.route('**/api/academy?*', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Falha simulada de carregamento' }) }));
+    const ethicsEndpoint = '**/api/knowledge?limit=1';
+    const ethicsId = 'aabbccdd-1234-4567-89ab-123456abcdef';
+    await page.route(ethicsEndpoint, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Falha simulada de carregamento' }) }));
     await visit('dashboard.html');
-    await page.getByRole('button', { name: 'Tentar novamente' }).waitFor();
-    assert.ok(await page.locator('.dashboard-reminder').count() > 0, 'Academy failure must preserve reminders');
+    const ethicsPreview = page.locator('#ethics-preview');
+    await ethicsPreview.getByRole('button', { name: 'Tentar novamente' }).waitFor();
+    assert.ok(await page.locator('.dashboard-reminder').count() > 0, 'Ethics failure must preserve reminders');
     await capture('dashboard-independent-error');
-    await page.unroute('**/api/academy/continue?*');
-    await page.unroute('**/api/academy?*');
-    await page.getByRole('button', { name: 'Tentar novamente' }).click();
-    await page.locator('.dashboard-course-action').waitFor({ state: 'visible' });
+    await page.unroute(ethicsEndpoint);
+    await page.route(ethicsEndpoint, route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ id: ethicsId, document: { kind: 'ethics' } }]) }));
+    await ethicsPreview.getByRole('button', { name: 'Tentar novamente' }).click();
+    const ethicsAction = ethicsPreview.getByRole('link', { name: 'Ler Código de Ética', exact: true });
+    await ethicsAction.waitFor({ state: 'visible' });
+    assert.equal(await ethicsAction.getAttribute('href'), `./knowledge.html?article=${ethicsId}`);
     await capture('dashboard-retry');
 
     await page.evaluate(() => { window.__conectaNavigationMarker = 'same-document'; });

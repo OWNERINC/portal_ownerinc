@@ -5,7 +5,6 @@ const pages = [
   ['dashboard', 'Dashboard', 'home'],
   ['knowledge', 'Base de Conhecimento', 'book-open'],
   ['reminders', 'Notificações', 'bell'],
-  ['academy', 'Academy', 'graduation-cap'],
   ['pages', 'Pages', 'layout-template'],
 ];
 

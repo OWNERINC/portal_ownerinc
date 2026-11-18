@@ -2,8 +2,10 @@
 
 ## Estado
 
-Implementação e pacote conferidos localmente em 18/11/2026. Publicação ainda
-pendente nesta revisão. Especificação aprovada em
+Publicado e verificado em produção em **18/11/2026 às 05:08 UTC**: nove posts,
+207 páginas WebP e oito capas. Release
+`31de9142b9ad5c8feef0d1754768f6b1ab3e938b`, [PR #103](https://github.com/OWNERINC/portal_ownerinc/pull/103).
+Especificação aprovada em
 `docs/superpowers/specs/2026-11-18-knowledge-documents-design.md`.
 
 ## Conversão
@@ -88,8 +90,8 @@ Conferiu proporção reservada de 244×137 CSS px para página 2400×1350.
 A captura foi estabilizada esperando `decode()` antes do screenshot.
 
 Base produtiva consultada: `dfe991db1a8aa89921262345ce72acee1279dd0e`,
-igual a `origin/main`. Preparar candidato delimitado e registrar aqui a release,
-backup, auditoria e conferência após a importação.
+igual a `origin/main` antes desta entrega. O candidato delimitado e a publicação
+estão registrados abaixo.
 
 ### Candidato delimitado
 
@@ -114,3 +116,67 @@ da página quando falha. Nenhuma mudança no limite produtivo foi necessária.
 Evidências: `Temp/opencode/knowledge-visual-release-diagnostic-20261118` e
 `Temp/opencode/knowledge-visual-release-final-20261118`. A rodada final conserva
 os limites anteriores: Firebase sintético, SQL PGlite e viewports emulados.
+
+## Publicação produtiva concluída
+
+O [workflow 44241073670](https://github.com/OWNERINC/portal_ownerinc/actions/runs/44241073670)
+concluiu `validate` e `Deploy production` com sucesso. Incluiu PostgreSQL 16
+nativo, migrations fresh/upgrade/bootstrap/readiness, ensaio de recuperação,
+build, scans e imagens imutáveis. O receiver aplicou `043_knowledge_documents`
+e confirmou `migration verification: current schema ok`.
+
+O ponteiro `current-release`, a migration e os módulos do container foram
+conferidos antes da importação. O script manteve o lock de deploy e exigiu a
+release exata `31de9142b9ad5c8feef0d1754768f6b1ab3e938b`.
+
+### Backup e integridade
+
+- Backup adicional imediatamente anterior à importação:
+  `/opt/ownerinc/backups/portal-ownerinc/knowledge/uniformes-20261118/attempt-20261118T050821Z-8VIKmg/postgres.dump`.
+- Dump com inventário `pg_restore --list` conferido e SHA-256:
+  `b5ada2cc3d8685007227280826f2f87a164f1a539ef7d7422d85400a8f8ef9a4`.
+- Pacote transferido com 29.782.168 bytes e SHA-256:
+  `1e5cfc4a3a43ed34baadddcd767fa18ecc3e0eb0608da24e7dd1ebcc06effa69`.
+- Manifesto de importação produtivo SHA-256:
+  `048f0f8ce08f138cf1d6347e2b08c82bfbffa4c3f975c9b2ec259f6df995fe83`.
+
+A revisão operacional corrigiu previamente as permissões do diretório-pai
+privado (`1000:1000 / 0750`) e a retomada do wrapper, com evidências por tentativa
+e delta baseado no dry-run. A revisão incremental encerrou sem bloqueios.
+
+### Resultado e preservação
+
+Dry-run: `wouldCreate:9`, `unchanged:0`, sem escrita. Aplicação:
+`created:9`, uma auditoria `knowledge.documents_import`, lote
+`uniformes-20261118`. Nova conexão confirmou os nove registros, títulos,
+categorias, descritores e disponibilidade dos oito PDFs. Os IDs dos PDFs constam
+na tabela anterior; o Código institucional é
+`ae3ca720-b9ba-5528-a27c-eefec1a44563`.
+
+O processo Node do container leu e verificou todos os 207 WebPs e oito capas
+pelos módulos produtivos, incluindo tamanhos, hashes e assinatura. A comparação
+dos snapshots confirmou fingerprints idênticos para usuários, cargos, aceites,
+AutoCard, Cards Pós, mídias, benefícios, Academy, notificações e Pages.
+
+Código oficial preservado: versão `1.0`, `mock:false`, hash de conteúdo
+`1d6b2211bea3920f8e0f2dc665483ea9f7010e695a55ce974f1fa94aa94ae1fb`.
+Os oito aceites existentes permaneceram idênticos.
+
+### Conferência HTTP e limites
+
+- `/api/health` e `/api/ready`: 200, estados `ok` e `ready`.
+- HTML, CSS e módulos Knowledge publicados: 200 e bytes iguais ao candidato.
+- Manifesto, capa e primeira página dos oito PDFs: 401 sem autenticação.
+- Tentativas de acessar os pacotes por `/uploads/knowledge-private`: 404.
+- `/api/ethics`: 401 sem autenticação.
+
+Não foi usada sessão Firebase produtiva para uma nova leitura visual no browser.
+A evidência visual é do candidato exato com identidades sintéticas; a conferência
+produtiva cobre release, banco, arquivos, integridade, proteção HTTP e saúde.
+
+Evidências locais: `Temp/opencode/knowledge-publish-20261118`, incluindo
+`workflow-result.json`, `deploy.log`, `preflight.log`, `publication.log`,
+`before.json`, `after.json`, `dry-run.json`, `import-result.json`,
+`manifest.sha256` e `public-verification.json`.
+
+Acesso: https://portal.ownerinc.com.br/knowledge.html.

@@ -1,5 +1,24 @@
 # Prévia visual Conecta
 
+## Boas-vindas e destaque institucional
+
+`check-portal-welcome.mjs` confere Dashboard em 320/390/1366 px, capa compartilhada,
+nome como texto, atalhos conforme permissões, teclado, leitura oficial do Código,
+histórico, evento `pageshow` persistido, falha/retry/ausência e descarte durante
+consulta. Também confere a página direta e a aba administrativa da Academy.
+
+Defina `PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH`, `AXE_MODULE_PATH` (arquivo
+`axe.min.js`) e um diretório **novo** em `WELCOME_VISUAL_OUTPUT`:
+
+```sh
+node tests/visual/check-portal-welcome.mjs
+```
+
+Knowledge usa SQL/API reais em PGlite descartável; Firebase, notificações e dados
+da Academy são fixtures explícitas. O retorno BFCache é um evento simulado,
+além de Back real entre rotas. Capturas, relatórios axe (incluindo incompletos) e
+`results.json` registram esses limites. Não comprova serviços produtivos.
+
 ## Integração funcional de referência (Task 17)
 
 Com as instalações externas existentes, execute:

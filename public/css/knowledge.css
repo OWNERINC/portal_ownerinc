@@ -46,6 +46,9 @@
 .knowledge-page .article-content { max-width: 78ch; font-size: 16px; line-height: 1.85; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .article-content .article-document-link { max-width: 100%; white-space: normal; text-align: center; }
 .article-page-count { color: var(--text-secondary); font-size: 14px; }
+.knowledge-page .article-card-ethics { border-color: var(--accent); }
+.article-institutional-label { align-self: center; color: var(--text-secondary); font-size: 14px; font-weight: 700; }
+.article-ethics-cover { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; }
 .article-document-cover { display: block; width: 100%; height: auto; object-fit: contain; background: var(--bg); }
 .knowledge-document { margin-top: 24px; min-width: 0; }
 .knowledge-document-tools { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
