@@ -2,7 +2,7 @@
 
 Data: 18 de novembro de 2026.
 
-Estado: desenho de leitura contínua aprovado; especificação escrita para revisão.
+Estado: desenho e especificação aprovados; execução nesta sessão autorizada.
 
 ## Objetivo
 

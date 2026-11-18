@@ -44,6 +44,36 @@
 .article-view-heading h2 { margin: 0; color: var(--text); font-size: clamp(24px, 3vw, 36px); font-weight: 800; line-height: 1.25; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .article-view-heading .badge { width: fit-content; }
 .knowledge-page .article-content { max-width: 78ch; font-size: 16px; line-height: 1.85; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.article-content .article-document-link { max-width: 100%; white-space: normal; text-align: center; }
+.article-page-count { color: var(--text-secondary); font-size: 14px; }
+.article-document-cover { display: block; width: 100%; height: auto; object-fit: contain; background: var(--bg); }
+.knowledge-document { margin-top: 24px; min-width: 0; }
+.knowledge-document-tools { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+.knowledge-document-tools p { margin: 0; color: var(--text-secondary); font-size: 14px; }
+.knowledge-document-page { margin: 0 0 32px; }
+.knowledge-document-page figcaption { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; font-size: 14px; }
+.knowledge-document-image { display: block; width: 100%; height: auto; background: var(--bg); border: 1px solid var(--border); }
+.knowledge-image-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--text-secondary); font-size: 14px; }
+.knowledge-image-feedback:has(.knowledge-image-status[hidden]):has(button[hidden]) { display: none; }
+.knowledge-page-text { margin-top: 8px; font-size: 14px; line-height: 1.7; }
+.knowledge-page-text summary { cursor: pointer; min-height: 44px; padding: 10px 0; }
+.knowledge-page-text p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.knowledge-page-text summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.knowledge-zoom { margin: auto; padding: 16px; width: min(1200px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface); }
+.knowledge-zoom::backdrop { background: rgba(0, 0, 0, .65); }
+.knowledge-zoom-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; }
+.knowledge-zoom-title { flex: 1 1 240px; margin: 0; font-weight: 700; font-size: 16px; }
+.knowledge-zoom-viewport { overflow: auto; max-height: calc(100dvh - 180px); }
+.knowledge-zoom-viewport:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
+.knowledge-zoom-viewport img { display: block; max-width: 100%; width: 100%; height: auto; }
+.knowledge-zoom-viewport.is-real-size img { max-width: none; width: auto; }
+.knowledge-ethics { max-width: 78ch; font-size: 16px; line-height: 1.85; overflow-wrap: anywhere; }
+.knowledge-ethics .ethics-document-cover { margin-bottom: 32px; }
+.knowledge-ethics section { margin-bottom: 28px; }
+.knowledge-ethics h2 { font-size: 22px; line-height: 1.4; margin-bottom: 12px; }
+.knowledge-ethics ul { padding-left: 24px; list-style: disc; }
+.knowledge-ethics table { display: block; overflow-x: auto; width: 100%; border-collapse: collapse; font-size: 14px; }
+.knowledge-ethics th, .knowledge-ethics td { min-width: 140px; padding: 12px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 700px) {
   .knowledge-header { gap: 24px; }

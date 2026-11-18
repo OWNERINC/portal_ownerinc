@@ -60,6 +60,7 @@ const expectedVersions = [
   '040_pages',
   '041_pages_media',
   '042_pages_reference_fidelity',
+  '043_knowledge_documents',
 ];
 
 const pool = new Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });

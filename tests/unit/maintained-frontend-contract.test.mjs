@@ -148,7 +148,7 @@ test('Benefits renders own description as text without the CMS transport', async
 
 test('Knowledge has retired the PDF upload surface', () => {
   assert.doesNotMatch(knowledgeHtml, /f-pdf|pdf_state|application\/pdf/i);
-  assert.doesNotMatch(knowledge, /file\.size|pdf_asset_id|pdf_title|fetchAPIAsset|\/api\/cms/);
+  assert.doesNotMatch(knowledge, /file\.size|pdf_asset_id|pdf_title|\/api\/cms/);
 });
 
 test('descriptions stay in each maintained domain and the retired shared CSS is not loaded', async () => {

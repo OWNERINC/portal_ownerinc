@@ -177,9 +177,22 @@ CREATE TABLE IF NOT EXISTS knowledge_base (
   title       TEXT        NOT NULL,
   category    TEXT        NOT NULL DEFAULT '',
   content     TEXT        NOT NULL DEFAULT '',
+  document    JSONB,
   created_by  TEXT        REFERENCES users(uid) ON DELETE SET NULL,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT knowledge_document_check CHECK (
+    document IS NULL OR ((
+      document = '{"kind":"ethics"}'::jsonb
+      OR (
+        jsonb_typeof(document) = 'object'
+        AND document->>'kind' = 'pdf'
+        AND jsonb_typeof(document->'key') = 'string'
+        AND document->>'key' ~ '^[a-f0-9]{64}$'
+        AND (document - 'kind' - 'key') = '{}'::jsonb
+      )
+    ) IS TRUE)
+  ),
   CONSTRAINT knowledge_base_content_lengths CHECK (
     char_length(title) <= 200 AND char_length(category) <= 100 AND char_length(content) <= 50000
   )

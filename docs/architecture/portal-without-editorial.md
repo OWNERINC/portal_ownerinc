@@ -7,7 +7,9 @@ Atualizado em 3 de novembro de 2026 (OWN-45).
 O Portal executável mantém:
 
 - autenticação, sessão, administração, perfil e permissões;
-- Knowledge com texto simples próprio;
+- Knowledge com texto simples próprio, links de arquivos do Drive e
+  [documentos privados em WebP](../operations/knowledge-documents.md), além da
+  consulta ao Código de Ética oficial; [edição de links](../operations/knowledge-drive.md);
 - Academy com catálogo elegível, módulos, aulas, mídia própria, gestão e
   progresso individual;
 - Benefits como rota/CRUD preservados fora da navegação inicial;

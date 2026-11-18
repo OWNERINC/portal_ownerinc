@@ -49,6 +49,7 @@ const nonEditorialMigrations = [
   '040_pages',
   '041_pages_media',
   '042_pages_reference_fidelity',
+  '043_knowledge_documents',
 ];
 const omittedEditorialVersions = [
   '015_cms_editor',

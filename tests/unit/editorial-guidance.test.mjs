@@ -6,14 +6,14 @@ const legacyArticle = { id: 'article-a', title: 'Política', category: 'DHO', co
 const managedArticle = { ...legacyArticle, cms_managed: true, content: 'Texto próprio editável' };
 const compactText = node => node.textContent.replace(/\s+/g, ' ').trim();
 
-test('Knowledge editor exposes only simple text guidance and no PDF controls', async t => {
+test('Knowledge editor explains simple text and external Drive links without PDF upload controls', async t => {
   const h = await createKnowledgeEditorialHarness(t);
   await h.showArticle(legacyArticle);
   assert.equal(h.node('modal-article').classList.contains('hidden'), false);
   assert.equal(h.node('f-content').disabled, false);
   assert.equal(h.node('f-content').required, true);
   assert.equal(h.node('f-content').value, legacyArticle.content);
-  assert.match(compactText(h.node('f-content-help')), /texto simples.*editável/i);
+  assert.match(compactText(h.node('f-content-help')), /texto simples.*Drive.*linha própria.*permissões do Drive/i);
   assert.match(compactText(h.node('article-editor-help')), /título, categoria e texto simples/i);
   assert.equal(h.node('f-pdf'), null);
   assert.equal(h.node('f-pdf-state'), null);
