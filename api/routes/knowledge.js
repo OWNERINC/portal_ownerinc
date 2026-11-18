@@ -51,7 +51,8 @@ router.get('/', authMiddleware, async (req, res, next) => {
     const { rows } = await pool.query(
       `SELECT knowledge_base.*
          FROM knowledge_base ${where}
-        ORDER BY knowledge_base.updated_at DESC, knowledge_base.id`,
+        ORDER BY CASE WHEN knowledge_base.document->>'kind' = 'ethics' THEN 0 ELSE 1 END,
+                 knowledge_base.updated_at DESC, knowledge_base.id`,
       values,
     );
     const matches = req.query.q

@@ -12,3 +12,9 @@ A fonte Manrope em `../fonts/Manrope-Variable.ttf` veio de
 `https://github.com/google/fonts/tree/main/ofl/manrope`, com licença OFL
 em `../fonts/OFL-Manrope.txt`. As fontes dos modelos AutoCard/Cards Pós
 continuam independentes da tipografia de interface.
+
+`ethics-cover.svg` é a capa local 960×540 do Código de Ética e Conduta.
+Reutiliza os paths da logo e do símbolo acima, com `#2A275E`, `#E84F1C` e
+`#FFFEFB`. O título foi convertido em paths a partir da Manrope local, peso 750,
+para renderizar sem fontes ou recursos externos. O título acessível permanece
+no HTML; use `alt=""` quando a capa repetir esse título.

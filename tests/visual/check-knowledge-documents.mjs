@@ -64,6 +64,16 @@ async function catalog(page) {
   await page.locator('.article-card').nth(8).waitFor();
   assert.equal(await page.locator('.article-card').count(), 9);
   assert.equal(await page.locator('.article-document-cover').count(), 8);
+  assert.equal(await page.locator('.article-ethics-cover').count(), 1);
+  const institutional = page.locator('.article-card').first();
+  assert.equal(await institutional.evaluate(node => node.classList.contains('article-card-ethics')), true);
+  assert.equal(await institutional.locator('.card-title').textContent(), articles.find(article => article.document.kind === 'ethics').title);
+  const cover = institutional.locator('.article-ethics-cover');
+  assert.equal(await cover.getAttribute('alt'), '');
+  assert.equal(await cover.getAttribute('src'), './assets/conecta/ethics-cover.svg');
+  await readyImage(cover);
+  assert.deepEqual(await cover.evaluate(node => [node.naturalWidth, node.naturalHeight]), [960, 540]);
+  assert.ok(await cover.evaluate(node => Math.abs(node.clientWidth / node.clientHeight - 960 / 540) < .02), 'cover keeps its aspect ratio');
 }
 async function openArticle(page, article) {
   await page.getByRole('button', { name: new RegExp(article.title.replace(/[()]/g, '\\$&')) }).click();
@@ -85,7 +95,14 @@ try {
     await catalog(page);
     await readyImage(page.locator('.article-document-cover').first());
     await noOverflow(page, `${width}: catalog`);
+    await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: join(output, `catalog-${width}.png`), fullPage: true });
+    const institutional = page.locator('.article-card-ethics');
+    await institutional.focus();
+    assert.equal(await institutional.evaluate(node => getComputedStyle(node).outlineStyle), 'solid');
+    await page.keyboard.press('Enter');
+    await page.locator('.knowledge-ethics section').nth(26).waitFor({ state: 'attached' });
+    await page.locator('#btn-back').click();
     await openArticle(page, articles[0]);
     const figures = page.locator('.knowledge-document-page');
     await figures.nth(67).waitFor({ state: 'attached' });
@@ -121,7 +138,8 @@ try {
     assert.equal(await page.locator('.knowledge-ethics table').count(), 3);
     await noOverflow(page, `${width}: ethics`);
     await page.screenshot({ path: join(output, `ethics-${width}.png`) });
-    results.push({ width, catalog: 9, pages: 68, zoom: true, keyboard: true, disposal: true, ethicsParity: true, overflow: false });
+    results.push({ width, catalog: 9, pdfCovers: 8, ethicsCovers: 1, ethicsFirst: true,
+      ethicsKeyboard: true, pages: 68, zoom: true, keyboard: true, disposal: true, ethicsParity: true, overflow: false });
     await context.close();
   }
   {

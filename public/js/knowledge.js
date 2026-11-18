@@ -358,6 +358,9 @@ function render(requestToken = articlesRequest) {
       const metadata = [
         element('span', { className: 'badge badge-gold', text: article.category || 'Geral' }),
       ];
+      if (article.document?.kind === 'ethics') metadata.push(element('span', {
+        className: 'article-institutional-label', text: 'Destaque institucional',
+      }));
       if (article.document?.pageCount) metadata.push(element('span', { className: 'article-page-count', text: `${article.document.pageCount} páginas` }));
       const button = element('button', { className: 'card article-card', type: 'button', on: { click: () => openArticle(article.id) } }, [
         element('span', { className: 'article-card-heading' }, [
@@ -367,7 +370,11 @@ function render(requestToken = articlesRequest) {
         element('span', { className: 'article-card-meta' }, metadata),
           element('span', { className: 'article-excerpt', text: articleBody(article).slice(0, 140) || 'Consulte este artigo para ver os detalhes.' }),
       ]);
-      if (article.document?.cover && !params().get('article')) {
+      if (article.document?.kind === 'ethics') {
+        button.classList.add('article-card-ethics');
+        button.prepend(element('img', { className: 'article-ethics-cover',
+          src: './assets/conecta/ethics-cover.svg', alt: '', width: 960, height: 540 }));
+      } else if (article.document?.cover && !params().get('article')) {
         if (!coverImages) {
           const { fetchAPIAsset: fetchAsset } = page.bindAPI({ fetchAPIAsset });
           coverImages = createDocumentImages({ fetchAsset });

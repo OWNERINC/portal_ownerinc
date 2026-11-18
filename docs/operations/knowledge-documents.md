@@ -17,6 +17,12 @@ aceite vigente. `/uploads/knowledge-private` não é uma URL pública.
 
 O Código de Ética e Conduta usa a fonte vigente de `/api/ethics` e o mesmo
 renderer da tela de aceite. Sua consulta não registra outro aceite.
+No catálogo, recebe a capa local Conecta e a identificação **Destaque institucional**.
+A API prioriza o descritor `document.kind === 'ethics'` antes da data de
+atualização e do ID, inclusive quando o post é antigo. Busca e categoria
+continuam restringindo os resultados; o destaque só aparece se corresponder
+aos filtros e não se repete entre páginas. Os demais posts seguem a data de
+atualização decrescente, com desempate por ID.
 
 Administradores podem editar título, categoria e descrição. Essas edições
 preservam o documento. A API de edição comum rejeita o campo `document`;
@@ -118,13 +124,17 @@ não remova a coluna para retornar à release anterior.
 ## Verificação local reproduzível
 
 - `npm run verify`: contratos e testes independentes de serviços.
+- `node tests/database/check-knowledge-priority.mjs`: prioridade SQL/API, artigos
+  comuns com documento nulo/PDF, filtros, contagem e paginação sem duplicatas.
+  Exige apenas `PGLITE_MODULE_PATH` externo; cria dados sintéticos descartáveis.
 - `node tests/database/check-knowledge-documents.mjs`: SQL real em PGlite,
   importação, rollback, COMMIT incerto, middleware/API e arquivos privados.
   Exige `PGLITE_MODULE_PATH` externo e `KNOWLEDGE_PACKAGE`.
 - `node tests/visual/check-knowledge-documents.mjs`: navegador real com API e
   SQL locais, identidades Firebase sintéticas. Exige as variáveis anteriores,
   `PLAYWRIGHT_MODULE_PATH` e `KNOWLEDGE_VISUAL_OUTPUT` apontando para pasta nova.
-  Verifica 320/390/1366 px, nove posts, oito PDFs, fidelidade do Código, zoom,
+  Verifica 320/390/1366 px, nove posts, oito capas PDF e uma capa institucional
+  960×540 em primeiro lugar, abertura do Código por teclado, fidelidade do Código, zoom,
   teclado, retry e navegação durante carregamento. Serve os arquivos estáticos
   fora da API, como o Nginx; mantém o limitador real de requisições da API.
   Salva `results.json` com tráfego e, em falhas, diagnóstico e captura da página.
