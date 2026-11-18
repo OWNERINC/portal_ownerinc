@@ -12,6 +12,12 @@
 ## Cadastro pendente
 
 1. O visitante informa nome, email, senha e confirmação da senha em “Cadastre-se”. O navegador compara as senhas e envia somente `{name,email,password}` para `/api/auth/register`; a API aplica validação estrita e rate limit. Senha tem de 12 a 128 unidades UTF-16, não é composta só por espaços e não sofre trim ou normalização.
+   O cadastro permite por padrão 300 tentativas/IP/hora, configuráveis, sem cota
+   global padrão. Se as duas operações do gate compartilhado estiverem ocupadas,
+   a rota pode aguardar em memória por até 10 segundos (máximo 100 aguardando),
+   antes de adquirir conexão ou chamar Firebase; desconexão durante a espera
+   cancela a entrada. Configurações e limites em
+   [Tráfego de cadastro](../operations/registration-traffic.md).
 2. A API cria a identidade Firebase com a senha escolhida, `disabled:true` e `emailVerified:false`, e uma linha `pending_registrations` na transação PostgreSQL. Não gera nem envia confirmação de email. Senha não é persistida em SQL, fila, auditoria, logs ou storage do navegador; os campos são limpos após tentativa ou abandono.
 3. Falhas compensam apenas a identidade criada pela operação e, se a exclusão externa não for segura ou falhar, gravam `firebase_cleanup_queue` para retry. Cadastro, convites/importações e workers compartilham locks transacionais por email/UID; o cleanup verifica referências antes de apagar. Commit ambíguo descarta a conexão sem apagar uma identidade potencialmente admitida.
 4. A resposta pública permanece HTTP 202 `{status:"accepted",state:"received"}` e orienta aguardar aprovação. Repetição nunca troca senha, nome, idade ou decisão anterior e não adota identidade órfã por email. Se uma solicitação pendente perdeu a identidade, a recuperação sob locks reconstrói somente essa identidade e atualiza apenas o UID, preservando os metadados. A lista administrativa mostra “Pendente de aprovação”, sem consultar verificação Firebase por item.

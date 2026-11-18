@@ -24,7 +24,7 @@ export async function createRegistrationApiHarness(t) {
     require.cache[modulePath] = { id: modulePath, filename: modulePath, loaded: true, exports };
   };
   const state = { registration: null, identity: null, user: null, cleanup: false, failSql: null, failCommit: false, failCreate: null, failMail: false, failEnable: false, titleActive: true, changed: false, noUpdate: false };
-  const calls = { sql: [], firebase: [], mail: [], releases: [] };
+  const calls = { sql: [], firebase: [], mail: [], releases: [], connects: 0 };
   const admin = { uid: 'admin-fixture', role: 'admin', permissions: { manageUsers: true }, ethics_accepted: true };
   const reader = { uid: 'reader-fixture', role: 'viewer', permissions: {}, ethics_accepted: true };
   const rows = values => ({ rows: values, rowCount: values.length });
@@ -32,6 +32,7 @@ export async function createRegistrationApiHarness(t) {
   async function query(raw, params = []) {
     const sql = raw.replace(/\s+/g, ' ').trim();
     calls.sql.push({ sql, params });
+    await state.beforeQuery?.(sql);
     if (state.failSql && state.failSql(sql)) throw new Error(registrationData.password);
     if (sql === 'BEGIN') {
       snapshot = JSON.parse(JSON.stringify({ registration: state.registration, user: state.user }));
@@ -46,7 +47,7 @@ export async function createRegistrationApiHarness(t) {
       return rows([]);
     }
     if (sql.startsWith('SELECT pg_advisory')) return rows([]);
-    if (sql.includes('COUNT(*)') && sql.includes('pending_registrations')) return rows([{ count: state.hourlyCount || 0, total: state.registration ? 1 : 0 }]);
+    if (sql.includes('COUNT(*)') && sql.includes('pending_registrations')) return rows([{ count: state.hourlyCount || 0, retry_after_seconds: state.retryAfter, total: state.registration ? 1 : 0 }]);
     if (sql.startsWith('SELECT 1 FROM firebase_cleanup_queue')) return rows(state.cleanup ? [{}] : []);
     if (sql.startsWith('SELECT firebase_uid FROM firebase_cleanup_queue')) return rows([]);
     if (sql.startsWith('DELETE FROM firebase_cleanup_queue')) { state.cleanup = false; return rows([]); }
@@ -93,7 +94,7 @@ export async function createRegistrationApiHarness(t) {
     throw new Error(`Unsupported fixture SQL: ${sql}`);
   }
   const client = { query, release(force) { calls.releases.push(force); } };
-  const pool = { query, async connect() { return client; } };
+  const pool = { query, async connect() { calls.connects++; return client; } };
   const missing = () => Object.assign(new Error('Missing fixture identity'), { code: 'auth/user-not-found' });
   const firebaseAuth = {
     async createUser(data) {
@@ -158,6 +159,10 @@ export async function createRegistrationApiHarness(t) {
   const security = require('./middleware/security');
   const app = express();
   app.use(express.json(), security.requestContext, security.safeResponses);
+  app.use((request, response, next) => {
+    state.onRequest?.(request, response);
+    next();
+  });
   app.use('/api/auth', require('./routes/auth'));
   app.use('/api/registrations', require('./routes/registrations'));
   app.get('/api/users/me', authModule.exports.authMiddleware, (request, response) => response.json(request.user));
@@ -175,5 +180,5 @@ export async function createRegistrationApiHarness(t) {
     return { status: response.status, body: await response.json() };
   }
   const service = require('./services/pending-registration');
-  return { state, calls, http, service, pool, client };
+  return { state, calls, http, service, pool, client, origin };
 }

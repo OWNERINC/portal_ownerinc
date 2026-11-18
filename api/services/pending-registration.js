@@ -6,23 +6,10 @@ const {
   queueFirebaseCleanup,
 } = require('./user-invitation');
 
-let activeRegistrationOperations = 0;
+const { createRegistrationGate } = require('./registration-gate');
 // Keep Firebase/SMTP work from occupying the entire default PostgreSQL pool.
-const MAX_REGISTRATION_OPERATIONS = 2;
-const DEFAULT_MAX_PENDING_REGISTRATIONS_PER_HOUR = 100;
+const withRegistrationOperation = createRegistrationGate();
 const REGISTRATION_RATE_LOCK = 7192028;
-
-async function withRegistrationOperation(operation) {
-  if (activeRegistrationOperations >= MAX_REGISTRATION_OPERATIONS) {
-    throw serviceError('REGISTRATION_BUSY', 'Registration service is busy.');
-  }
-  activeRegistrationOperations += 1;
-  try {
-    return await operation();
-  } finally {
-    activeRegistrationOperations -= 1;
-  }
-}
 
 function verificationSettings(env = process.env) {
   try {
@@ -49,8 +36,8 @@ function discardClient(result) {
 }
 
 function maxPendingRegistrationsPerHour(env = process.env) {
-  const value = Number.parseInt(env.MAX_PENDING_REGISTRATIONS_PER_HOUR || '', 10);
-  return Number.isInteger(value) && value > 0 ? value : DEFAULT_MAX_PENDING_REGISTRATIONS_PER_HOUR;
+  const value = Number(env.MAX_PENDING_REGISTRATIONS_PER_HOUR || 0);
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 async function cleanupPendingRegistrationUser({ pool, client, uid, email, pendingRegistrationId, requestId }) {
@@ -154,14 +141,19 @@ async function reconcileRejectedRegistration({ pool, id, firebaseUid, reviewerUi
 }
 
 async function reserveRegistrationWindow(client) {
+  const max = maxPendingRegistrationsPerHour();
+  if (!max) return;
   await client.query('SELECT pg_advisory_xact_lock($1)', [REGISTRATION_RATE_LOCK]);
   const { rows = [] } = await client.query(
-    `SELECT COUNT(*)::integer AS count
+    `SELECT COUNT(*)::integer AS count,
+            CEIL(EXTRACT(EPOCH FROM (MIN(created_at) + INTERVAL '1 hour' - NOW())))::integer AS retry_after_seconds
      FROM pending_registrations
      WHERE created_at >= NOW() - INTERVAL '1 hour'`,
   );
-  if (Number(rows[0]?.count || 0) >= maxPendingRegistrationsPerHour()) {
-    throw serviceError('REGISTRATION_RATE_LIMITED', 'Registration rate limit reached.');
+  if (Number(rows[0]?.count || 0) >= max) {
+    const error = serviceError('REGISTRATION_RATE_LIMITED', 'Registration rate limit reached.');
+    error.retryAfter = Math.max(1, Math.min(3600, Number(rows[0]?.retry_after_seconds) || 3600));
+    throw error;
   }
 }
 

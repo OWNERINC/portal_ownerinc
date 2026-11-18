@@ -37,7 +37,7 @@ function requestContext(req, res, next) {
   next();
 }
 
-const SAFE_5XX_REASONS = new Set(['firebase_identity_indeterminate']);
+const SAFE_5XX_REASONS = new Set(['firebase_identity_indeterminate', 'registration_busy']);
 
 function safeResponses(req, res, next) {
   const json = res.json.bind(res);
@@ -113,8 +113,12 @@ function rateLimit({ windowMs, max, key = (req) => req.ip }) {
     const bucket = !current || current.resetAt <= now ? { count: 0, resetAt: now + windowMs } : current;
     bucket.count += 1;
     buckets.set(id, bucket);
-    if (bucket.count > max) return res.status(429).json({ error: 'Too many requests.', requestId: req.id });
-    next();
+    if (bucket.count > max) {
+      const seconds = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(seconds));
+      return res.status(429).json({ error: 'Too many requests.', requestId: req.id });
+    }
+    return next();
   };
 }
 

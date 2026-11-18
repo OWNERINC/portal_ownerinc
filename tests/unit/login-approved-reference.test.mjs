@@ -24,7 +24,7 @@ async function createLoginHarness({ responseStatus = 200, responseBody = {}, sig
     async fetch(path, options) {
       requests.push({ path, options });
       if (fetchImpl) return fetchImpl(path, options);
-      return { status: responseStatus, ok: responseStatus >= 200 && responseStatus < 300, async json() { return responseBody; } };
+      return { status: responseStatus, ok: responseStatus >= 200 && responseStatus < 300, headers: new Headers(), async json() { return responseBody; } };
     },
   });
   vm.runInContext((await readFile('public/js/portal-destination.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, ''), h.context);
@@ -195,7 +195,7 @@ test('failed registration preserves name/email for retry but never retains passw
   h.node('register-password').value = 'senha escolhida';
   h.node('register-password-confirm').value = 'senha escolhida';
   await h.submit('register-section');
-  assert.match(h.node('register-error').textContent, /Não foi possível concluir/);
+  assert.match(h.node('register-error').textContent, /serviço de cadastro está temporariamente indisponível/);
   assert.equal(h.node('register-btn').disabled, false);
   assert.equal(h.node('register-success').style.display, 'none');
   assert.equal(h.node('register-name').value, 'Pessoa de teste');
@@ -252,7 +252,7 @@ test('registration rejects unexpected success contracts without claiming approva
     h.node('register-password').value = 'senha escolhida';
     h.node('register-password-confirm').value = 'senha escolhida';
     await h.submit('register-section');
-    assert.match(h.node('register-error').textContent, /Não foi possível concluir/);
+    assert.match(h.node('register-error').textContent, /Não foi possível confirmar o recebimento/);
     assert.equal(h.node('register-success').style.display, 'none');
     assert.equal(h.node('register-password').value, '');
   }
