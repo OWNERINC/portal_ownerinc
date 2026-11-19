@@ -84,6 +84,13 @@ async function assertNoAcademy(page, requests) {
   assert.equal(requests.some(path => path.startsWith('/api/academy')), false);
 }
 async function checkOpeningVideo(page, videoRequests, width) {
+  assert.equal(await page.locator('#dashboard-video-title').count(), 0);
+  assert.equal(await page.getByRole('heading', { name: 'Owntime Home Club Gramado', exact: true }).count(), 0);
+  assert.equal(await page.locator('#dashboard-video').getAttribute('aria-label'), 'Vídeo de abertura');
+  assert.equal(await page.locator('#dashboard-video').getAttribute('aria-labelledby'), null);
+  const caption = page.locator('.dashboard-video-caption p');
+  assert.equal(await caption.textContent(), 'Andamento das obras · Maio de 2026');
+  assert.equal(await caption.isVisible(), true);
   assert.equal(await page.locator('#dashboard-video-frame iframe').count(), 0);
   assert.deepEqual(videoRequests, [], 'no video service contact before consent');
   const poster = page.locator('#dashboard-video-poster img');

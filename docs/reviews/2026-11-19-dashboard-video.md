@@ -6,8 +6,9 @@ Proposta da conversa: reduzir a informação da abertura, usar o vídeo aprovado
 `https://youtu.be/VAhBJOKc3-s`, manter o Código de Ética logo abaixo e deslocar
 atalhos/notificações/ferramentas para a parte inferior.
 
-Branch `feat/dashboard-video`, baseada na release `0a2a58d`. Sem push, merge,
-deploy, mudança de conta ou acesso ao banco produtivo nesta implementação.
+Branch `feat/dashboard-video`, baseada na release `0a2a58d`. A implementação
+inicial foi concluída sem push, merge, deploy ou mudança de conta. A autorização
+posterior de publicação está registrada ao final deste relatório.
 Plano de execução em `C:/Users/Criação/.opencode/plan/2026-11-19-dashboard-video.md`.
 
 ## Comportamento
@@ -114,3 +115,50 @@ em botão escuro pequeno sobre a capa.
   teste físico ou autenticação produtiva, e nenhuma publicação implícita.
 - Revisão independente read-only do diff deste refinamento concluída sem
   achados relevantes. `git diff --check` sem erros.
+
+## Remoção do título e autorização de produção
+
+O usuário pediu **“tira o ‘owntime home club gramado’ e pode deployar”**.
+Escopo final: remover apenas o título visível abaixo da capa, preservando
+**Andamento das obras · Maio de 2026**, identificação acessível da seção,
+`title` do iframe e todos os controles/ciclo de vida já verificados.
+
+A autorização abrange publicar o Dashboard completo desta branch pelo fluxo
+normal de PR, CI e produção. Não abrange mudanças de infraestrutura, limpeza da
+VPS, restauração de dados ou outros produtos. O receiver executa o backup,
+migrador e reinício habituais; o diff não altera API/schema/cron/ops/Nginx/CI.
+
+Preflight em 19/11/2026, 13:16 UTC:
+
+- `origin/main` e produção na release `0a2a58d`; API, cron e PostgreSQL saudáveis.
+- Receiver instalado root:root, modo 0755, SHA-256
+  `614311d154042c61d362a6b26cfe2ff4cd984de1d12ad116df5850389bd7d658`,
+  idêntico ao versionado. Nenhuma instalação ou configuração alterada.
+- Disco com 9.422.980 KiB disponíveis, 96% usado; último backup com cerca de
+  35 MiB. Release corrente com cerca de 16 MiB; imagens API/cron instaladas
+  somam 203.362.797 bytes descompactados. Esses tamanhos sustentam prosseguir
+  com a mudança apenas frontend e os gates normais, mas não garantem consumo
+  de pico. A limpeza permanece fora deste escopo; falha de espaço não será
+  contornada.
+- Análise independente em duas frentes confirmou ausência de drift e mudanças
+  fora do pacote. Merge na main dispara nova validação e deploy automático,
+  sem gate de aprovação adicional configurado no ambiente GitHub.
+- Após tráfego público, o rollback não restaura banco automaticamente; não
+  confundir backup/smoke com homologação autenticada ou ensaio de restauração.
+
+Resultado de publicação será registrado na PR e no conhecimento do projeto
+somente após confirmar o SHA final, receiver e conteúdo servido por HTTPS.
+
+Verificação final após retirar o título:
+
+- Teste RED confirmou a presença anterior do heading; regressão agora confere
+  seção com nome acessível válido e legenda preservada.
+- Primária repetiu `npm run verify`: 1.296 PASS, 4 SKIP, zero falhas;
+  `npm run security`: zero vulnerabilidades em API/cron.
+- Browser: 7 cenários PASS, 320/390/768/1366 px sem overflow, axe com zero
+  violações e zero incompletos; capturas inspecionadas, inclusive a abertura
+  sem heading visível. Evidência:
+  `C:/Users/Criação/AppData/Local/Temp/opencode/dashboard-video-title-20261119-r1/`.
+- JS do player permanece idêntico ao refinamento anterior, cuja reprodução real
+  foi confirmada separadamente; não atribuir esse teste à produção.
+- `git diff --check` sem erros.

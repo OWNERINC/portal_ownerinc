@@ -25,7 +25,10 @@ test('dashboard opening orders video, existing Ethics and compact access before 
   assert.equal(h.node('dashboard-video-notice'), null);
   assert.equal(h.node('dashboard-video-external'), null);
   assert.equal(h.node('dashboard-video-poster').querySelector('img').getAttribute('src'), './assets/conecta/dashboard-video-poster.jpg');
-  assert.match(h.node('dashboard-video-title').textContent, /Owntime Home Club Gramado/);
+  assert.ok(!h.node('dashboard-video-title'), 'the visible video heading is absent');
+  assert.equal(h.node('dashboard-video').getAttribute('aria-label'), 'Vídeo de abertura');
+  assert.equal(h.node('dashboard-video').getAttribute('aria-labelledby'), null);
+  assert.equal(h.node('dashboard-video').querySelector('.dashboard-video-caption p').textContent, 'Andamento das obras · Maio de 2026');
   assert.doesNotMatch(html, /Abrir no YouTube|Ao carregar o vídeo, você se conecta ao YouTube/);
   assert.equal(h.requests.some(request => /youtu/i.test(request.path)), false);
 });

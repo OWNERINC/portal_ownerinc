@@ -40,7 +40,7 @@ O ajuste está no código desta revisão e depende de publicação para valer no
 O topo apresenta uma saudação curta pelo horário de São Paulo e primeiro nome do
 perfil. Sem nome utilizável, a saudação é neutra.
 
-1. Em **Owntime Home Club Gramado**, clique no ícone de play sobre a capa para
+1. No vídeo da abertura, clique no ícone de play sobre a capa para
    carregar o player do YouTube (nome acessível: **Carregar vídeo**).
    Depois use os controles do player para iniciar e ampliar o vídeo.
    Não há reprodução automática.

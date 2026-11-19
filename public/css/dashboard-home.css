@@ -23,7 +23,6 @@
 .dashboard-video-load:hover { background: rgb(0 0 0 / 92%); }
 .dashboard-video-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .dashboard-video-caption { margin-top: 12px; }
-.dashboard-video-caption h2 { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; line-height: 1.4; }
 .dashboard-video-caption p { margin: 4px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.5; }
 .dashboard-video-status { margin: 12px 0 0; padding: 12px; color: var(--text); background: var(--selected); border-radius: 6px; font-size: 14px; line-height: 1.5; }
 .dashboard-shortcuts { margin: 0; }

@@ -31,6 +31,9 @@ Manter o menu atual. Consulta ao Código não substitui o aceite obrigatório.
   com controles, tela cheia, sem autoplay e referrer compatível com o provedor.
 - Sem link externo ou aviso de conexão abaixo do vídeo, conforme refinamento
   solicitado pelo usuário em 19/11/2026 e escolha confirmada na conversa.
+- Sem título visível **Owntime Home Club Gramado** abaixo da capa, conforme
+  pedido final. Preservar a descrição **Andamento das obras · Maio de 2026**,
+  o nome acessível da seção e o `title` descritivo do iframe.
 - Mensagem de carregamento, falha e demora com nova tentativa. Um evento de load
   do iframe não prova reprodução nem permite detectar toda restrição do YouTube.
 - Remover iframe, fonte, timer e listeners ao sair do Dashboard; descarregar
@@ -46,7 +49,9 @@ O bloco de vídeo pode estar ausente sem bloquear as consultas independentes de
 
 Não alterar APIs, schema, permissões, documento de Ética, registros de aceite,
 Academy, scripts de deploy ou Nginx. A CSP atual já permite o host necessário.
-Não publicar automaticamente: a autorização de deploy anterior era do cadastro.
+O pedido final do usuário em 19/11/2026 autoriza publicar este Dashboard após
+retirar o título visível. Usar o fluxo existente de CI e produção, sem alterar
+scripts de deploy, dados ou configurações.
 
 ## Verificação
 
