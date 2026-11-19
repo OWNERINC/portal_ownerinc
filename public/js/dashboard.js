@@ -15,8 +15,85 @@ if (greeting) {
   const hour = Number(new Intl.DateTimeFormat('pt-BR', { timeZone: TIME_ZONE, hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
   const salutation = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   const name = typeof user.name === 'string' ? user.name.trim().split(/\s+/)[0] : '';
-  greeting.textContent = `${salutation}${name ? `, ${name}` : ''}. Boas-vindas ao Conecta.`;
+  greeting.textContent = `${salutation}${name ? `, ${name}` : ''}.`;
 }
+
+function mountOpeningVideo() {
+  const player = document.getElementById('dashboard-video-frame');
+  const poster = document.getElementById('dashboard-video-poster');
+  const button = document.getElementById('dashboard-video-load');
+  const status = document.getElementById('dashboard-video-status');
+  if (!player || !poster || !button || !status) return;
+  let iframe, timer;
+  let detachFrameListeners = () => {};
+
+  function clearPlayer() {
+    clearTimeout(timer);
+    timer = null;
+    detachFrameListeners();
+    detachFrameListeners = () => {};
+    iframe?.removeAttribute('src');
+    iframe?.remove();
+    iframe = null;
+  }
+
+  function reset(message = '', restoreFocus = false) {
+    const focused = iframe && document.activeElement === iframe;
+    clearPlayer();
+    if (!page.active) return;
+    poster.hidden = false;
+    button.disabled = false;
+    setBusy(player, false);
+    status.textContent = message;
+    status.hidden = !message;
+    if (restoreFocus && focused) button.focus();
+  }
+
+  function load() {
+    if (!page.active || iframe) return;
+    const frame = element('iframe', {
+      src: 'https://www.youtube-nocookie.com/embed/VAhBJOKc3-s?autoplay=0&rel=0&playsinline=1',
+      title: 'Owntime Home Club Gramado — Andamento das Obras (Maio 2026)',
+      allow: 'encrypted-media; picture-in-picture; fullscreen',
+      allowfullscreen: true, tabindex: '0',
+      referrerpolicy: 'strict-origin-when-cross-origin',
+      sandbox: 'allow-scripts allow-same-origin allow-presentation',
+    });
+    const loaded = () => {
+      if (!page.active || iframe !== frame) return;
+      clearTimeout(timer);
+      timer = null;
+      setBusy(player, false);
+      status.textContent = '';
+      status.hidden = true;
+    };
+    const failed = () => {
+      if (page.active && iframe === frame) reset('Não foi possível carregar o vídeo. Tente novamente.', true);
+    };
+    frame.addEventListener('load', loaded);
+    frame.addEventListener('error', failed);
+    detachFrameListeners = () => {
+      frame.removeEventListener('load', loaded);
+      frame.removeEventListener('error', failed);
+    };
+    iframe = frame;
+    poster.hidden = true;
+    button.disabled = true;
+    setBusy(player, true);
+    status.textContent = 'Carregando vídeo do YouTube…';
+    status.hidden = false;
+    player.append(frame);
+    timer = page.timeout(() => {
+      if (iframe === frame) reset('O carregamento está demorando. Tente novamente.', true);
+    }, 15000);
+    frame.focus();
+  }
+
+  page.listen(button, 'click', load);
+  page.listen(window, 'pagehide', () => reset());
+  page.cleanup(clearPlayer);
+}
+mountOpeningVideo();
 
 function civilDateKey(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -94,28 +171,27 @@ async function loadReminders() {
 
 const quickLinks = document.getElementById('quick-links');
 const links = [
-  ['book-open', 'Conhecimento', './knowledge.html', 'Consulte documentos, orientações e materiais de referência da Ownerinc.'],
-  ['bell', 'Notificações', './reminders.html', 'Acompanhe os avisos e as datas destinados a você.'],
-  ['layout-template', 'Pages', './pages.html', 'Leia as páginas internas compartilhadas com o seu perfil.'],
-  ['user', 'Meu Perfil', './profile.html', 'Atualize seu nome, sua foto e os dados da sua conta.'],
+  ['book-open', 'Conhecimento', './knowledge.html'],
+  ['bell', 'Notificações', './reminders.html'],
+  ['layout-template', 'Pages', './pages.html'],
+  ['user', 'Meu Perfil', './profile.html'],
 ];
 function appendLinks(container, entries) {
   if (!container) return;
   clear(container);
-  entries.forEach(([iconName, label, href, description]) => container.append(element('a', { className: 'dashboard-area-card', href }, [
+  entries.forEach(([iconName, label, href]) => container.append(element('a', { className: 'dashboard-area-card', href }, [
     icon(iconName),
     element('span', { className: 'dashboard-area-card-copy' }, [
       element('strong', { text: label }),
-      element('span', { text: description }),
     ]),
   ])));
 }
 appendLinks(quickLinks, links);
 
 const tools = [];
-if (user.autocard_access === true) tools.push(['layout-template', 'AutoCard', './autocard.html', 'Crie e exporte cards com os modelos disponíveis.']);
-if (user.pos_cards_access === true) tools.push(['badge-check', 'Cards Pós', './cards-pos.html', 'Crie convites e confirmações de reserva em PDF.']);
-if (user.role === 'admin') tools.push(['settings-2', 'Admin', './admin.html', 'Gerencie as áreas autorizadas para sua conta.']);
+if (user.autocard_access === true) tools.push(['layout-template', 'AutoCard', './autocard.html']);
+if (user.pos_cards_access === true) tools.push(['badge-check', 'Cards Pós', './cards-pos.html']);
+if (user.role === 'admin') tools.push(['settings-2', 'Admin', './admin.html']);
 const toolsSection = document.getElementById('dashboard-tools');
 if (toolsSection) {
   toolsSection.hidden = tools.length === 0;

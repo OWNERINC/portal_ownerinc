@@ -2,7 +2,9 @@
 
 Manual rápido para administradores e operadores de conteúdo.
 
-Edição: 18/11/2026 · Release candidata: `feat/portal-welcome`.
+Edição Markdown: 19/11/2026 · Release candidata: `feat/dashboard-video`.
+
+O PDF disponível permanece na edição anterior de 18/11/2026.
 
 Use o sumário para ir direto à tarefa. Os nomes em **negrito** correspondem a campos, botões ou áreas da interface. Cada procedimento informa o acesso necessário e o resultado esperado.
 
@@ -35,7 +37,16 @@ O ajuste está no código desta revisão e depende de publicação para valer no
 
 ### Consultar o Dashboard
 
-As boas-vindas são fixas, com saudação pelo horário de São Paulo e primeiro nome do perfil; sem nome utilizável, a saudação é neutra. Os links explicam cada destino:
+O topo apresenta uma saudação curta pelo horário de São Paulo e primeiro nome do
+perfil. Sem nome utilizável, a saudação é neutra.
+
+1. No vídeo da abertura, clique no ícone de play sobre a capa para
+   carregar o player do YouTube (nome acessível: **Carregar vídeo**).
+   Depois use os controles do player para iniciar e ampliar o vídeo.
+   Não há reprodução automática.
+2. Logo abaixo, use **Ler Código de Ética** para abrir o documento oficial.
+   Essa consulta não substitui o aceite obrigatório.
+3. Use **Acessos rápidos**, mais abaixo, para abrir as áreas:
 
 - **Conhecimento:** documentos, manuais de uniformes e orientações.
 - **Notificações:** avisos e lembretes destinados a você.
@@ -43,7 +54,13 @@ As boas-vindas são fixas, com saudação pelo horário de São Paulo e primeiro
 - **Meu Perfil:** dados pessoais e foto.
 - Em **Ferramentas e gestão**, **AutoCard** e **Cards Pós** oferecem artes e convites somente com acesso liberado; **Admin** aparece quando sua conta permite.
 
-Logo após as boas-vindas, use **Ler Código de Ética** no destaque **Código de Ética**. Em seguida, **Próximas notificações** mostra os próximos sete dias. A Academy está fora do menu e do Dashboard temporariamente; continua por link direto e no Admin.
+**Próximas notificações** mostra os próximos sete dias. A Academy está fora do menu
+e do Dashboard temporariamente; continua por link direto e no Admin.
+
+Se o vídeo demorar ou falhar, use novamente o play sobre a capa. Não há link
+externo nem aviso fixo abaixo do vídeo. Ao sair da página, o player é descarregado; ao voltar, carregue-o
+novamente. O vídeo não listado pode ser visto por quem tiver o link, mesmo fora
+do Portal. A reorganização desta edição depende de publicação para valer no site.
 
 ### Atualizar seu perfil
 

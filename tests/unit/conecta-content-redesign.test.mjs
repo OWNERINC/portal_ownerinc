@@ -173,13 +173,13 @@ test('dashboard names are trimmed to the first word, tolerate missing values and
     t.after(() => h.page.dispose());
     const greeting = h.node('dashboard-greeting');
     assert.match(greeting.textContent, /^(Bom dia|Boa tarde|Boa noite)/);
-    assert.ok(greeting.textContent.endsWith(`${expected}. Boas-vindas ao Conecta.`));
+    assert.ok(greeting.textContent.endsWith(`${expected}.`));
     assert.equal(greeting.querySelectorAll('script').length, 0);
     assert.equal(greeting.children.length, 0);
   }
 });
 
-test('dashboard core links explain each area; tools follow strict verified profile flags and admin role', async t => {
+test('dashboard compact links retain named destinations; tools follow strict verified profile flags and admin role', async t => {
   for (const [user, permitted] of [
     [{ role: 'user' }, []],
     [{ role: 'admin' }, ['./admin.html']],
@@ -195,7 +195,7 @@ test('dashboard core links explain each area; tools follow strict verified profi
     assert.deepEqual(links.map(link => link.getAttribute('href')), ['./knowledge.html', './reminders.html', './pages.html', './profile.html']);
     for (const link of links) {
       assert.ok(link.querySelector('strong').textContent);
-      assert.ok(link.querySelector('.dashboard-area-card-copy').children[1].textContent.length > 20);
+      assert.equal(link.querySelector('.dashboard-area-card-copy').children.length, 1);
       assert.equal(link.querySelector('a'), null, 'links cannot be nested');
     }
     assert.deepEqual(h.node('tool-links').querySelectorAll('a').map(link => link.getAttribute('href')), permitted);

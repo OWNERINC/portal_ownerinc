@@ -41,11 +41,12 @@ entrega externa de e-mail, conteúdo oficial ou uso em dispositivo físico.
 
 | Funcionalidade | Estado | Implementação e evidência |
 | --- | --- | --- |
-| Destaque Owner News | Removido em OWN-40 | O Dashboard não consulta mais conteúdo editorial nem abre leitor sobreposto; preserva lembretes, Academy, links rápidos e seus estados de loading, vazio, erro/retry e descarte. `public/js/dashboard.js`, `public/dashboard.html` |
+| Destaque Owner News | Removido em OWN-40 | O Dashboard não consulta conteúdo editorial nem abre leitor sobreposto; preserva Código de Ética, notificações e links rápidos com seus estados independentes. Academy permanece fora da abertura. `public/js/dashboard.js`, `public/dashboard.html` |
+| Vídeo na abertura | Candidato local | Saudação curta, capa local do vídeo aprovado `VAhBJOKc3-s`, play discreto sem texto visível (nome acessível Carregar vídeo), player YouTube por clique e sem autoplay. Sem link externo ou aviso fixo abaixo. Iframe no host no-cookie, loading/erro/demora/retry, foco e descarte ao navegar/pagehide. Código de Ética logo abaixo, sem mudar o aceite obrigatório. Não listado não significa privado. `public/dashboard.html`, `public/js/dashboard.js`, `public/css/dashboard-home.css`; especificação `docs/superpowers/specs/2026-11-19-dashboard-video-design.md` |
 | Conteúdo por contrato PJ/CLT | Não implementada no Dashboard | Os atalhos atuais não variam por contrato. Não há fluxo de nota fiscal PJ no Dashboard; Sólides permanece desligada na V1. `public/js/dashboard.js` |
 | Próximos lembretes | Operacional | Endpoint autenticado calcula no servidor as ocorrências dos próximos sete dias com regra de fim do mês e audiência individual; o dashboard não depende de uma primeira página arbitrária. `public/js/dashboard.js`, `api/routes/reminders.js` |
-| Links rápidos | Operacional | Atalhos para Base de Conhecimento, Lembretes e Academy, iguais para os contratos PJ/CLT; Sólides permanece fora desses atalhos. `public/js/dashboard.js` |
-| Destaques da Academy | Operacional | Exibe até três cursos com estados de carregamento, vazio, erro e nova tentativa. `public/js/dashboard.js` |
+| Links rápidos | Candidato local | Atalhos compactos com ícone e nome para Conhecimento, Notificações, Pages e Meu Perfil, abaixo do Código de Ética. Ferramentas e gestão aparecem somente conforme permissões, sem descrições longas. Não variam por contrato PJ/CLT. `public/js/dashboard.js` |
+| Destaques da Academy | Temporariamente ocultos | Não há destaque, link ou consulta Academy no Dashboard; gestão e acesso direto permanecem disponíveis. |
 
 ## Owner News (removido do runtime)
 
