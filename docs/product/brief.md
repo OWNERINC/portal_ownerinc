@@ -17,10 +17,13 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
 - Autenticação pelo Firebase Auth.
 - Perfis e permissões persistidos no PostgreSQL.
 - Base de conhecimento interna.
-- Dashboard com boas-vindas fixas, primeiro nome e saudação pelo horário de São
-  Paulo; links descritivos para Conhecimento, Notificações, Pages e Meu Perfil,
-  além das ferramentas e Admin conforme o acesso efetivo da conta.
-- Código de Ética em destaque após as boas-vindas e antes das notificações.
+- Dashboard com saudação curta pelo horário de São Paulo e primeiro nome,
+  seguido do vídeo escolhido **Owntime Home Club Gramado — Andamento das Obras
+  (Maio 2026)**. Capa local, player YouTube somente após clique, sem autoplay.
+  Atalhos compactos para Conhecimento, Notificações, Pages e Meu Perfil ficam
+  abaixo do Código; ferramentas e Admin respeitam o acesso efetivo da conta.
+- Código de Ética em destaque imediatamente após o vídeo, antes dos atalhos
+  e das notificações.
   Na Base, recebe prioridade entre os resultados elegíveis, respeitando busca,
   categoria e paginação. Consulta recorrente não substitui o aceite obrigatório.
   Manuais convertidos têm leitor de páginas WebP, ampliação, texto extraído e
@@ -41,8 +44,8 @@ serviços usados pelos colaboradores. Ele não faz parte do Ownerinc Brain e nã
   duas colunas, texto rico, presets e mídia privada; rascunho e publicação por cargo
   separados. O piloto Owner News é uma receita sintética, não uma edição oficial.
 
-A atualização de boas-vindas e destaques é a release candidata `feat/portal-welcome`,
-de 18/11/2026. Este registro descreve a entrega e não afirma sua implantação.
+A reorganização com vídeo é candidata na branch `feat/dashboard-video`,
+de 19/11/2026. Este registro descreve o código e não afirma sua implantação.
 
 ## Restrições
 

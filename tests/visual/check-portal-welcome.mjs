@@ -49,13 +49,18 @@ async function openContext(width, uid = 'reader') {
       export async function updateProfile() {}
     `,
   }));
-  const page = await context.newPage(), requests = [];
+  // Deterministic video transport: no YouTube contact, even after consent.
+  await context.route('https://www.youtube-nocookie.com/**', route => route.fulfill({
+    contentType: 'text/html', body: '<!doctype html><html lang="pt-BR"><title>Player de teste</title><body>Transporte de vídeo simulado.</body></html>',
+  }));
+  const page = await context.newPage(), requests = [], videoRequests = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => {
     const url = new URL(request.url());
     if (url.origin === origin && url.pathname.startsWith('/api/')) requests.push(url.pathname + url.search);
+    if (/(?:youtube|youtu\.be|ytimg|googlevideo)/.test(url.hostname)) videoRequests.push(request.url());
   });
-  return { context, page, requests };
+  return { context, page, requests, videoRequests };
 }
 async function dashboard(page) {
   await page.goto(`${origin}/dashboard.html`);
@@ -78,10 +83,64 @@ async function assertNoAcademy(page, requests) {
   assert.equal(await page.locator('main a[href*="academy.html"]').count(), 0);
   assert.equal(requests.some(path => path.startsWith('/api/academy')), false);
 }
+async function checkOpeningVideo(page, videoRequests, width) {
+  assert.equal(await page.locator('#dashboard-video-frame iframe').count(), 0);
+  assert.deepEqual(videoRequests, [], 'no video service contact before consent');
+  const poster = page.locator('#dashboard-video-poster img');
+  await poster.evaluate(image => image.decode());
+  assert.equal(await poster.getAttribute('src'), './assets/conecta/dashboard-video-poster.jpg');
+  const geometry = await page.evaluate(() => {
+    const box = selector => {
+      const { y, bottom, width, height } = document.querySelector(selector).getBoundingClientRect();
+      return { y, bottom, width, height };
+    };
+    return { video: box('#dashboard-video'), frame: box('#dashboard-video-frame'),
+      ethics: box('.dashboard-ethics'), shortcuts: box('.dashboard-shortcuts') };
+  });
+  assert.ok(Math.abs(geometry.frame.width / geometry.frame.height - 16 / 9) < 0.02);
+  assert.ok(geometry.frame.width <= 881);
+  assert.ok(geometry.ethics.y >= geometry.video.bottom, 'Ethics follows the whole video section');
+  assert.ok(geometry.shortcuts.y >= geometry.ethics.bottom, 'utilities follow Ethics');
+  if (width <= 390) assert.ok(geometry.ethics.y < 850, 'Ethics remains near the first mobile screen');
+  const button = page.getByRole('button', { name: 'Carregar vídeo', exact: true });
+  const target = await button.boundingBox();
+  assert.ok(target.height >= 44 && target.width >= 44);
+  await button.focus();
+  await page.keyboard.press('Enter');
+  const iframe = page.locator('#dashboard-video-frame iframe');
+  await iframe.waitFor();
+  await page.waitForFunction(() => document.querySelector('#dashboard-video-frame')?.getAttribute('aria-busy') === 'false');
+  assert.equal(await iframe.getAttribute('allowfullscreen'), '');
+  const url = new URL(await iframe.getAttribute('src'));
+  assert.equal(url.origin, 'https://www.youtube-nocookie.com');
+  assert.equal(url.pathname, '/embed/VAhBJOKc3-s');
+  assert.equal(url.searchParams.get('autoplay'), '0');
+  assert.equal(videoRequests.length, 1);
+  assert.equal(await iframe.evaluate(node => document.activeElement === node), true);
+  await page.locator('#dashboard-video-load').dispatchEvent('click');
+  assert.equal(await iframe.count(), 1);
+  assert.equal(videoRequests.length, 1);
+  // A player error must recover without stealing focus from another action.
+  await page.locator('#quick-links a').first().focus();
+  await iframe.dispatchEvent('error');
+  assert.equal(await iframe.count(), 0);
+  assert.ok((await page.locator('#dashboard-video-status').textContent()).includes('Não foi possível'));
+  assert.equal(await page.locator('#quick-links a').first().evaluate(node => document.activeElement === node), true);
+  await button.click();
+  await iframe.waitFor();
+  await page.waitForFunction(() => document.querySelector('#dashboard-video-frame')?.getAttribute('aria-busy') === 'false');
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  assert.equal(await iframe.count(), 0);
+  assert.equal(await button.isEnabled(), true);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  assert.equal(await iframe.count(), 0);
+  return { consent: true, initialThirdPartyRequests: 0, fixedVideo: true, autoplay: false,
+    keyboard: true, errorRetry: true, simulatedBFCacheNoReconnect: true, transport: 'stubbed, not real playback' };
+}
 try {
   browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chrome' });
-  for (const width of [320, 390, 1366]) {
-    const { context, page, requests } = await openContext(width);
+  for (const width of [320, 390, 768, 1366]) {
+    const { context, page, requests, videoRequests } = await openContext(width);
     await dashboard(page);
     assert.match(await page.locator('#dashboard-greeting').textContent(), /Marina/);
     assert.doesNotMatch(await page.locator('#dashboard-greeting').textContent(), /Andrade/);
@@ -100,7 +159,10 @@ try {
     });
     await writeFile(join(output, `axe-${width}.json`), JSON.stringify(audit, null, 2));
     assert.deepEqual(audit.violations, [], `${width} accessibility violations`);
+    await page.locator('#dashboard-greeting').click();
+    await page.locator('#main-content').evaluate(node => node.blur());
     await page.screenshot({ path: join(output, `dashboard-${width}.png`), fullPage: true });
+    const video = await checkOpeningVideo(page, videoRequests, width);
     const link = page.getByRole('link', { name: 'Ler Código de Ética', exact: true });
     assert.equal(await link.getAttribute('href'), `./knowledge.html?article=${ethicsID}`);
     await link.focus();
@@ -119,7 +181,7 @@ try {
     assert.ok(requests.slice(before).some(path => path === '/api/knowledge?limit=1'));
     await assertNoAcademy(page, requests);
     results.push({ width, personalized: true, cover: true, overflow: false, keyboard: true, officialReader: true,
-      history: true, simulatedBFCacheEvent: true, axeViolations: 0, axeIncomplete: audit.incomplete.length });
+      history: true, simulatedBFCacheEvent: true, video, axeViolations: 0, axeIncomplete: audit.incomplete.length });
     await context.close();
   }
   {
@@ -129,7 +191,14 @@ try {
       assert.equal(await page.locator(`main a[href$="${target}"]`).count(), 1);
     }
     await assertNoAcademy(page, requests);
+    await page.locator('#dashboard-greeting').click();
+    await page.locator('#main-content').evaluate(node => node.blur());
     await page.screenshot({ path: join(output, 'dashboard-admin-1366.png'), fullPage: true });
+    await page.getByRole('button', { name: 'Carregar vídeo', exact: true }).click();
+    const retainedFrame = await page.locator('#dashboard-video-frame iframe').elementHandle();
+    await page.locator('#quick-links a[href$="knowledge.html"]').click();
+    await page.locator('.article-card-ethics').waitFor();
+    assert.equal(await retainedFrame.evaluate(node => node.getAttribute('src')), null, 'navigation unloads detached media');
     await page.goto(`${origin}/admin.html?tab=academy`);
     await page.getByRole('tab', { name: 'Academy', exact: true }).waitFor();
     assert.equal(await page.getByRole('tab', { name: 'Academy', exact: true }).getAttribute('aria-selected'), 'true');
@@ -202,7 +271,7 @@ try {
   }
   assert.deepEqual(errors, []);
   await writeFile(join(output, 'results.json'), JSON.stringify({ results, errors,
-    limits: 'Chrome emulated viewports; synthetic Firebase profiles, notifications and Academy data; real Knowledge SQL/API and UI. BFCache uses persisted pageshow simulation.' }, null, 2));
+    limits: 'Chrome emulated viewports; synthetic Firebase profiles, notifications, Academy data and YouTube transport; real Knowledge SQL/API and UI. BFCache uses persisted pageshow simulation. Stub iframe load is not playback evidence.' }, null, 2));
   console.log(`Portal welcome browser: ${results.length} scenarios PASS; ${output}`);
 } catch (error) {
   await writeFile(join(output, 'failure.json'), JSON.stringify({ error: error.message, results, errors }, null, 2));
