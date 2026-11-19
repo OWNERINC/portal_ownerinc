@@ -27,16 +27,77 @@ async function harness(fetch) {
     { authStateReady: async () => {}, currentUser: null },
     { search: '' }, fetch,
   );
-  async function submit() {
+  async function submit({ password = '  Senha com espaços  ', confirmation = password } = {}) {
     element('register-name').value = 'Pessoa Teste';
     element('register-email').value = 'person@example.test';
-    element('register-password').value = '  senha com espaços  ';
-    element('register-password-confirm').value = '  senha com espaços  ';
+    element('register-password').value = password;
+    element('register-password-confirm').value = confirmation;
     const form = element('register-section');
     await form.listeners.submit({ preventDefault() {}, currentTarget: form });
   }
   return { element, submit };
 }
+
+test('registration form owns validation so native invalid fields cannot bypass its feedback', async () => {
+  const h = await harness(async () => { assert.fail('invalid fields must not be sent'); });
+  assert.equal(h.element('register-section').noValidate, true);
+  h.element('register-section').reportValidity = () => false;
+  await h.submit({ password: 'Abcdefgh' });
+  assert.match(h.element('register-error').textContent, /Confira nome e e-mail/);
+  assert.equal(h.element('register-password').value, '');
+  assert.equal(h.element('register-password-confirm').value, '');
+  assert.equal(h.element('register-name').value, 'Pessoa Teste');
+  assert.equal(h.element('register-email').value, 'person@example.test');
+  assert.equal(h.element('register-btn').disabled, false);
+});
+
+for (const password of ['Abcdefg', 'abcdefgh', 'a'.repeat(128), 'A' + 'a'.repeat(128), ' '.repeat(8)]) {
+  test(`registration form shows the length and uppercase rule for invalid password length ${password.length}`, async () => {
+    const h = await harness(async () => { assert.fail('invalid password must not be sent'); });
+    await h.submit({ password });
+    assert.match(h.element('register-error').textContent, /8 a 128 caracteres.*letra maiúscula/);
+    assert.equal(h.element('register-password').value, '');
+    assert.equal(h.element('register-password-confirm').value, '');
+    assert.equal(h.element('register-btn').disabled, false);
+  });
+}
+
+test('registration form explains mismatched confirmation without sending', async () => {
+  const h = await harness(async () => { assert.fail('mismatched passwords must not be sent'); });
+  await h.submit({ password: 'Abcdefgh', confirmation: 'AbcdefgH' });
+  assert.match(h.element('register-error').textContent, /As senhas precisam ser iguais/);
+  assert.equal(h.element('register-password').value, '');
+  assert.equal(h.element('register-password-confirm').value, '');
+});
+
+for (const password of ['Abcdefgh', 'Ábcdefgh', 'ABCDEFGH', ' A      ', '😀😀😀Aa', 'A' + 'a'.repeat(127)]) {
+  test(`registration form sends a valid uppercase password unchanged, length ${password.length}`, async () => {
+    const calls = [];
+    const h = await harness(async (path, options) => {
+      calls.push({ path, body: JSON.parse(options.body) });
+      return { status: 202, json: async () => ({ status: 'accepted', state: 'received' }) };
+    });
+    await h.submit({ password });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].body.password, password);
+    assert.equal(h.element('register-success').style.display, 'block');
+  });
+}
+
+test('registration validation errors allow a corrected eight-character password on the next attempt', async () => {
+  let calls = 0;
+  const h = await harness(async () => {
+    calls++;
+    return { status: 202, json: async () => ({ status: 'accepted', state: 'received' }) };
+  });
+  await h.submit({ password: 'abcdefgh' });
+  assert.equal(calls, 0);
+  assert.match(h.element('register-error').textContent, /maiúscula/);
+  await h.submit({ password: 'Abcdefgh' });
+  assert.equal(calls, 1);
+  assert.equal(h.element('register-error').textContent, '');
+  assert.equal(h.element('register-success').style.display, 'block');
+});
 
 for (const scenario of [
   { status: 429, retry: '125', match: /Muitas solicitações.*Aguarde 3 minutos/ },

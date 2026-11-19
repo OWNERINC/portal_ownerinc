@@ -21,6 +21,18 @@ Este guia descreve a versão analisada do Portal, sem afirmar sua implantação.
 3. Marque **Li e aceito o Código de Ética e Conduta apresentado.** e clique em **Aceitar e entrar no portal**.
 4. Use o menu lateral para navegar. No celular, abra o menu para ver os atalhos.
 
+### Solicitar acesso pelo cadastro
+
+No login, clique em **Cadastre-se** e preencha nome completo, e-mail, senha e
+confirmação. A senha deve ter **de 8 a 128 caracteres e pelo menos uma letra
+maiúscula**; números e símbolos não são obrigatórios. Após o recebimento,
+aguarde a aprovação administrativa.
+
+Se houver erro de validação, leia a mensagem no formulário, confira os dados e
+digite novamente a senha e a confirmação. As senhas são limpas após a tentativa;
+nome e e-mail permanecem para correção. Essa regra não altera senhas existentes.
+O ajuste está no código desta revisão e depende de publicação para valer no site.
+
 ### Consultar o Dashboard
 
 As boas-vindas são fixas, com saudação pelo horário de São Paulo e primeiro nome do perfil; sem nome utilizável, a saudação é neutra. Os links explicam cada destino:

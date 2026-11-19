@@ -11,7 +11,7 @@
 
 ## Cadastro pendente
 
-1. O visitante informa nome, email, senha e confirmação da senha em “Cadastre-se”. O navegador compara as senhas e envia somente `{name,email,password}` para `/api/auth/register`; a API aplica validação estrita e rate limit. Senha tem de 12 a 128 unidades UTF-16, não é composta só por espaços e não sofre trim ou normalização.
+1. O visitante informa nome, email, senha e confirmação da senha em “Cadastre-se”. O navegador compara as senhas e envia somente `{name,email,password}` para `/api/auth/register`; a API aplica validação estrita e rate limit. Senha tem de 8 a 128 unidades UTF-16 e exige pelo menos uma letra maiúscula Unicode, sem exigir números ou símbolos. Não sofre trim ou normalização. O formulário controla a validação no envio e mostra erro textual antes de limpar as senhas, inclusive quando os demais campos falham na validação nativa.
    O cadastro permite por padrão 300 tentativas/IP/hora, configuráveis, sem cota
    global padrão. Se as duas operações do gate compartilhado estiverem ocupadas,
    a rota pode aguardar em memória por até 10 segundos (máximo 100 aguardando),

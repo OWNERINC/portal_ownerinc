@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const require = createRequire(new URL('../../api/package.json', import.meta.url));
 export const registrationId = '11111111-1111-4111-8111-111111111111';
 export const jobTitleId = '22222222-2222-4222-8222-222222222222';
-export const registrationData = { name: 'Pessoa Teste', email: 'person@example.test', password: '  senha com espaços  ' };
+export const registrationData = { name: 'Pessoa Teste', email: 'person@example.test', password: '  Senha com espaços  ' };
 
 // Real routers, services, policies and admission middleware. All external I/O
 // is replaced before import. This fixture never loads .env or api/index.js.

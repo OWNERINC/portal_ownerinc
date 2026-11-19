@@ -1,5 +1,16 @@
 # Tráfego do cadastro público
 
+## Senha e validação do formulário
+
+O cadastro exige senha de 8 a 128 unidades UTF-16, com pelo menos uma letra
+maiúscula (inclusive acentuada), e confirmação igual. Não exige número ou símbolo,
+nem altera senhas existentes. A mesma regra é aplicada na tela e na API.
+
+O formulário mostra erro textual antes de limpar as senhas quando a validação
+falha; nome e email permanecem para correção. Somente um formulário válido envia
+a requisição. Essa correção não acrescenta timeout de rede e, sozinha, não
+comprova publicação nem identifica a causa de uma tentativa anterior.
+
 ## Configuração
 
 `REGISTRATION_MAX_ATTEMPTS_PER_IP_PER_HOUR` define o orçamento da rota pública
