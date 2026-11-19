@@ -216,7 +216,6 @@ resetSection.addEventListener('submit', async event => {
   }
 });
 
-registerSection.addEventListener('invalid', clearRegistrationPasswords, true);
 registerSection.addEventListener('submit', async event => {
   event.preventDefault();
   if (registrationPending) return;
@@ -227,13 +226,14 @@ registerSection.addEventListener('submit', async event => {
   success.style.display = 'none';
   const password = document.getElementById('register-password').value;
   const confirmation = document.getElementById('register-password-confirm').value;
-  if (password.length < 12 || password.length > 128 || !password.trim() || password !== confirmation) {
-    error.textContent = password !== confirmation ? 'As senhas precisam ser iguais.' : 'Use de 12 a 128 caracteres na senha, não apenas espaços.';
+  if (password.length < 8 || password.length > 128 || !/\p{Lu}/u.test(password) || password !== confirmation) {
+    error.textContent = password !== confirmation ? 'As senhas precisam ser iguais.' : 'Use de 8 a 128 caracteres na senha, com pelo menos uma letra maiúscula.';
     clearRegistrationPasswords();
     document.getElementById('register-password').focus();
     return;
   }
   if (!event.currentTarget.reportValidity()) {
+    error.textContent = 'Confira nome e e-mail e preencha os campos obrigatórios.';
     clearRegistrationPasswords();
     return;
   }
@@ -269,3 +269,6 @@ registerSection.addEventListener('submit', async event => {
     button.disabled = submitted;
   }
 });
+// Let submit display a persistent error before clearing passwords; native
+// validation would otherwise prevent this handler from running at all.
+registerSection.noValidate = true;
