@@ -18,6 +18,7 @@ node tests/visual/check-portal-welcome.mjs
 Knowledge usa SQL/API reais em PGlite descartável; Firebase, notificações, player
 YouTube e dados da Academy são fixtures explícitas. Confere zero requisições a
 serviços de vídeo antes do consentimento, iframe no-cookie/sem autoplay,
+play sem texto com nome acessível, foco de teclado visível e ausência de link/aviso fixos,
 erro/retry/foco e descarte em navegação. O retorno BFCache é um evento simulado,
 além de Back real entre rotas. Capturas, relatórios axe (incluindo incompletos) e
 `results.json` registram esses limites. Não comprova serviços produtivos nem
@@ -27,7 +28,7 @@ reprodução real do YouTube.
 
 `check-dashboard-video-live.mjs` inicia somente uma prévia loopback própria,
 com autenticação/API simuladas, e usa a CSP versionada do Portal. Conecta ao
-YouTube real apenas após clicar em **Carregar vídeo** e tenta iniciar o vídeo
+YouTube real apenas após clicar no play (nome acessível **Carregar vídeo**) e tenta iniciar o vídeo
 escolhido; registra tempo avançando, título, screenshot e limites. Exige
 `DASHBOARD_VIDEO_LIVE=true`, `PLAYWRIGHT_MODULE_PATH` e uma pasta nova em
 `DASHBOARD_VIDEO_OUTPUT`. Não exige PGlite, Docker ou sessão de produção.

@@ -20,12 +20,13 @@ test('dashboard opening orders video, existing Ethics and compact access before 
   assert.doesNotMatch(html, /Encontre informações da Ownerinc/);
   assert.equal(h.node('dashboard-video-frame').querySelector('iframe'), null);
   assert.equal(h.node('dashboard-video-load').disabled, false);
+  assert.equal(h.node('dashboard-video-load').textContent, '');
+  assert.equal(h.node('dashboard-video-load').getAttribute('aria-label'), 'Carregar vídeo');
+  assert.equal(h.node('dashboard-video-notice'), null);
+  assert.equal(h.node('dashboard-video-external'), null);
   assert.equal(h.node('dashboard-video-poster').querySelector('img').getAttribute('src'), './assets/conecta/dashboard-video-poster.jpg');
   assert.match(h.node('dashboard-video-title').textContent, /Owntime Home Club Gramado/);
-  const link = h.node('dashboard-video-external');
-  assert.equal(link.getAttribute('href'), 'https://youtu.be/VAhBJOKc3-s');
-  assert.equal(link.getAttribute('target'), '_blank');
-  assert.equal(link.getAttribute('rel'), 'noopener noreferrer');
+  assert.doesNotMatch(html, /Abrir no YouTube|Ao carregar o vídeo, você se conecta ao YouTube/);
   assert.equal(h.requests.some(request => /youtu/i.test(request.path)), false);
 });
 
@@ -70,7 +71,7 @@ test('dashboard video error restores a visible retry without stealing focus move
     assert.equal(h.node('dashboard-video-poster').hidden, false);
     assert.equal(h.node('dashboard-video-load').disabled, false);
     assert.equal(h.node('dashboard-video-frame').getAttribute('aria-busy'), 'false');
-    assert.match(h.node('dashboard-video-status').textContent, /Não foi possível carregar/);
+    assert.equal(h.node('dashboard-video-status').textContent, 'Não foi possível carregar o vídeo. Tente novamente.');
     assert.equal(h.node('dashboard-video-status').hidden, false);
     assert.equal(h.doc.activeElement, moved ? other : h.node('dashboard-video-load'));
     h.node('dashboard-video-load').click();
@@ -89,7 +90,7 @@ test('dashboard video times out honestly and ignores callbacks from an earlier a
   h.timers.delete(timerID); expire();
   assert.equal(first.getAttribute('src'), null);
   assert.equal(h.node('dashboard-video-load').disabled, false);
-  assert.match(h.node('dashboard-video-status').textContent, /demorando/);
+  assert.equal(h.node('dashboard-video-status').textContent, 'O carregamento está demorando. Tente novamente.');
   h.node('dashboard-video-load').click();
   const second = h.node('dashboard-video-frame').querySelector('iframe');
   assert.notEqual(first, second);

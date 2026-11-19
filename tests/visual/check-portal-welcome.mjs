@@ -103,9 +103,20 @@ async function checkOpeningVideo(page, videoRequests, width) {
   assert.ok(geometry.shortcuts.y >= geometry.ethics.bottom, 'utilities follow Ethics');
   if (width <= 390) assert.ok(geometry.ethics.y < 850, 'Ethics remains near the first mobile screen');
   const button = page.getByRole('button', { name: 'Carregar vídeo', exact: true });
+  assert.equal(await button.textContent(), '');
+  assert.equal(await button.getAttribute('aria-describedby'), null);
+  assert.equal(await page.locator('#dashboard-video-notice, #dashboard-video-external').count(), 0);
+  assert.equal(await page.getByText(/Abrir no YouTube|Ao carregar o vídeo, você se conecta ao YouTube/).count(), 0);
   const target = await button.boundingBox();
   assert.ok(target.height >= 44 && target.width >= 44);
   await button.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  const focus = await button.evaluate(node => {
+    const style = getComputedStyle(node);
+    return { visible: node.matches(':focus-visible'), outline: style.outlineStyle, width: parseFloat(style.outlineWidth) };
+  });
+  assert.ok(focus.visible && focus.outline !== 'none' && focus.width >= 2, 'play control keeps visible keyboard focus');
   await page.keyboard.press('Enter');
   const iframe = page.locator('#dashboard-video-frame iframe');
   await iframe.waitFor();

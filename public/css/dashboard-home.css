@@ -18,14 +18,13 @@
 .dashboard-video-frame { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 8px; background: var(--text); }
 .dashboard-video-poster { position: absolute; inset: 0; display: grid; place-items: center; }
 .dashboard-video-poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.dashboard-video-load { position: relative; min-height: 48px; padding: 12px 20px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: 700 15px/1.4 var(--font-sans); cursor: pointer; }
-.dashboard-video-load:hover { background: var(--selected); }
+.dashboard-video-load { position: relative; display: grid; place-items: center; width: 64px; height: 48px; padding: 0; border: 0; border-radius: 8px; background: rgb(0 0 0 / 78%); color: #fff; cursor: pointer; }
+.dashboard-video-load::before { content: ""; width: 0; height: 0; margin-left: 4px; border-top: 9px solid transparent; border-bottom: 9px solid transparent; border-left: 15px solid currentColor; }
+.dashboard-video-load:hover { background: rgb(0 0 0 / 92%); }
 .dashboard-video-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-.dashboard-video-caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.dashboard-video-caption { margin-top: 12px; }
 .dashboard-video-caption h2 { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; line-height: 1.4; }
 .dashboard-video-caption p { margin: 4px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.5; }
-.dashboard-video-caption .dashboard-section-link { flex-shrink: 0; margin: 0; }
-.dashboard-video-notice { margin: 8px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
 .dashboard-video-status { margin: 12px 0 0; padding: 12px; color: var(--text); background: var(--selected); border-radius: 6px; font-size: 14px; line-height: 1.5; }
 .dashboard-shortcuts { margin: 0; }
 .dashboard-areas-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -79,6 +78,7 @@
 .dashboard-home :where(a, button):focus-visible,
 .dashboard-home [role="status"]:focus-visible,
 .dashboard-home:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.dashboard-home .dashboard-video-load:focus-visible { outline-color: #fff; }
 
 @media (max-width: 1020px) {
   .dashboard-home { padding: 28px; }
@@ -86,7 +86,6 @@
 }
 @media (max-width: 768px) {
   .dashboard-home { padding: 24px 20px max(48px, env(safe-area-inset-bottom)); }
-  .dashboard-video-caption { align-items: flex-start; flex-wrap: wrap; gap: 4px 12px; }
   .dashboard-areas-grid { gap: 8px; }
   .dashboard-area-card { gap: 10px; padding: 12px; }
   .dashboard-overview { grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 24px; }

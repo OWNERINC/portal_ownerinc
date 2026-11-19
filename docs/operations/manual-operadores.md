@@ -40,8 +40,9 @@ O ajuste está no código desta revisão e depende de publicação para valer no
 O topo apresenta uma saudação curta pelo horário de São Paulo e primeiro nome do
 perfil. Sem nome utilizável, a saudação é neutra.
 
-1. Em **Owntime Home Club Gramado**, clique em **Carregar vídeo** para conectar ao
-   YouTube. Depois use os controles do player para iniciar e ampliar o vídeo.
+1. Em **Owntime Home Club Gramado**, clique no ícone de play sobre a capa para
+   carregar o player do YouTube (nome acessível: **Carregar vídeo**).
+   Depois use os controles do player para iniciar e ampliar o vídeo.
    Não há reprodução automática.
 2. Logo abaixo, use **Ler Código de Ética** para abrir o documento oficial.
    Essa consulta não substitui o aceite obrigatório.
@@ -56,8 +57,8 @@ perfil. Sem nome utilizável, a saudação é neutra.
 **Próximas notificações** mostra os próximos sete dias. A Academy está fora do menu
 e do Dashboard temporariamente; continua por link direto e no Admin.
 
-Se o vídeo demorar ou falhar, use novamente **Carregar vídeo** ou **Abrir no
-YouTube**. Ao sair da página, o player é descarregado; ao voltar, carregue-o
+Se o vídeo demorar ou falhar, use novamente o play sobre a capa. Não há link
+externo nem aviso fixo abaixo do vídeo. Ao sair da página, o player é descarregado; ao voltar, carregue-o
 novamente. O vídeo não listado pode ser visto por quem tiver o link, mesmo fora
 do Portal. A reorganização desta edição depende de publicação para valer no site.
 

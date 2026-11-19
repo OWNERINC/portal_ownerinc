@@ -24,10 +24,13 @@ Manter o menu atual. Consulta ao Código não substitui o aceite obrigatório.
 - Player 16:9 com largura limitada no desktop e reflow no celular.
 - Capa local obtida da miniatura do vídeo escolhido, sem conexão a terceiros
   na abertura. Nenhum iframe, preconnect ou miniatura remota antes do clique.
-- Botão explícito **Carregar vídeo** e aviso curto de conexão ao YouTube.
+- Controle de play discreto sobre a capa: triângulo branco em botão escuro
+  pequeno, sem texto visível, com nome acessível **Carregar vídeo**, alvo de
+  pelo menos 44 px e foco de teclado visível.
 - Iframe somente em `https://www.youtube-nocookie.com/embed/VAhBJOKc3-s`,
   com controles, tela cheia, sem autoplay e referrer compatível com o provedor.
-- Link externo **Abrir no YouTube**, sem encaminhar a sessão do Portal.
+- Sem link externo ou aviso de conexão abaixo do vídeo, conforme refinamento
+  solicitado pelo usuário em 19/11/2026 e escolha confirmada na conversa.
 - Mensagem de carregamento, falha e demora com nova tentativa. Um evento de load
   do iframe não prova reprodução nem permite detectar toda restrição do YouTube.
 - Remover iframe, fonte, timer e listeners ao sair do Dashboard; descarregar

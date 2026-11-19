@@ -68,7 +68,7 @@ function mountOpeningVideo() {
       status.hidden = true;
     };
     const failed = () => {
-      if (page.active && iframe === frame) reset('Não foi possível carregar o vídeo. Tente novamente ou abra no YouTube.', true);
+      if (page.active && iframe === frame) reset('Não foi possível carregar o vídeo. Tente novamente.', true);
     };
     frame.addEventListener('load', loaded);
     frame.addEventListener('error', failed);
@@ -84,7 +84,7 @@ function mountOpeningVideo() {
     status.hidden = false;
     player.append(frame);
     timer = page.timeout(() => {
-      if (iframe === frame) reset('O carregamento está demorando. Tente novamente ou abra no YouTube.', true);
+      if (iframe === frame) reset('O carregamento está demorando. Tente novamente.', true);
     }, 15000);
     frame.focus();
   }

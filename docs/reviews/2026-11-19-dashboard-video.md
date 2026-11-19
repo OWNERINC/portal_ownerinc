@@ -15,8 +15,9 @@ Plano de execução em `C:/Users/Criação/.opencode/plan/2026-11-19-dashboard-v
 - Saudação curta, primeiro nome como texto e horário de São Paulo preservados.
 - Vídeo 16:9 até 880 px, com miniatura local do próprio vídeo escolhido.
   Fonte da capa: `https://i.ytimg.com/vi/VAhBJOKc3-s/maxresdefault.jpg`.
-- Sem iframe, thumbnail externa ou preconnect antes do clique. Botão **Carregar
-  vídeo**, aviso de conexão externa e fallback **Abrir no YouTube**.
+- Sem iframe, thumbnail externa ou preconnect antes do clique. Controle de play
+  discreto sem texto visível, com nome acessível **Carregar vídeo**. O refinamento
+  pedido pelo usuário remove o aviso fixo e o link externo abaixo do vídeo.
 - Iframe no host `youtube-nocookie.com`, ID fixo, `autoplay=0`, reprodução inline,
   tela cheia e referrer compatível com o provedor.
 - Loading, erro/retry e limite de 15 segundos para aguardar o load do iframe.
@@ -76,8 +77,40 @@ Brief, inventário, guia Markdown e instruções de testes foram atualizados.
 O guia Markdown identifica explicitamente que o PDF continua na edição anterior
 de 18/11/2026; não se afirma que o PDF foi regenerado.
 
-Revisão independente read-only concluída sem achados P0/P1/P2; o revisor executou
+Revisão independente read-only da implementação inicial concluída sem achados P0/P1/P2; o revisor executou
 19 testes focais e conferiu diff/checks/capturas. A reprodução avançando pelo
 menos dois segundos foi conferida pela primária na rodada live r4.
 Prévia e autorização de publicação permanecem etapas separadas; nenhuma
 autorização de deploy do cadastro se estende automaticamente a este Dashboard.
+
+## Refinamento do controle — 19/11/2026
+
+Após a prévia, o usuário pediu retirar o botão com texto, o link **Abrir no
+YouTube** e o aviso fixo. Confirmou a opção de play discreto: triângulo branco
+em botão escuro pequeno sobre a capa.
+
+- Controle de 64 × 48 px, sem texto visível, com nome acessível **Carregar vídeo**
+  e contorno branco no foco de teclado. Sem nova dependência ou ícone remoto.
+- Link, aviso, associação `aria-describedby` e estilos obsoletos removidos.
+- Mensagens de falha/demora orientam apenas tentar novamente; não apontam para
+  o link removido. Loading continua transitório, sem aviso fixo na abertura.
+- Mesmo vídeo, carregamento apenas no clique, ausência de autoplay e descarte
+  preservados. Nenhuma mudança no Código, navegação ou permissões.
+- Teste unitário atualizado falhou primeiro na interface anterior (1 FAIL,
+  7 PASS); depois os 53 testes focais passaram.
+- `npm run verify`: 1.296 PASS, 4 SKIP, zero falhas, security/compose OK.
+- Browser: 7 cenários PASS, quatro larguras sem overflow, axe com zero violações
+  e zero incompletos. Verifica nome acessível sem texto, ausência de link/aviso,
+  alvo de toque e foco visível com Shift+Tab/Tab reais antes de Enter.
+  A primeira rodada do novo check falhou porque `focus()` após clique não ativa
+  necessariamente `:focus-visible`; corrigiu-se o teste para usar teclado real.
+- Evidência e capturas desta revisão:
+  `C:/Users/Criação/AppData/Local/Temp/opencode/dashboard-video-play-20261119-r2/`.
+- Live separado em Chrome com a CSP versionada: `currentTime=2.014766`,
+  `paused=false`, `adShowing=false`, zero pageerrors e zero contato inicial
+  com YouTube. Saída:
+  `C:/Users/Criação/AppData/Local/Temp/opencode/dashboard-video-play-live-20261119-r1/`.
+- Mantidos todos os limites acima: fixtures locais, BFCache simulado, nenhum
+  teste físico ou autenticação produtiva, e nenhuma publicação implícita.
+- Revisão independente read-only do diff deste refinamento concluída sem
+  achados relevantes. `git diff --check` sem erros.
