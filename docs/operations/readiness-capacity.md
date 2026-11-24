@@ -14,7 +14,8 @@ Os orçamentos abaixo não certificam a capacidade da VPS.
 | Escritas autenticadas | UID | 60/15 minutos |
 | Progresso Academy | UID, rota PUT específica | 120/15 minutos |
 | Foto do perfil | UID | 10/15 minutos |
-| Cadastro/recuperação públicos | IP | 5/hora por limitador específico |
+| Cadastro público | IP | 300/hora por padrão, configurável |
+| Recuperação pública de senha | IP | 5/hora por limitador específico |
 | Nginx API, Pages e bulk | IP resolvido pelo Nginx | 20 req/s, burst 500 |
 | Nginx uploads | IP, zona compartilhada | 60/minuto, burst 20 |
 | Nginx leitura de mídia | IP | 60 req/s, burst 500 |
@@ -23,6 +24,11 @@ Os limites são cumulativos, não quotas independentes somáveis. Uma escrita ou
 transferência autenticada também consome o orçamento geral do UID. Cem usuários
 da mesma rede deixam de disputar um único orçamento de 300 chamadas; continuam
 sujeitos às proteções agregadas.
+
+O cadastro segue a configuração e a fila descritas em
+[Tráfego do cadastro público](registration-traffic.md), incorporadas à main
+após o pacote original de 17/11. A integração preserva esse contrato; as duas
+rotas públicas de recuperação de senha mantêm seus limites independentes.
 
 Só o UID retornado pela validação do token define identidade. Enviar um header
 Bearer, variar seu texto ou informar UID em payload/header não cria uma

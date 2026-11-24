@@ -174,7 +174,7 @@ test('Nginx shared-network budgets preserve upload, API and media zones with LF'
   for (const [, zone, burst] of directives) assert.equal(burst, zone === 'uploads' ? '20' : '500');
 });
 
-test('photo keeps 10/UID/15m and public registration/recovery keep 5/IP/hour', async () => {
+test('photo keeps 10/UID/15m, registration permits 300/IP/hour and recovery keeps 5/IP/hour', async () => {
   await clock(async advance => {
     const photo = routes(), auth = routes();
     const multer = () => ({ single: () => pass });
@@ -202,8 +202,11 @@ test('photo keeps 10/UID/15m and public registration/recovery keep 5/IP/hour', a
     assert.equal(hit(photoLimit, 'another').allowed, true);
     for (const path of ['/register', '/password-reset', '/registration-password']) {
       const limiter = auth.handlers('post', path)[0];
-      for (let i = 0; i < 5; i++) assert.equal(hit(limiter, `uid-${i}`).allowed, true);
-      assert.equal(hit(limiter, 'new-uid').res.headers['Retry-After'], '3600');
+      const max = path === '/register' ? 300 : 5;
+      for (let i = 0; i < max; i++) assert.equal(hit(limiter, `uid-${i}`).allowed, true);
+      const denied = hit(limiter, 'new-uid');
+      assert.equal(denied.res.statusCode, 429);
+      assert.equal(denied.res.headers['Retry-After'], '3600');
       assert.equal(hit(limiter, 'user', '192.0.2.9').allowed, true);
       advance(3600000);
       assert.equal(hit(limiter).allowed, true);
