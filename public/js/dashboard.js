@@ -1,10 +1,11 @@
 import { fetchAPI } from './auth.js';
-import { clear, element, safeHttpUrl, setBusy, showState } from './ui.js';
+import { clear, element, setBusy, showState } from './ui.js';
 
 const requests = { fetchAPI };
 export function mount(page) {
   const { fetchAPI } = page.bindAPI(requests);
-page.cleanup(() => { ++remindersRequest; ++academyRequest; });
+page.cleanup(() => { ++remindersRequest; ++ethicsRequest; });
+const user = page.user || {};
 
 const TIME_ZONE = 'America/Sao_Paulo';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -12,8 +13,87 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const greeting = document.getElementById('dashboard-greeting');
 if (greeting) {
   const hour = Number(new Intl.DateTimeFormat('pt-BR', { timeZone: TIME_ZONE, hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
-  greeting.textContent = `${hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite'}. Vamos nos conectar?`;
+  const salutation = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+  const name = typeof user.name === 'string' ? user.name.trim().split(/\s+/)[0] : '';
+  greeting.textContent = `${salutation}${name ? `, ${name}` : ''}.`;
 }
+
+function mountOpeningVideo() {
+  const player = document.getElementById('dashboard-video-frame');
+  const poster = document.getElementById('dashboard-video-poster');
+  const button = document.getElementById('dashboard-video-load');
+  const status = document.getElementById('dashboard-video-status');
+  if (!player || !poster || !button || !status) return;
+  let iframe, timer;
+  let detachFrameListeners = () => {};
+
+  function clearPlayer() {
+    clearTimeout(timer);
+    timer = null;
+    detachFrameListeners();
+    detachFrameListeners = () => {};
+    iframe?.removeAttribute('src');
+    iframe?.remove();
+    iframe = null;
+  }
+
+  function reset(message = '', restoreFocus = false) {
+    const focused = iframe && document.activeElement === iframe;
+    clearPlayer();
+    if (!page.active) return;
+    poster.hidden = false;
+    button.disabled = false;
+    setBusy(player, false);
+    status.textContent = message;
+    status.hidden = !message;
+    if (restoreFocus && focused) button.focus();
+  }
+
+  function load() {
+    if (!page.active || iframe) return;
+    const frame = element('iframe', {
+      src: 'https://www.youtube-nocookie.com/embed/VAhBJOKc3-s?autoplay=0&rel=0&playsinline=1',
+      title: 'Owntime Home Club Gramado — Andamento das Obras (Maio 2026)',
+      allow: 'encrypted-media; picture-in-picture; fullscreen',
+      allowfullscreen: true, tabindex: '0',
+      referrerpolicy: 'strict-origin-when-cross-origin',
+      sandbox: 'allow-scripts allow-same-origin allow-presentation',
+    });
+    const loaded = () => {
+      if (!page.active || iframe !== frame) return;
+      clearTimeout(timer);
+      timer = null;
+      setBusy(player, false);
+      status.textContent = '';
+      status.hidden = true;
+    };
+    const failed = () => {
+      if (page.active && iframe === frame) reset('Não foi possível carregar o vídeo. Tente novamente.', true);
+    };
+    frame.addEventListener('load', loaded);
+    frame.addEventListener('error', failed);
+    detachFrameListeners = () => {
+      frame.removeEventListener('load', loaded);
+      frame.removeEventListener('error', failed);
+    };
+    iframe = frame;
+    poster.hidden = true;
+    button.disabled = true;
+    setBusy(player, true);
+    status.textContent = 'Carregando vídeo do YouTube…';
+    status.hidden = false;
+    player.append(frame);
+    timer = page.timeout(() => {
+      if (iframe === frame) reset('O carregamento está demorando. Tente novamente.', true);
+    }, 15000);
+    frame.focus();
+  }
+
+  page.listen(button, 'click', load);
+  page.listen(window, 'pagehide', () => reset());
+  page.cleanup(clearPlayer);
+}
+mountOpeningVideo();
 
 function civilDateKey(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -51,39 +131,6 @@ function icon(name) {
   return svg;
 }
 
-function storyCard({ title, category, description, href, newTab, course, continuing }) {
-  const titleNode = href
-    ? element('a', {
-      className: 'dashboard-story-card-title', href,
-      ...(newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
-    }, [element('strong', { text: title })])
-    : element('strong', { text: title });
-  const body = element('div', { className: 'dashboard-story-card-body' }, [
-    element('small', { text: ['Academy', category].filter(Boolean).join(' · ') }),
-    titleNode,
-  ]);
-  if (description) {
-    const copy = element('div', { className: 'dashboard-story-card-copy' });
-    copy.append(element('p', { text: description }));
-    body.append(copy);
-  }
-  if (course.delivery_mode === 'internal') {
-    const total = Math.max(0, Number(course.total_lessons) || 0);
-    const completed = Math.min(total, Math.max(0, Number(course.completed_lessons) || 0));
-    body.append(element('small', { text: `${completed} de ${total} aulas concluídas` }));
-    if (total) body.append(element('progress', { className: 'dashboard-course-progress', value: completed, max: total, 'aria-label': `Progresso: ${title}` }));
-  }
-  body.append(element('a', {
-    className: 'btn btn-primary dashboard-course-action', href,
-    text: newTab ? 'Acessar curso externo ↗' : continuing ? 'Continuar curso' : 'Conhecer curso',
-    ...(newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
-  }));
-  const key = /^icon-0[1-6]$/.test(course.icon_key) ? course.icon_key : 'symbol';
-  return element('article', { className: 'dashboard-story-card' }, [
-    element('img', { className: 'dashboard-course-cover', src: `./assets/academy/${key}.svg`, alt: '', width: 640, height: 360 }), body,
-  ]);
-}
-
 function reminderCard(reminder, days) {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(reminder.next_occurrence || '')
     ? new Date(`${reminder.next_occurrence}T12:00:00Z`) : null;
@@ -108,7 +155,7 @@ async function loadReminders() {
   setBusy(remindersContainer, true);
   try {
     const reminders = await fetchAPI('/api/reminders/upcoming?days=7');
-    if (requestToken !== remindersRequest) return;
+    if (requestToken !== remindersRequest || !page.active) return;
     const upcoming = reminders.map(reminder => {
       return { reminder, days: daysUntil(reminder.next_occurrence) };
     });
@@ -116,9 +163,9 @@ async function loadReminders() {
     clear(remindersContainer);
     upcoming.forEach(({ reminder, days }) => remindersContainer.append(reminderCard(reminder, days)));
   } catch {
-    if (requestToken === remindersRequest) showState(remindersContainer, 'Não foi possível carregar as notificações. Verifique sua conexão.', loadReminders);
+    if (requestToken === remindersRequest && page.active) showState(remindersContainer, 'Não foi possível carregar as notificações. Verifique sua conexão.', loadReminders);
   } finally {
-    if (requestToken === remindersRequest) setBusy(remindersContainer, false);
+    if (requestToken === remindersRequest && page.active) setBusy(remindersContainer, false);
   }
 }
 
@@ -126,69 +173,72 @@ const quickLinks = document.getElementById('quick-links');
 const links = [
   ['book-open', 'Conhecimento', './knowledge.html'],
   ['bell', 'Notificações', './reminders.html'],
-  ['graduation-cap', 'Academy', './academy.html'],
+  ['layout-template', 'Pages', './pages.html'],
+  ['user', 'Meu Perfil', './profile.html'],
 ];
-if (quickLinks) {
-  links.forEach(([iconName, label, href]) => quickLinks.append(element('a', { className: 'dashboard-area-card', href }, [
+function appendLinks(container, entries) {
+  if (!container) return;
+  clear(container);
+  entries.forEach(([iconName, label, href]) => container.append(element('a', { className: 'dashboard-area-card', href }, [
     icon(iconName),
     element('span', { className: 'dashboard-area-card-copy' }, [
       element('strong', { text: label }),
     ]),
   ])));
 }
+appendLinks(quickLinks, links);
 
-const academySection = document.getElementById('academy-preview');
-let academyRequest = 0;
-async function loadAcademy() {
-  if (!academySection || !page.active) return;
-  const requestToken = ++academyRequest;
-  const focused = academySection.contains(document.activeElement) ? document.activeElement : null;
+const tools = [];
+if (user.autocard_access === true) tools.push(['layout-template', 'AutoCard', './autocard.html']);
+if (user.pos_cards_access === true) tools.push(['badge-check', 'Cards Pós', './cards-pos.html']);
+if (user.role === 'admin') tools.push(['settings-2', 'Admin', './admin.html']);
+const toolsSection = document.getElementById('dashboard-tools');
+if (toolsSection) {
+  toolsSection.hidden = tools.length === 0;
+  appendLinks(document.getElementById('tool-links'), tools);
+}
+
+const ethicsSection = document.getElementById('ethics-preview');
+let ethicsRequest = 0;
+async function loadEthics() {
+  if (!ethicsSection || !page.active) return;
+  const requestToken = ++ethicsRequest;
+  const focused = ethicsSection.contains(document.activeElement) ? document.activeElement : null;
   const renderState = (message, retry) => {
     const restoreFocus = focused && document.activeElement === focused;
-    const state = showState(academySection, message, retry);
+    const state = showState(ethicsSection, message, retry);
     if (restoreFocus && state) {
       const target = state.querySelector('button') || state;
       if (target === state) state.tabIndex = -1;
       target.focus();
     }
   };
-  setBusy(academySection, true);
+  setBusy(ethicsSection, true);
   try {
-    let courses = (await fetchAPI('/api/academy/continue?limit=1')).filter(course => course.active !== false).slice(0, 1);
-    if (requestToken !== academyRequest) return;
-    const continuing = courses.length > 0;
-    if (!continuing) courses = (await fetchAPI('/api/academy?active=true&limit=1')).filter(course => course.active !== false).slice(0, 1);
-    if (requestToken !== academyRequest) return;
-    const heading = document.getElementById('academy-heading');
-    if (heading) heading.textContent = continuing ? 'Continue de onde parou' : 'Comece a aprender';
-    if (!courses.length) return renderState('Nenhum curso disponível no momento.');
+    const [article] = await fetchAPI('/api/knowledge?limit=1');
+    if (requestToken !== ethicsRequest || !page.active) return;
+    if (article?.document?.kind !== 'ethics' || typeof article.id !== 'string' || !UUID_PATTERN.test(article.id)) {
+      return renderState('O Código de Ética está temporariamente indisponível.');
+    }
     const restoreFocus = focused && document.activeElement === focused;
-    clear(academySection);
-    courses.forEach(course => {
-      const href = course.delivery_mode === 'internal'
-        ? `./academy.html?course=${encodeURIComponent(course.id)}${continuing && course.resume_lesson_id ? `&lesson=${encodeURIComponent(course.resume_lesson_id)}` : ''}`
-        : safeHttpUrl(course.url) || './academy.html';
-      academySection.append(storyCard({
-        title: course.title,
-        category: course.category || 'Desenvolvimento',
-        description: course.description || '',
-        href,
-        newTab: course.delivery_mode !== 'internal' && Boolean(safeHttpUrl(course.url)),
-        course, continuing,
-      }));
+    const action = element('a', {
+      className: 'btn btn-primary dashboard-ethics-action',
+      href: `./knowledge.html?article=${encodeURIComponent(article.id)}`,
+      text: 'Ler Código de Ética',
     });
-    if (restoreFocus) academySection.querySelector('a')?.focus();
+    clear(ethicsSection).append(action);
+    if (restoreFocus) action.focus();
   } catch {
-    if (requestToken === academyRequest) renderState('Não foi possível carregar os cursos.', loadAcademy);
+    if (requestToken === ethicsRequest && page.active) renderState('Não foi possível carregar o Código de Ética. Verifique sua conexão.', loadEthics);
   } finally {
-    if (requestToken === academyRequest) setBusy(academySection, false);
+    if (requestToken === ethicsRequest && page.active) setBusy(ethicsSection, false);
   }
 }
 
 page.listen(window, 'pageshow', event => {
   if (!event.persisted) return;
-  void Promise.all([loadReminders(), loadAcademy()]);
+  void Promise.all([loadReminders(), loadEthics()]);
 });
 
-void Promise.all([loadReminders(), loadAcademy()]);
+void Promise.all([loadReminders(), loadEthics()]);
 }

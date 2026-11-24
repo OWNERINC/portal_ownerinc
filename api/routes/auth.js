@@ -12,7 +12,11 @@ const { queueFirebaseCleanup } = require('../services/user-invitation');
 
 const router = express.Router();
 const resetLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
-const registrationLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
+const configuredRegistrationMax = Number(process.env.REGISTRATION_MAX_ATTEMPTS_PER_IP_PER_HOUR || 300);
+const registrationLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: Number.isSafeInteger(configuredRegistrationMax) && configuredRegistrationMax > 0 ? configuredRegistrationMax : 300,
+});
 const registrationPasswordLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
 const accepted = { status: 'accepted' };
 const registrationAccepted = { status: 'accepted', state: 'received' };
@@ -27,57 +31,79 @@ router.post('/register', registrationLimit, async (req, res, next) => {
     name: req.body.name.trim(),
     password: req.body.password,
   };
-  let client;
-  let createdUid;
-  let commitAttempted = false;
-  let commitCompleted = false;
-  let discardClient = false;
+  const controller = new AbortController();
+  const abortWaiting = () => { if (!res.writableEnded) controller.abort(); };
+  const admission = { wait: true, signal: controller.signal };
+  req.once('aborted', abortWaiting);
+  res.once('close', abortWaiting);
   try {
-    await withRegistrationOperation(async () => {
-      client = await pool.connect();
-      await client.query('BEGIN');
-      const registration = await createPendingRegistration({ client, data, requestId: req.id });
-      createdUid = registration.uid;
-      commitAttempted = true;
-      await client.query('COMMIT');
-      commitCompleted = true;
-      return registration;
-    });
-    createdUid = null;
+    const needsRecovery = await withRegistrationOperation(async () => {
+      let client;
+      let createdUid;
+      let commitAttempted = false;
+      let commitCompleted = false;
+      let discardClient = false;
+      try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const registration = await createPendingRegistration({ client, data, requestId: req.id });
+        createdUid = registration.uid;
+        commitAttempted = true;
+        await client.query('COMMIT');
+        commitCompleted = true;
+        return false;
+      } catch (error) {
+        let rollbackFailed = false;
+        if (!commitAttempted) await client?.query('ROLLBACK').catch(() => { rollbackFailed = true; discardClient = true; });
+        // Keep admission through rollback/compensation, but return this client
+        // before any cleanup helper can acquire a separate pool connection.
+        client?.release(discardClient || (commitAttempted && !commitCompleted));
+        client = null;
+        if ((commitAttempted && !commitCompleted || rollbackFailed) && (createdUid || error.firebaseUid)) {
+          await queueFirebaseCleanup({ pool, uid: createdUid || error.firebaseUid, reason: 'registration_commit_ambiguous' })
+            .catch(() => console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId: req.id })));
+        }
+        const cleanupUid = !commitAttempted && !rollbackFailed ? (createdUid || error.firebaseUid) : null;
+        if (cleanupUid) {
+          const cleanupError = await cleanupPendingRegistrationUser({
+            pool, uid: cleanupUid, email: data.email, requestId: req.id,
+          });
+          if (cleanupError) {
+            await queueFirebaseCleanup({ pool, uid: cleanupUid, reason: 'registration' }).catch(() => {
+              console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId: req.id }));
+            });
+            console.error(JSON.stringify({ service: 'api', event: 'pending_registration_cleanup_failed', requestId: req.id }));
+          }
+        }
+        if (error.code === 'auth/email-already-exists' || error.code === '23505' || error.code === 'REGISTRATION_PENDING_EXISTS') return true;
+        if (error.code === 'REGISTRATION_ALREADY_EXISTS') return false;
+        throw error;
+      } finally {
+        client?.release(discardClient || (commitAttempted && !commitCompleted));
+      }
+    }, admission);
+    // Recover a duplicate only after the original client and gate slot have
+    // been released. Never nest admission while retaining an active slot.
+    if (needsRecovery) {
+      await withRegistrationOperation(() => recoverPendingRegistration({ pool, data, requestId: req.id }), admission).catch(() => false);
+    }
     console.log(JSON.stringify({ service: 'api', event: 'pending_registration_accepted', requestId: req.id }));
     return res.status(202).json(registrationAccepted);
   } catch (error) {
-    let rollbackFailed = false;
-    if (!commitAttempted) await client?.query('ROLLBACK').catch(() => { rollbackFailed = true; discardClient = true; });
-    if ((commitAttempted && !commitCompleted || rollbackFailed) && (createdUid || error.firebaseUid)) {
-      await queueFirebaseCleanup({ pool, uid: createdUid || error.firebaseUid, reason: 'registration_commit_ambiguous' })
-        .catch(() => console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId: req.id })));
+    if (error.code === 'REGISTRATION_ABORTED') return;
+    if (error.code === 'REGISTRATION_BUSY') {
+      res.setHeader('Retry-After', '5');
+      return res.status(503).json({ error: 'Cadastro temporariamente indisponível.', reason: 'registration_busy', requestId: req.id });
     }
-    const cleanupUid = !commitAttempted && !rollbackFailed ? (createdUid || error.firebaseUid) : null;
-    if (cleanupUid) {
-      const cleanupError = await cleanupPendingRegistrationUser({
-        pool, uid: cleanupUid, email: data.email, requestId: req.id,
-      });
-      if (cleanupError) {
-        await queueFirebaseCleanup({ pool, uid: cleanupUid, reason: 'registration' }).catch(() => {
-          console.error(JSON.stringify({ service: 'api', event: 'firebase_cleanup_queue_failed', requestId: req.id }));
-        });
-        console.error(JSON.stringify({ service: 'api', event: 'pending_registration_cleanup_failed', requestId: req.id }));
-      }
+    if (error.code === 'REGISTRATION_RATE_LIMITED') {
+      res.setHeader('Retry-After', String(error.retryAfter));
+      return res.status(429).json({ error: 'Muitos cadastros recentes. Tente novamente mais tarde.', requestId: req.id });
     }
-    if (error.code === 'auth/email-already-exists' || error.code === '23505' || error.code === 'REGISTRATION_PENDING_EXISTS') {
-      client?.release(discardClient || rollbackFailed);
-      client = null;
-      await withRegistrationOperation(() => recoverPendingRegistration({ pool, data, requestId: req.id })).catch(() => false);
-      return res.status(202).json(registrationAccepted);
-    }
-    if (error.code === 'REGISTRATION_ALREADY_EXISTS') return res.status(202).json(registrationAccepted);
-    if (error.code === 'REGISTRATION_BUSY') return res.status(503).json({ error: 'Cadastro temporariamente indisponível.', requestId: req.id });
-    if (error.code === 'REGISTRATION_RATE_LIMITED') return res.status(429).json({ error: 'Muitos cadastros recentes. Tente novamente mais tarde.', requestId: req.id });
     console.error(JSON.stringify({ service: 'api', event: 'pending_registration_failed', requestId: req.id, code: failureCode(error) }));
     return res.status(503).json({ error: 'Cadastro temporariamente indisponível.', requestId: req.id });
   } finally {
-    client?.release(discardClient || (commitAttempted && !commitCompleted));
+    req.removeListener('aborted', abortWaiting);
+    res.removeListener('close', abortWaiting);
   }
 });
 

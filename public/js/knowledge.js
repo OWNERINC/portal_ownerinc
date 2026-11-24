@@ -1,4 +1,5 @@
-import { can, fetchAPI, fetchAPIPage } from './auth.js';
+import { can, fetchAPI, fetchAPIPage, fetchAPIAsset } from './auth.js';
+import { createDocumentImages, mountKnowledgeDocument } from './knowledge-documents.js';
 import { canCloseDialog, clear, closeDialog, element, openDialog, setBusy, setDialogCloseGuard, showState } from './ui.js';
 import { readOffset, renderPagination, setPaginationBusy } from './pagination.js';
 
@@ -36,6 +37,9 @@ let editingId = null;
 let articleSaveInFlight = false;
 let lastKnownUrl = location.href;
 const PAGE_SIZE = 20;
+let disposeDocument = () => {}, coverImages = null;
+function stopDocument() { disposeDocument(); disposeDocument = () => {}; }
+page.cleanup(() => { stopDocument(); coverImages?.dispose(); });
 if (modal) setDialogCloseGuard(modal, () => !articleSaveInFlight, {
   canLeave: () => !articleSaveInFlight,
 });
@@ -189,6 +193,34 @@ function articleBody(article) {
   return article?.content || '';
 }
 
+function renderArticleContent(node, article) {
+  const content = articleBody(article);
+  // Recognize only canonical file-view links; all other content stays literal.
+  const driveFile = /^https:\/\/drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+\/view(?:\?usp=(?:sharing|drive_link))?$/;
+  const parts = content.split(/(\r\n|\r|\n)/);
+  if (!parts.some(part => driveFile.test(part))) {
+    node.textContent = content;
+    return;
+  }
+  clear(node);
+  let documentNumber = 0;
+  parts.forEach(part => {
+    if (!driveFile.test(part)) {
+      node.append(document.createTextNode(part));
+      return;
+    }
+    documentNumber += 1;
+    node.append(element('a', {
+      className: 'btn btn-primary article-document-link',
+      href: part,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      text: 'Abrir documento no Drive ↗',
+      'aria-label': `Abrir documento no Drive — ${article.title}, documento ${documentNumber} (abre em nova aba)`,
+    }));
+  });
+}
+
 function setArticleEditorBusy(busy) {
   if (!page.active) return;
   [
@@ -206,7 +238,7 @@ function syncContentField() {
   contentInput.disabled = false;
   contentInput.required = true;
   contentInput.placeholder = 'Conteúdo em texto simples…';
-  if (contentHelp) contentHelp.textContent = 'Artigos mantêm o conteúdo em texto simples editável neste campo.';
+  if (contentHelp) contentHelp.textContent = 'Escreva em texto simples. Para exibir o botão de um documento do Drive, cole o link https://drive.google.com/file/d/ID/view em uma linha própria. O acesso segue as permissões do Drive.';
 }
 
 function renderCategories(requestToken = articlesRequest) {
@@ -231,6 +263,8 @@ function renderCategories(requestToken = articlesRequest) {
 
 async function openArticle(id, push = true) {
   if (push && !prepareArticleNavigation()) return;
+  stopDocument();
+  coverImages?.dispose(); coverImages = null;
   invalidateArticleDelete();
   const requestToken = ++articleRequest;
   const articleContent = document.getElementById('article-content');
@@ -285,7 +319,13 @@ async function openArticle(id, push = true) {
   if (!push) updateUrl({ article: article.id });
   articleTitle.textContent = article.title;
   document.getElementById('article-category').textContent = article.category || 'Geral';
-  articleContent.textContent = article.content || '';
+  renderArticleContent(articleContent, article);
+  if (article.document) {
+    const host = element('section', { className: 'knowledge-document', 'aria-label': `Documento: ${article.title}` });
+    articleContent.after(host);
+    const { fetchAPIAsset: fetchAsset } = page.bindAPI({ fetchAPIAsset });
+    disposeDocument = mountKnowledgeDocument({ host, article, fetchAPI, fetchAsset });
+  }
   const adminBar = clear(document.getElementById('article-admin-bar'));
   adminBar.hidden = !canManage;
   if (canManage) {
@@ -299,6 +339,8 @@ async function openArticle(id, push = true) {
 }
 
 function render(requestToken = articlesRequest) {
+  stopDocument();
+  coverImages?.dispose(); coverImages = null;
   renderCategories(requestToken);
   const query = (params().get('q') || '').toLocaleLowerCase('pt-BR');
   const category = params().get('category')?.trim() || '';
@@ -316,6 +358,10 @@ function render(requestToken = articlesRequest) {
       const metadata = [
         element('span', { className: 'badge badge-gold', text: article.category || 'Geral' }),
       ];
+      if (article.document?.kind === 'ethics') metadata.push(element('span', {
+        className: 'article-institutional-label', text: 'Destaque institucional',
+      }));
+      if (article.document?.pageCount) metadata.push(element('span', { className: 'article-page-count', text: `${article.document.pageCount} páginas` }));
       const button = element('button', { className: 'card article-card', type: 'button', on: { click: () => openArticle(article.id) } }, [
         element('span', { className: 'article-card-heading' }, [
           element('span', { className: 'card-title', text: article.title }),
@@ -324,6 +370,20 @@ function render(requestToken = articlesRequest) {
         element('span', { className: 'article-card-meta' }, metadata),
           element('span', { className: 'article-excerpt', text: articleBody(article).slice(0, 140) || 'Consulte este artigo para ver os detalhes.' }),
       ]);
+      if (article.document?.kind === 'ethics') {
+        button.classList.add('article-card-ethics');
+        button.prepend(element('img', { className: 'article-ethics-cover',
+          src: './assets/conecta/ethics-cover.svg', alt: '', width: 960, height: 540 }));
+      } else if (article.document?.cover && !params().get('article')) {
+        if (!coverImages) {
+          const { fetchAPIAsset: fetchAsset } = page.bindAPI({ fetchAPIAsset });
+          coverImages = createDocumentImages({ fetchAsset });
+        }
+        const cover = element('img', { className: 'article-document-cover', alt: '',
+          width: article.document.cover.width, height: article.document.cover.height, decoding: 'async' });
+        button.prepend(cover);
+        coverImages.observe(cover, article.document.cover.url);
+      }
       listNode.append(button);
     });
   }
@@ -340,6 +400,7 @@ function render(requestToken = articlesRequest) {
 }
 
 async function loadArticles(focusOverride = null) {
+  stopDocument();
   const requestedFocus = focusOverride || focusDescriptor(document.activeElement);
   const requestToken = ++articlesRequest;
   articleRequest += 1;

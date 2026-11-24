@@ -1,5 +1,45 @@
 # Prévia visual Conecta
 
+## Boas-vindas e destaque institucional
+
+`check-portal-welcome.mjs` confere Dashboard em 320/390/768/1366 px, vídeo antes do
+Código e atalhos compactos depois, capa compartilhada, nome como texto,
+atalhos conforme permissões, teclado, leitura oficial do Código,
+histórico, evento `pageshow` persistido, falha/retry/ausência e descarte durante
+consulta. Também confere a página direta e a aba administrativa da Academy.
+
+Defina `PGLITE_MODULE_PATH`, `PLAYWRIGHT_MODULE_PATH`, `AXE_MODULE_PATH` (arquivo
+`axe.min.js`) e um diretório **novo** em `WELCOME_VISUAL_OUTPUT`:
+
+```sh
+node tests/visual/check-portal-welcome.mjs
+```
+
+Knowledge usa SQL/API reais em PGlite descartável; Firebase, notificações, player
+YouTube e dados da Academy são fixtures explícitas. Confere zero requisições a
+serviços de vídeo antes do consentimento, iframe no-cookie/sem autoplay,
+play sem texto com nome acessível, foco de teclado visível e ausência de link/aviso fixos,
+erro/retry/foco e descarte em navegação. O retorno BFCache é um evento simulado,
+além de Back real entre rotas. Capturas, relatórios axe (incluindo incompletos) e
+`results.json` registram esses limites. Não comprova serviços produtivos nem
+reprodução real do YouTube.
+
+### Teste opcional do vídeo real da abertura
+
+`check-dashboard-video-live.mjs` inicia somente uma prévia loopback própria,
+com autenticação/API simuladas, e usa a CSP versionada do Portal. Conecta ao
+YouTube real apenas após clicar no play (nome acessível **Carregar vídeo**) e tenta iniciar o vídeo
+escolhido; registra tempo avançando, título, screenshot e limites. Exige
+`DASHBOARD_VIDEO_LIVE=true`, `PLAYWRIGHT_MODULE_PATH` e uma pasta nova em
+`DASHBOARD_VIDEO_OUTPUT`. Não exige PGlite, Docker ou sessão de produção.
+
+```sh
+node tests/visual/check-dashboard-video-live.mjs
+```
+
+Falha de rede, restrição do provedor ou aviso do player mantém o resultado
+`NOT_PROVEN`; não transformar navegação/load do iframe em prova de reprodução.
+
 ## Integração funcional de referência (Task 17)
 
 Com as instalações externas existentes, execute:

@@ -33,7 +33,6 @@
       <li><a href="./dashboard.html" class="active" aria-current="page" title="Dashboard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#home"></use></svg><span>Dashboard</span></a></li>
       <li><a href="./knowledge.html" title="Base de Conhecimento"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#book-open"></use></svg><span>Base de Conhecimento</span></a></li>
       <li><a href="./reminders.html" title="Notificações"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#bell"></use></svg><span>Notificações</span></a></li>
-      <li><a href="./academy.html" title="Academy"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#graduation-cap"></use></svg><span>Academy</span></a></li>
       <li><a href="./pages.html" title="Pages"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>Pages</span></a></li>
       <li class="nav-group-label nav-tools-label" aria-hidden="true">FERRAMENTAS</li>
       <li class="autocard-link"><a href="./autocard.html" title="AutoCard"><svg class="icon" aria-hidden="true"><use href="./assets/icons.svg#layout-template"></use></svg><span>AutoCard</span></a></li>
@@ -56,29 +55,52 @@
     <!-- /generated:portal-topbar -->
     <main class="page-body dashboard-home" id="main-content" tabindex="-1" data-route-pending>
       <header class="dashboard-intro">
-        <h1 id="dashboard-greeting">Olá. Vamos nos conectar?</h1>
-        <p>Informação, aprendizado e ferramentas para o seu dia.</p>
+        <h1 id="dashboard-greeting">Boas-vindas ao Conecta.</h1>
       </header>
 
-      <nav class="dashboard-shortcuts" aria-label="Acessos rápidos">
-        <div id="quick-links" class="dashboard-areas-grid"></div>
-      </nav>
+      <section id="dashboard-video" class="dashboard-video" aria-label="Vídeo de abertura">
+        <div id="dashboard-video-frame" class="dashboard-video-frame">
+          <div id="dashboard-video-poster" class="dashboard-video-poster">
+            <img src="./assets/conecta/dashboard-video-poster.jpg" alt="" width="1280" height="720" fetchpriority="high">
+            <button id="dashboard-video-load" class="dashboard-video-load" type="button" aria-label="Carregar vídeo"></button>
+          </div>
+        </div>
+        <div class="dashboard-video-caption">
+          <p>Andamento das obras · Maio de 2026</p>
+        </div>
+        <p id="dashboard-video-status" class="dashboard-video-status" role="status" aria-live="polite" hidden></p>
+      </section>
+
+      <section class="dashboard-section dashboard-ethics" aria-labelledby="ethics-heading">
+        <div class="dashboard-section-heading">
+          <h2 id="ethics-heading">Código de Ética</h2>
+        </div>
+        <div class="dashboard-ethics-content">
+          <img class="dashboard-ethics-cover" src="./assets/conecta/ethics-cover.svg" alt="" width="960" height="540">
+          <div class="dashboard-ethics-copy">
+            <p>Consulte os princípios que orientam nossas relações e decisões na Ownerinc.</p>
+            <div id="ethics-preview" aria-live="polite"><p class="empty-state">Carregando Código de Ética…</p></div>
+          </div>
+        </div>
+      </section>
 
       <div class="dashboard-overview">
-        <section class="dashboard-section dashboard-learning" aria-labelledby="academy-heading">
+        <nav class="dashboard-shortcuts" aria-labelledby="shortcuts-heading">
           <div class="dashboard-section-heading">
-            <h2 id="academy-heading">Continue de onde parou</h2>
+            <h2 id="shortcuts-heading">Acessos rápidos</h2>
           </div>
-          <div id="academy-preview" class="dashboard-story-rail" aria-live="polite"><p class="empty-state">Carregando cursos…</p></div>
-          <a class="dashboard-section-link" href="./academy.html">Explorar Academy →</a>
-        </section>
-
+          <div id="quick-links" class="dashboard-areas-grid"></div>
+        </nav>
         <section class="dashboard-section dashboard-reminders" aria-labelledby="reminders-heading">
           <div class="dashboard-section-heading">
             <h2 id="reminders-heading">Próximas notificações</h2>
           </div>
           <div id="reminders-list" class="dashboard-reminder-list" aria-live="polite"><p class="empty-state">Carregando notificações…</p></div>
           <a class="dashboard-section-link" href="./reminders.html">Ver notificações →</a>
+        </section>
+        <section id="dashboard-tools" class="dashboard-tools" aria-labelledby="tools-heading" hidden>
+          <h2 id="tools-heading">Ferramentas e gestão</h2>
+          <nav id="tool-links" class="dashboard-tool-links" aria-label="Ferramentas disponíveis"></nav>
         </section>
       </div>
     </main>

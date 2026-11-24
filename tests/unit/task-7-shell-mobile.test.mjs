@@ -680,7 +680,7 @@ test('CSP-safe typography and contrast tokens do not depend on remote font loadi
 });
 
 test('requests keep current content pending and reject stale filtered responses', () => {
-  for (const [source, token] of [[dashboard, 'remindersRequest'], [dashboard, 'academyRequest'], [knowledge, 'articlesRequest']]) {
+  for (const [source, token] of [[dashboard, 'remindersRequest'], [dashboard, 'ethicsRequest'], [knowledge, 'articlesRequest']]) {
     assert.match(source, new RegExp(`let ${token} = 0`));
     assert.match(source, /setBusy\(/);
     assert.match(source, /finally/);
@@ -706,8 +706,9 @@ test('focus fallback helpers reject inert targets and inert ancestors', () => {
   assert.match(ui, /!node\.disabled && !node\.inert && !hasUnavailableAncestor\(node\)/);
 });
 
-test('catalog cards and dashboard stories never put CMS links inside another anchor', async () => {
-  assert.match(dashboard, /return element\('article', \{ className: 'dashboard-story-card'/);
+test('catalog cards and dashboard ethics action never put CMS links inside another anchor', async () => {
+  assert.match(dashboard, /const action = element\('a', \{/);
+  assert.match(dashboard, /clear\(ethicsSection\)\.append\(action\)/);
   const academyCards = await readFile('public/academy/view-utils.js', 'utf8');
   assert.match(academyCards, /element\('article', \{ className: 'academy-course-card'/);
   assert.doesNotMatch(dashboard, /element\(href \? 'a'/);
@@ -731,7 +732,7 @@ test('mobile shell retains zoom, reflow, keyboard focus, and reduced-motion inva
   assert.match(`${components}\n${knowledgeCss}`, /outline:\s*3px solid var\(--focus\)/);
 });
 
-test('initial navigation keeps Benefits and Sólides out while Academy remains a catalog', async () => {
+test('initial navigation keeps Benefits, Sólides and Academy out while Academy retains its direct catalog', async () => {
   const [generator, dashboardHtml, academyHtml, benefitsHtml] = await Promise.all([
     readFile('scripts/generate-public-shell.mjs', 'utf8'),
     readFile('public/dashboard.html', 'utf8'),
@@ -739,8 +740,8 @@ test('initial navigation keeps Benefits and Sólides out while Academy remains a
     readFile('public/benefits.html', 'utf8'),
   ]);
   const pages = generator.match(/const pages = \[[\s\S]*?\n\];/)?.[0] || '';
-  assert.doesNotMatch(pages, /benefits|solides/i);
-  assert.doesNotMatch(dashboardHtml, /benefits\.html|Benefícios|solides\.html|Sólides/);
+  assert.doesNotMatch(pages, /benefits|solides|academy/i);
+  assert.doesNotMatch(dashboardHtml, /benefits\.html|Benefícios|solides\.html|Sólides|academy\.html/);
   assert.match(academyHtml, /id="academy-root" aria-busy="true"/);
   assert.match(benefitsHtml, /id="benefits-content"/);
 });

@@ -137,15 +137,15 @@ test('user and profile validation rejects unsafe privilege, URL, photo, and date
 });
 
 test('public registration requires name, email and an unmodified bounded password only', () => {
-  const valid = { name: 'Ana Silva', email: 'ana@example.com', password: '  senha com espaços  ' };
+  const valid = { name: 'Ana Silva', email: 'ana@example.com', password: '  Senha com espaços  ' };
   assert.equal(validateRegistration(valid), true);
   assert.equal(validateRegistration({ ...valid, name: ' Ana Silva ', email: ' ana@example.com ' }), true);
   for (const name of ['A', 'Ana\nSilva', 'a'.repeat(121)]) assert.equal(validateRegistration({ ...valid, name }), false);
   assert.equal(validateRegistration({ ...valid, email: 'bad' }), false);
-  for (const password of [undefined, null, 123, 'a'.repeat(11), 'a'.repeat(129), ' '.repeat(12)]) {
+  for (const password of [undefined, null, 123, 'Abcdefg', 'abcdefgh', 'a'.repeat(128), 'A' + 'a'.repeat(128), ' '.repeat(8), '😀'.repeat(6)]) {
     assert.equal(validateRegistration({ ...valid, password }), false);
   }
-  for (const password of ['a'.repeat(12), 'a'.repeat(128), '😀'.repeat(6)]) {
+  for (const password of ['Abcdefgh', 'ABCDEFGH', 'Ábcdefgh', 'A' + 'a'.repeat(127), '😀😀😀Aa', ' A      ']) {
     assert.equal(validateRegistration({ ...valid, password }), true);
   }
   assert.equal(validateRegistration({ ...valid, confirmPassword: valid.password }), false);

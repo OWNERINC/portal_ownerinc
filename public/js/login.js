@@ -33,10 +33,38 @@ function showView(view, focusTarget) {
 }
 
 async function requireAcceptedRegistration(response) {
-  if (response.status !== 202) throw new Error('registration-failed');
+  if (response.status !== 202) {
+    const error = new Error('registration-failed');
+    error.status = response.status;
+    const body = await response.json().catch(() => null);
+    error.busy = body?.reason === 'registration_busy';
+    const retry = response.headers.get('Retry-After');
+    const seconds = /^\d+$/.test(retry || '') ? Number(retry)
+      : Math.ceil((Date.parse(retry) - Date.now()) / 1000);
+    if (Number.isSafeInteger(seconds) && seconds > 0) error.retryAfter = seconds;
+    throw error;
+  }
   const body = await response.json().catch(() => null);
   if (!body || body.status !== 'accepted' || body.state !== 'received'
     || Object.keys(body).length !== 2) throw new Error('registration-failed');
+}
+
+function registrationFailureMessage(error) {
+  const seconds = error.retryAfter;
+  const amount = seconds > 60 ? Math.ceil(seconds / 60) : seconds;
+  const unit = seconds > 60 ? (amount === 1 ? 'minuto' : 'minutos') : (amount === 1 ? 'segundo' : 'segundos');
+  const wait = seconds ? ` Aguarde ${amount} ${unit} antes de tentar novamente.` : '';
+  if (error.status === 429) {
+    return `Muitas solicitações de cadastro.${wait || ' Aguarde alguns minutos antes de tentar novamente.'}`;
+  }
+  if (error.status === 503) {
+    const message = error.busy ? 'O cadastro está com muitas solicitações no momento.'
+      : 'O serviço de cadastro está temporariamente indisponível.';
+    return message + (wait || ' Tente novamente em instantes.');
+  }
+  if (error.status === 400) return 'Confira nome, e-mail e senha e envie o cadastro novamente.';
+  if (error instanceof TypeError) return 'Não foi possível conectar ao Portal. Verifique sua conexão e tente novamente.';
+  return 'Não foi possível confirmar o recebimento do cadastro. Tente novamente.';
 }
 
 document.getElementById('toggle-pw').addEventListener('click', event => {
@@ -188,7 +216,6 @@ resetSection.addEventListener('submit', async event => {
   }
 });
 
-registerSection.addEventListener('invalid', clearRegistrationPasswords, true);
 registerSection.addEventListener('submit', async event => {
   event.preventDefault();
   if (registrationPending) return;
@@ -199,13 +226,14 @@ registerSection.addEventListener('submit', async event => {
   success.style.display = 'none';
   const password = document.getElementById('register-password').value;
   const confirmation = document.getElementById('register-password-confirm').value;
-  if (password.length < 12 || password.length > 128 || !password.trim() || password !== confirmation) {
-    error.textContent = password !== confirmation ? 'As senhas precisam ser iguais.' : 'Use de 12 a 128 caracteres na senha, não apenas espaços.';
+  if (password.length < 8 || password.length > 128 || !/\p{Lu}/u.test(password) || password !== confirmation) {
+    error.textContent = password !== confirmation ? 'As senhas precisam ser iguais.' : 'Use de 8 a 128 caracteres na senha, com pelo menos uma letra maiúscula.';
     clearRegistrationPasswords();
     document.getElementById('register-password').focus();
     return;
   }
   if (!event.currentTarget.reportValidity()) {
+    error.textContent = 'Confira nome e e-mail e preencha os campos obrigatórios.';
     clearRegistrationPasswords();
     return;
   }
@@ -231,8 +259,8 @@ registerSection.addEventListener('submit', async event => {
     registerSection.reset();
     button.textContent = 'Cadastro recebido';
     submitted = true;
-  } catch {
-    error.textContent = 'Não foi possível concluir o cadastro agora. Tente novamente.';
+  } catch (failure) {
+    error.textContent = registrationFailureMessage(failure);
     button.textContent = 'Criar cadastro';
   } finally {
     clearRegistrationPasswords();
@@ -241,3 +269,6 @@ registerSection.addEventListener('submit', async event => {
     button.disabled = submitted;
   }
 });
+// Let submit display a persistent error before clearing passwords; native
+// validation would otherwise prevent this handler from running at all.
+registerSection.noValidate = true;

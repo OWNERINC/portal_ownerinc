@@ -24,7 +24,7 @@ async function createLoginHarness({ responseStatus = 200, responseBody = {}, sig
     async fetch(path, options) {
       requests.push({ path, options });
       if (fetchImpl) return fetchImpl(path, options);
-      return { status: responseStatus, ok: responseStatus >= 200 && responseStatus < 300, async json() { return responseBody; } };
+      return { status: responseStatus, ok: responseStatus >= 200 && responseStatus < 300, headers: new Headers(), async json() { return responseBody; } };
     },
   });
   vm.runInContext((await readFile('public/js/portal-destination.js', 'utf8')).replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, ''), h.context);
@@ -125,7 +125,7 @@ test('password is chosen inside Cadastre-se and abandoning it clears secrets and
   for (const id of ['register-password', 'register-password-confirm']) {
     assert.equal(h.node(id).closest('form'), h.node('register-section'));
     assert.equal(h.node(id).getAttribute('autocomplete'), 'new-password');
-    assert.equal(h.node(id).getAttribute('minlength'), '12');
+    assert.equal(h.node(id).getAttribute('minlength'), '8');
     assert.equal(h.node(id).getAttribute('maxlength'), '128');
     h.node(id).value = 'senha escolhida';
   }
@@ -159,11 +159,11 @@ test('registration sends its unmodified password once and clears both fields wit
   await h.click('register-link');
   h.node('register-name').value = 'Pessoa de teste';
   h.node('register-email').value = 'person@example.test';
-  h.node('register-password').value = '  senha com espaços  ';
-  h.node('register-password-confirm').value = '  senha com espaços  ';
+  h.node('register-password').value = '  Senha com espaços  ';
+  h.node('register-password-confirm').value = '  Senha com espaços  ';
   await h.submit('register-section');
   assert.equal(h.requests[0].path, '/api/auth/register');
-  assert.deepEqual(JSON.parse(h.requests[0].options.body), { name: 'Pessoa de teste', email: 'person@example.test', password: '  senha com espaços  ' });
+  assert.deepEqual(JSON.parse(h.requests[0].options.body), { name: 'Pessoa de teste', email: 'person@example.test', password: '  Senha com espaços  ' });
   assert.equal(h.requests.length, 1);
   assert.equal(h.node('register-password').value, '');
   assert.equal(h.node('register-password-confirm').value, '');
@@ -192,10 +192,10 @@ test('failed registration preserves name/email for retry but never retains passw
   await h.click('register-link');
   h.node('register-name').value = 'Pessoa de teste';
   h.node('register-email').value = 'person@example.test';
-  h.node('register-password').value = 'senha escolhida';
-  h.node('register-password-confirm').value = 'senha escolhida';
+  h.node('register-password').value = 'Senha escolhida';
+  h.node('register-password-confirm').value = 'Senha escolhida';
   await h.submit('register-section');
-  assert.match(h.node('register-error').textContent, /Não foi possível concluir/);
+  assert.match(h.node('register-error').textContent, /serviço de cadastro está temporariamente indisponível/);
   assert.equal(h.node('register-btn').disabled, false);
   assert.equal(h.node('register-success').style.display, 'none');
   assert.equal(h.node('register-name').value, 'Pessoa de teste');
@@ -205,7 +205,7 @@ test('failed registration preserves name/email for retry but never retains passw
 });
 
 test('registration checks invalid and mismatched passwords even when native validation is bypassed', async () => {
-  for (const [password, confirmation] of [['', ''], ['a'.repeat(11), 'a'.repeat(11)], ['a'.repeat(129), 'a'.repeat(129)], [' '.repeat(12), ' '.repeat(12)], ['senha escolhida', 'outra senha escolhida']]) {
+  for (const [password, confirmation] of [['', ''], ['Abcdefg', 'Abcdefg'], ['abcdefgh', 'abcdefgh'], ['A' + 'a'.repeat(128), 'A' + 'a'.repeat(128)], [' '.repeat(8), ' '.repeat(8)], ['Senha escolhida', 'Outra senha escolhida']]) {
     const h = await createLoginHarness();
     await h.click('register-link');
     h.node('register-password').value = password;
@@ -226,8 +226,8 @@ test('registration guards duplicate submits and navigation throughout a deferred
   await h.click('register-link');
   h.node('register-name').value = 'Pessoa de teste';
   h.node('register-email').value = 'person@example.test';
-  h.node('register-password').value = 'senha escolhida';
-  h.node('register-password-confirm').value = 'senha escolhida';
+  h.node('register-password').value = 'Senha escolhida';
+  h.node('register-password-confirm').value = 'Senha escolhida';
   await h.submit('register-section');
   assert.equal(h.node('register-password').value, '');
   assert.equal(h.node('register-back-link').disabled, true);
@@ -249,10 +249,10 @@ test('registration rejects unexpected success contracts without claiming approva
   for (const [status, body] of [[200, { status: 'accepted', state: 'received' }], [202, { status: 'accepted' }], [202, { status: 'accepted', state: 'received', uid: 'private' }]]) {
     const h = await createLoginHarness({ responseStatus: status, responseBody: body });
     await h.click('register-link');
-    h.node('register-password').value = 'senha escolhida';
-    h.node('register-password-confirm').value = 'senha escolhida';
+    h.node('register-password').value = 'Senha escolhida';
+    h.node('register-password-confirm').value = 'Senha escolhida';
     await h.submit('register-section');
-    assert.match(h.node('register-error').textContent, /Não foi possível concluir/);
+    assert.match(h.node('register-error').textContent, /Não foi possível confirmar o recebimento/);
     assert.equal(h.node('register-success').style.display, 'none');
     assert.equal(h.node('register-password').value, '');
   }

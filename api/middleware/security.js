@@ -37,7 +37,7 @@ function requestContext(req, res, next) {
   next();
 }
 
-const SAFE_5XX_REASONS = new Set(['firebase_identity_indeterminate']);
+const SAFE_5XX_REASONS = new Set(['firebase_identity_indeterminate', 'registration_busy']);
 
 function safeResponses(req, res, next) {
   const json = res.json.bind(res);

@@ -46,9 +46,10 @@ test('shared runtime has no Owner News or CMS consumer', async () => {
   }
 
   assert.doesNotMatch(sources[0], /\/api\/cms|routes\/cms|cms-assets/);
-  assert.match(sources[1], /storyCard/);
+  assert.match(sources[1], /loadEthics/);
   assert.match(sources[1], /reminders\/upcoming/);
-  assert.match(sources[1], /api\/academy/);
+  assert.match(sources[1], /api\/knowledge\?limit=1/);
+  assert.doesNotMatch(sources[1], /api\/academy/);
 });
 
 test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle cleanup', async t => {
@@ -56,16 +57,16 @@ test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle 
   t.after(() => h.page.dispose());
 
   const reminders = h.latest('/api/reminders/upcoming');
-  const academy = h.latest('/api/academy/continue?');
+  const ethics = h.latest('/api/knowledge?');
   assert.ok(reminders);
-  assert.ok(academy);
+  assert.ok(ethics);
   assert.equal(h.requests.some(request => /announcements|owner-news/i.test(request.path)), false);
 
   reminders.reject(new Error('offline'));
-  academy.resolve([{ id: 'course-1', title: 'Curso sintético', active: true, delivery_mode: 'internal' }]);
+  ethics.resolve([{ id: 'aabbccdd-1234-4567-89ab-123456abcdef', document: { kind: 'ethics' } }]);
   await drain();
   assert.match(h.node('reminders-list').textContent, /Não foi possível carregar as notificações/);
-  assert.match(h.node('academy-preview').textContent, /Curso sintético/);
+  assert.match(h.node('ethics-preview').textContent, /Ler Código de Ética/);
 
   const retry = h.node('reminders-list').querySelector('button');
   assert.ok(retry);
@@ -74,7 +75,7 @@ test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle 
   retryRequest.resolve([{ id: 'reminder-1', title: 'Lembrete sintético', next_occurrence: '2099-01-02', description: 'Descrição' }]);
   await drain();
   assert.match(h.node('reminders-list').textContent, /Lembrete sintético/);
-  assert.equal(h.node('quick-links').querySelectorAll('a').length, 3);
+  assert.equal(h.node('quick-links').querySelectorAll('a').length, 4);
 
   h.page.bindAPI({ fetchAPI: h.context.fetchAPI }).fetchAPI('/api/reminders/upcoming?days=7');
   const pending = h.latest('/api/reminders/upcoming?days=7');
@@ -85,12 +86,14 @@ test('maintained Dashboard keeps scoped areas, civil dates, retry and lifecycle 
 test('maintained Dashboard reloads only its areas after a persisted pageshow', async () => {
   const h = await createFeedbackHarness('dashboard');
   const initialReminders = h.latest('/api/reminders/upcoming');
-  const initialAcademy = h.latest('/api/academy/continue?');
+  const initialEthics = h.latest('/api/knowledge?');
+  const initialId = 'aabbccdd-1234-4567-89ab-123456abcdef';
+  const currentId = 'bbccddee-2345-4678-9abc-234567abcdef';
   initialReminders.resolve([{ id: 'reminder-initial', title: 'Lembrete inicial', next_occurrence: '2099-01-02', description: 'Inicial' }]);
-  initialAcademy.resolve([{ id: 'course-initial', title: 'Curso inicial', active: true, delivery_mode: 'internal' }]);
+  initialEthics.resolve([{ id: initialId, document: { kind: 'ethics' } }]);
   await drain();
   assert.match(h.node('reminders-list').textContent, /Lembrete inicial/);
-  assert.match(h.node('academy-preview').textContent, /Curso inicial/);
+  assert.equal(h.node('ethics-preview').querySelector('a').getAttribute('href'), `./knowledge.html?article=${initialId}`);
 
   const beforeNonPersistedPageshow = h.requests.length;
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: false }));
@@ -103,18 +106,17 @@ test('maintained Dashboard reloads only its areas after a persisted pageshow', a
   const reloaded = h.requests.slice(beforePageshow);
   assert.deepEqual(reloaded.map(request => request.path), [
     '/api/reminders/upcoming?days=7',
-    '/api/academy/continue?limit=1',
+    '/api/knowledge?limit=1',
   ]);
-  assert.equal(h.requests.filter(request => /announcements|owner-news/i.test(request.path)).length, 0);
+  assert.equal(h.requests.filter(request => /announcements|owner-news|academy/i.test(request.path)).length, 0);
   assert.equal(h.requests.some(request => request.kind === 'asset'), false);
 
   reloaded[0].resolve([{ id: 'reminder-bfcache', title: 'Lembrete BFCache', next_occurrence: '2099-01-03', description: 'Atualizado' }]);
-  reloaded[1].resolve([{ id: 'course-bfcache', title: 'Curso BFCache', active: true, delivery_mode: 'internal' }]);
+  reloaded[1].resolve([{ id: currentId, document: { kind: 'ethics' } }]);
   await drain();
   assert.match(h.node('reminders-list').textContent, /Lembrete BFCache/);
-  assert.match(h.node('academy-preview').textContent, /Curso BFCache/);
+  assert.equal(h.node('ethics-preview').querySelector('a').getAttribute('href'), `./knowledge.html?article=${currentId}`);
   assert.doesNotMatch(h.node('reminders-list').textContent, /Lembrete inicial/);
-  assert.doesNotMatch(h.node('academy-preview').textContent, /Curso inicial/);
 
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
   await drain();
@@ -124,13 +126,12 @@ test('maintained Dashboard reloads only its areas after a persisted pageshow', a
   assert.equal(late.every(request => request.options.signal.aborted), true);
   h.window.dispatchEvent(new TestEvent('pageshow', { persisted: true }));
   late[0].resolve([{ id: 'reminder-stale', title: 'Lembrete tardio', next_occurrence: '2099-01-04' }]);
-  late[1].resolve([{ id: 'course-stale', title: 'Curso tardio', active: true, delivery_mode: 'internal' }]);
+  late[1].resolve([{ id: initialId, document: { kind: 'ethics' } }]);
   await drain();
   assert.equal(h.requests.length, requestCountBeforeDispose);
   assert.match(h.node('reminders-list').textContent, /Lembrete BFCache/);
-  assert.match(h.node('academy-preview').textContent, /Curso BFCache/);
+  assert.equal(h.node('ethics-preview').querySelector('a').getAttribute('href'), `./knowledge.html?article=${currentId}`);
   assert.doesNotMatch(h.node('reminders-list').textContent, /Lembrete tardio/);
-  assert.doesNotMatch(h.node('academy-preview').textContent, /Curso tardio/);
 });
 
 test('legacy Owner News API paths return controlled 404s without database access', async t => {
