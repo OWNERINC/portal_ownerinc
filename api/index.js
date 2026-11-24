@@ -14,7 +14,7 @@ app.disable('x-powered-by');
 app.use(requestContext);
 app.use(safeResponses);
 app.use(cors(allowedOrigins(process.env)));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 30000 }));
 app.use('/api/users/bulk', express.json({ limit: '1mb' }));
 app.use('/api/pages', express.json({ limit: '1mb' }));
 app.use(express.json({ limit: '100kb' }));

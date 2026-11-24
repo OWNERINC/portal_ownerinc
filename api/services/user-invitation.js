@@ -54,7 +54,7 @@ async function lockPendingRegistrationIdentity(client, { id = null, email = null
   }
 
   const locked = (await client.query(
-    `SELECT id, firebase_uid, email, name, status, created_at, firebase_cleanup_pending
+    `SELECT id, firebase_uid, email, name, status, created_at, created_at::text AS created_at_key, firebase_cleanup_pending
      FROM pending_registrations WHERE id = $1 FOR UPDATE NOWAIT`,
     [candidate.id],
   )).rows[0];
@@ -62,7 +62,7 @@ async function lockPendingRegistrationIdentity(client, { id = null, email = null
 
   await lockFirebaseIdentity(client, { uids: [uid, locked.firebase_uid] });
   const reread = (await client.query(
-    `SELECT id, firebase_uid, email, name, status, created_at, firebase_cleanup_pending
+    `SELECT id, firebase_uid, email, name, status, created_at, created_at::text AS created_at_key, firebase_cleanup_pending
      FROM pending_registrations WHERE id = $1 FOR UPDATE NOWAIT`,
     [locked.id],
   )).rows[0];
@@ -268,7 +268,7 @@ function accountDisabled(permissions) {
 }
 
 async function keepFirebaseEnablePending({ pool, client, uid, requestId }) {
-  const query = pool?.query?.bind(pool) || client?.query?.bind(client);
+  const query = client?.query?.bind(client) || pool?.query?.bind(pool);
   if (!query) return false;
   try {
     await query(
@@ -291,9 +291,11 @@ async function enableActiveUser({ pool, client: providedClient, uid, email, requ
   let commitAttempted = false;
   let commitCompleted = false;
   let rollbackAttempted = false;
+  let afterRelease;
   const pendingResult = () => {
     const result = { state: 'enable_pending' };
     if (discardClient) Object.defineProperty(result, 'discardClient', { value: true, enumerable: false });
+    if (afterRelease) Object.defineProperty(result, 'afterRelease', { value: afterRelease, enumerable: false });
     return result;
   };
   const finish = async result => {
@@ -390,7 +392,19 @@ async function enableActiveUser({ pool, client: providedClient, uid, email, requ
       }
     }
     if (firebaseEnabled) {
-      await keepFirebaseEnablePending({ pool, client: discardClient ? null : client, uid, requestId });
+      if (discardClient && ownsClient) {
+        const held = client;
+        client = null;
+        ownsClient = false;
+        held.release(true);
+      }
+      if (discardClient && providedClient) {
+        // The caller owns this connection. It must discard it before recovery
+        // can acquire from the pool, including when COMMIT actually persisted.
+        afterRelease = () => keepFirebaseEnablePending({ pool, uid, requestId });
+      } else {
+        await keepFirebaseEnablePending({ pool, client, uid, requestId });
+      }
       await firebaseAuth.updateUser(uid, { disabled: true }).catch((cleanupError) => {
         console.error(JSON.stringify({ service: 'api', event: 'firebase_enable_compensation_failed', requestId, error: cleanupError.message }));
       });
@@ -455,7 +469,7 @@ async function compensateCreatedInvitedUser({
 }
 
 async function processFirebaseCleanup({ pool, requestId, limit = 25 }) {
-  const client = await pool.connect();
+  let client = await pool.connect();
   let deleted = 0;
   let failed = 0;
   let transactionOpen = false;
@@ -483,6 +497,9 @@ async function processFirebaseCleanup({ pool, requestId, limit = 25 }) {
     await client.query('COMMIT');
     commitCompleted = true;
     transactionOpen = false;
+    const held = client;
+    client = null;
+    held.release();
     for (const row of rows) {
       try {
         const cleanup = await cleanupFirebaseIdentity({
@@ -522,7 +539,7 @@ async function processFirebaseCleanup({ pool, requestId, limit = 25 }) {
     throw error;
   } finally {
     if (transactionOpen && !commitAttempted) await client.query('ROLLBACK').catch(() => { discardClient = true; });
-    client.release(discardClient || (commitAttempted && !commitCompleted));
+    client?.release(discardClient || (commitAttempted && !commitCompleted));
   }
 }
 
@@ -667,7 +684,7 @@ async function createInvitedUser({ client, data, audit }) {
 }
 
 async function reconcilePendingFirebaseEnables({ pool, requestId, limit = 25 }) {
-  const client = await pool.connect();
+  let client = await pool.connect();
   let resolved = 0;
   let failed = 0;
   let transactionOpen = false;
@@ -701,6 +718,9 @@ async function reconcilePendingFirebaseEnables({ pool, requestId, limit = 25 }) 
       discardClient = true;
       throw error;
     }
+    const held = client;
+    client = null;
+    held.release();
     for (const row of rows) {
       const result = await enableActiveUser({ pool, uid: row.uid, email: row.email, requestId });
       if (result.state === 'active') {
@@ -734,8 +754,8 @@ async function reconcilePendingFirebaseEnables({ pool, requestId, limit = 25 }) 
         discardClient = true;
       }
     }
-    if (discardClient) client.release(true);
-    else client.release();
+    if (discardClient) client?.release(true);
+    else client?.release();
   }
 }
 

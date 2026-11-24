@@ -272,7 +272,7 @@ test('authenticated middleware selects 120/UID only for exact progress PUT, reta
     if (name === '../db') return { query: async (_sql, [uid]) => ({ rows: [{ uid, ethics_accepted: true }] }) };
     if (name === '../ethics') return require('../../api/ethics');
     if (name === './policy') return { can() {}, canUseAutoCard() {}, canUsePosCards() {} };
-    if (name === './security') return { rateLimit: options => (req, _res, next) => { selected.push([options.max, options.windowMs, options.key(req)]); next(); } };
+    if (name === './security') return { rateLimit: options => (req, _res, next) => { selected.push([options.max, options.windowMs, options.key(req)]); return next(); } };
     throw new Error(name);
   } });
   vm.runInContext(source, context);
@@ -282,7 +282,9 @@ test('authenticated middleware selects 120/UID only for exact progress PUT, reta
     ['PUT', path + '/extra', 60], ['PUT', path.replace('12345678', 'invalid'), 60],
     ['PUT', '/api/academy/12345678-abcd-abcd-abcd-123456789abc', 60], ['PUT', '/api/users/me', 60] ]) {
     let next = false;
+    selected.length = 0;
     await context.module.exports.authMiddleware({ method, originalUrl: url, headers: { authorization: 'Bearer user-a' } }, {}, error => { if (error) throw error; next = true; });
-    assert.equal(next, true); assert.deepEqual(selected.at(-1), [max, 900000, 'user-a']);
+    assert.equal(next, true);
+    assert.deepEqual(selected, [[300, 900000, 'user-a'], [max, 900000, 'user-a']]);
   }
 });

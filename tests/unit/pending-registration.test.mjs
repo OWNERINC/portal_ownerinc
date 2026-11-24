@@ -2,8 +2,54 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { load } from '../helpers/readiness-harness.mjs';
 
 const require = createRequire(import.meta.url);
+
+for (const zeroRows of [false, true]) {
+  test(`retention uses the locked microsecond text key and ${zeroRows ? 'counts zero-row deletion as a failure' : 'deletes exactly one row'}`, async () => {
+    const hint = {
+      id: 'registration-id', firebase_uid: 'uid-1', email: 'one@example.invalid', status: 'approved',
+      created_at_key: '2020-01-01 00:00:00.999999+00',
+    };
+    const locked = {
+      ...hint, name: 'Synthetic', created_at: new Date('2020-01-01T00:00:00.123Z'),
+      created_at_key: '2020-01-01 00:00:00.123456+00',
+    };
+    const queries = [], deletes = [], releases = [];
+    const invitation = load('api/services/user-invitation.js', {
+      '../middleware/auth': { firebaseAuth: {} }, '../integrations/password-reset-email': {},
+    });
+    const { expirePendingRegistrations } = load('api/services/pending-registration.js', {
+      '../middleware/auth': { firebaseAuth: {} }, '../integrations/password-reset-email': {},
+      './user-invitation': invitation,
+    });
+    const client = {
+      async query(sql, params) {
+        queries.push(sql);
+        if (sql.includes('LIMIT 100')) return { rows: [hint], rowCount: 1 };
+        if (sql.startsWith('SELECT id, firebase_uid')) {
+          // Only SQL that really selects the text alias receives it.
+          const value = { ...locked };
+          if (!sql.includes('created_at::text AS created_at_key')) delete value.created_at_key;
+          return { rows: [value], rowCount: 1 };
+        }
+        if (sql.startsWith('DELETE FROM pending_registrations')) {
+          deletes.push(params);
+          return { rows: [], rowCount: zeroRows ? 0 : 1 };
+        }
+        return { rows: [], rowCount: 1 };
+      },
+      release(discard) { releases.push(Boolean(discard)); },
+    };
+    const result = await expirePendingRegistrations({ pool: { connect: async () => client } });
+    assert.deepEqual(deletes, [[locked.id, locked.firebase_uid, locked.status, locked.created_at_key]]);
+    assert.deepEqual(result, zeroRows ? { deleted: 0, failed: 1 } : { deleted: 1, failed: 0 });
+    assert.equal(queries.includes('ROLLBACK'), zeroRows);
+    assert.equal(queries.includes('COMMIT'), !zeroRows);
+    assert.deepEqual(releases, [false]);
+  });
+}
 
 test('pending registration passes the chosen password only to Firebase without verification email', async (t) => {
   const authPath = require.resolve('../../api/middleware/auth');

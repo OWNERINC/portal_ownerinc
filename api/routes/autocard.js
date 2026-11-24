@@ -241,6 +241,7 @@ router.post('/media', async (req, res, next) => {
   const contentType = String(req.headers['content-type'] || '').split(';')[0].toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) return res.status(415).json({ error: 'Formato de imagem não permitido.', requestId: req.id });
   let storageKey;
+  let committed = false;
   try {
     const content = await readBody(req, maxMediaBytes);
     let normalized;
@@ -262,9 +263,12 @@ router.post('/media', async (req, res, next) => {
       );
       return rows[0];
     }, { targetId: result => result?.id });
+    committed = true;
     return res.status(201).json(result);
   } catch (error) {
-    if (storageKey) await fs.unlink(path.join(uploadDirectory, storageKey)).catch(() => {});
+    if (storageKey && !committed && !error.commitAmbiguous && !error.rollbackAmbiguous) {
+      await fs.unlink(path.join(uploadDirectory, storageKey)).catch(() => {});
+    }
     return next(error);
   }
 });

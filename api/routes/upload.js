@@ -36,6 +36,9 @@ router.post('/photo', authMiddleware, uploadLimit, upload.single('photo'), async
   const photoUrl = `/uploads/${filename}`;
   let client;
   let previousPhoto;
+  let commitAttempted = false;
+  let committed = false;
+  let discardClient = false;
   try {
     client = await pool.connect();
     await fs.mkdir(uploadDirectory, { recursive: true });
@@ -47,15 +50,27 @@ router.post('/photo', authMiddleware, uploadLimit, upload.single('photo'), async
       `UPDATE users SET photo_url = $2, photo_crop = '{"x":0.5,"y":0.5,"zoom":1}'::jsonb WHERE uid = $1`,
       [req.user.uid, photoUrl],
     );
+    commitAttempted = true;
     await client.query('COMMIT');
+    committed = true;
     await removePhoto(previousPhoto).catch((err) => console.error(`[api] request=${req.id} old photo cleanup failed`, err));
     res.json({ url: photoUrl });
   } catch (err) {
-    await client?.query('ROLLBACK').catch(() => {});
-    await fs.unlink(target).catch(() => {});
+    if (commitAttempted && !committed) {
+      discardClient = true;
+      err.commitAmbiguous = true;
+    } else if (!committed) {
+      await client?.query('ROLLBACK').catch(() => {
+        discardClient = true;
+        err.rollbackAmbiguous = true;
+      });
+    }
+    if (!committed && !err.commitAmbiguous && !err.rollbackAmbiguous) {
+      await fs.unlink(target).catch(() => {});
+    }
     next(err);
   } finally {
-    client?.release();
+    client?.release(discardClient);
   }
 });
 

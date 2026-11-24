@@ -415,7 +415,7 @@ test('active Firebase enable never reactivates a locally disabled account', asyn
   assert.deepEqual(firebaseCalls, []);
 });
 
-test('ambiguous Firebase enable keeps the local pending marker and discards the connection', async (t) => {
+test('ambiguous provided Firebase enable defers pending-marker recovery until its owner discards the connection', async (t) => {
   const authPath = require.resolve('../../api/middleware/auth');
   const servicePath = require.resolve('../../api/services/user-invitation');
   const originalAuth = require.cache[authPath];
@@ -449,6 +449,9 @@ test('ambiguous Firebase enable keeps the local pending marker and discards the 
     ['ambiguous-uid', { disabled: false }],
     ['ambiguous-uid', { disabled: true }],
   ]);
+  assert.deepEqual(poolQueries, [], 'helper must not acquire while caller retains the ambiguous client');
+  assert.equal(Object.keys(result).includes('afterRelease'), false);
+  await result.afterRelease();
   assert.ok(poolQueries.some((sql) => sql.includes('firebase_enable_pending = TRUE')));
 });
 
